@@ -1,0 +1,24 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Source Sans 3', sans-serif;
+  --font-display: 'Barlow Condensed', sans-serif;
+  --color-pasture: #245c45;
+  --color-pasture-dark: #193f30;
+  --color-ink: #203442;
+  --color-field: #f3f6f7;
+  --color-tag: #e8b24d;
+}
+
+@layer base {
+  body { @apply m-0 bg-field font-sans text-ink antialiased; }
+  button { @apply cursor-pointer; }
+  button:disabled { @apply cursor-not-allowed opacity-50; }
+  :focus-visible { @apply outline-2 outline-offset-4 outline-pasture; }
+}
+
+@layer components {
+  .button-primary { @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-pasture px-4 py-2 font-semibold text-white hover:bg-pasture-dark disabled:hover:bg-pasture; }
+  .button-secondary { @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 font-semibold hover:bg-slate-50; }
+  .form-input { @apply mt-1 block min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-base; }
+}

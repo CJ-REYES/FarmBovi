@@ -1,0 +1,37 @@
+@baseUrl = http://localhost:5080
+
+### Database health
+GET {{baseUrl}}/health
+
+### List cattle
+GET {{baseUrl}}/api/cattle
+
+### Create a sample bovine (modifies the database)
+POST {{baseUrl}}/api/cattle
+Content-Type: application/json
+
+{
+  "earTag": "MX-001",
+  "name": "Luna",
+  "breed": "Holstein",
+  "sex": "Hembra",
+  "birthDate": "2024-03-15"
+}
+
+### Read one (replace 1 with the ID returned by POST)
+GET {{baseUrl}}/api/cattle/1
+
+### Update one
+PUT {{baseUrl}}/api/cattle/1
+Content-Type: application/json
+
+{
+  "earTag": "MX-001",
+  "name": "Luna",
+  "breed": "Holstein",
+  "sex": "Hembra",
+  "birthDate": "2024-03-15"
+}
+
+### Delete one permanently
+DELETE {{baseUrl}}/api/cattle/1
