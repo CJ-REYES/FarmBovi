@@ -38,7 +38,9 @@ No repitas la operación inmediatamente: el servidor pudo guardarla aunque la re
 
 ## No se encuentra un SDK .NET compatible
 
-Instala un SDK de la rama 8, actualizado. `global.json` mantiene el SDK en .NET 8. Comprueba `dotnet --list-sdks`. Instalar solamente el runtime permite ejecutar una publicación, pero no compilar el código.
+FarmBovi requiere el SDK .NET 10. Comprueba `dotnet --list-sdks` y verifica que ejecutas los comandos desde la raíz del repositorio: el `global.json` configura la selección del SDK 10 mediante `rollForward: latestFeature`. En Windows puedes instalarlo con `winget install --id Microsoft.DotNet.SDK.10 --exact`; en Arch/CachyOS, con `sudo pacman -Syu dotnet-sdk-10.0`. Para otras distribuciones, consulta [Instalar .NET en Linux](https://learn.microsoft.com/dotnet/core/install/linux).
+
+Cierra y abre otra terminal después de instalar. Si tienes instalaciones manuales y del sistema al mismo tiempo, revisa qué ejecutable se está usando (`Get-Command dotnet` en PowerShell o `which dotnet` en Linux) y el orden de `PATH`. Instalar solamente el runtime permite ejecutar una publicación, pero no compilar el código. No desinstales SDK anteriores si otros repositorios los necesitan.
 
 ## NuGet o npm no descargan paquetes
 

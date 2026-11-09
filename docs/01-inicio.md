@@ -9,7 +9,42 @@ dotnet --list-sdks
 git --version
 ```
 
-Usa Node 24 LTS y un SDK .NET 8 actualizado. Si utilizas nvm, ejecuta `nvm install` y `nvm use` dentro de `FrontEnd`. `global.json` pide un SDK 8.0.100 o posterior de la rama 8; `rollForward: latestFeature` acepta los SDK 8.0.2xx, 8.0.3xx, etc. Un SDK 9 o 10 por sí solo no satisface esta selección.
+Usa Node 24 LTS y el SDK .NET 10. Si utilizas nvm, ejecuta `nvm install` y `nvm use` dentro de `FrontEnd`. `global.json` establece la banda base 10.0.100 con `rollForward: latestFeature`, por lo que acepta bandas posteriores del SDK dentro de .NET 10. Un SDK .NET 8 o 9 por sí solo no satisface esta selección.
+
+
+## Instalar .NET 10 según el sistema operativo
+
+FarmBovi necesita el **SDK**, no solamente el runtime. El SDK incluye las herramientas de compilación y los runtimes correspondientes.
+
+**Windows (PowerShell o Windows Terminal, WinGet):**
+
+```powershell
+winget install --id Microsoft.DotNet.SDK.10 --exact
+# Para actualizar una instalación existente:
+winget upgrade --id Microsoft.DotNet.SDK.10 --exact
+```
+
+También puedes descargar el instalador desde [Microsoft .NET 10](https://dotnet.microsoft.com/download/dotnet/10.0). Cierra y vuelve a abrir la terminal al terminar.
+
+**Arch Linux y CachyOS:**
+
+```bash
+sudo pacman -Syu dotnet-sdk-10.0
+```
+
+Si el gestor de paquetes informa de conflictos al pasar de paquetes antiguos sin sufijo a paquetes versionados, consulta el [aviso de intervención manual de Arch](https://archlinux.org/news/net-packages-may-require-manual-intervention/). No fuerces la transacción ni borres paquetes a ciegas.
+
+**Otras distribuciones Linux:** sigue el procedimiento de la distribución en [Microsoft: instalar .NET en Linux](https://learn.microsoft.com/dotnet/core/install/linux). No mezcles repositorios de distintos proveedores para instalar la misma versión.
+
+Comprueba la instalación desde la raíz de FarmBovi:
+
+```bash
+dotnet --list-sdks
+dotnet --list-runtimes
+dotnet --version
+```
+
+La versión seleccionada debe ser `10.0.x`. Puedes conservar .NET 8 instalado para otros proyectos; no es necesario desinstalarlo.
 
 ## 2. Obtener el proyecto
 
@@ -25,7 +60,7 @@ Si ya trabajas en la carpeta original `ProyectoGanader`, úsala directamente. El
 Desde la raíz:
 
 ```bash
-dotnet restore FarmBovi.sln
+dotnet restore FarmBovi.sln --locked-mode
 dotnet tool restore
 ```
 

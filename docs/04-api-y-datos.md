@@ -1,6 +1,6 @@
 # API y base de datos
 
-La API usa ASP.NET Core .NET 8 con controladores, Entity Framework Core 8 y SQLite. Para comenzar no necesitas SQL Server ni otra instalación de base de datos.
+La API usa ASP.NET Core .NET 10 con controladores, Entity Framework Core 10 y SQLite. Para comenzar no necesitas SQL Server ni otra instalación de base de datos.
 
 ## Endpoints
 
@@ -119,4 +119,6 @@ La carpeta de destino debe existir. No mezcles migraciones de distintos proveedo
 
 ## Cambiar dependencias
 
-Mantén todos los paquetes `Microsoft.EntityFrameworkCore.*` y `dotnet-ef` en la rama 8 y, preferiblemente, en el mismo parche. Después de cambiarlos ejecuta `dotnet restore --force-evaluate FarmBovi.sln` y sube `BackEnd/packages.lock.json`. CI usa `--locked-mode` para detectar cambios sin actualizar el lockfile.
+En este repositorio, los paquetes `Microsoft.EntityFrameworkCore.*` y la herramienta local `dotnet-ef` están en `10.0.14`. Mantén los paquetes de EF Core y `dotnet-ef` en la misma versión de parche `10.0.x`. Para actualizar el parche, modifica las referencias del proyecto y `.config/dotnet-tools.json`, ejecuta `dotnet restore --force-evaluate FarmBovi.sln` y sube `BackEnd/packages.lock.json`. CI usa `--locked-mode` para detectar cambios no reflejados en el lockfile.
+
+Cambiar de .NET 8 a .NET 10 no exige por sí solo una migración de esquema de SQLite. Genera una migración únicamente cuando cambie el modelo de datos y revisa su contenido antes de aplicarla.
