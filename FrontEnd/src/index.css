@@ -1,24 +1,40 @@
-@import 'tailwindcss';
+@import "tailwindcss";
 
 @theme {
-  --font-sans: 'Source Sans 3', sans-serif;
-  --font-display: 'Barlow Condensed', sans-serif;
-  --color-pasture: #245c45;
-  --color-pasture-dark: #193f30;
-  --color-ink: #203442;
-  --color-field: #f3f6f7;
-  --color-tag: #e8b24d;
+  /* Tipografía */
+  --font-sans: "Source Sans 3", system-ui, sans-serif;
+  --font-condensed: "Barlow Condensed", system-ui, sans-serif;
+
+  /* Colores Institucionales FarmBovi */
+  --color-brand-primary: #245C45;
+  --color-brand-forest: #193F30;
+  --color-brand-dark: #04442F;
+  --color-brand-slate: #203442;
+  --color-brand-yellow: #E8B24D;
+
+  /* Superficies y Fondos */
+  --color-surface-app: #F6FAFF;
+  --color-surface-secondary: #EBF5FF;
+  --color-surface-white: #FFFFFF;
+
+  /* Bordes */
+  --color-border-light: #E2E8F0;
+  --color-border-dark: #C0C9C2;
+
+  /* Semántica de Estados */
+  --color-status-success: #16A34A;
+  --color-status-warning: #D97706;
+  --color-status-error: #DC2626;
+  --color-status-info: #2563EB;
 }
 
 @layer base {
-  body { @apply m-0 bg-field font-sans text-ink antialiased; }
-  button { @apply cursor-pointer; }
-  button:disabled { @apply cursor-not-allowed opacity-50; }
-  :focus-visible { @apply outline-2 outline-offset-4 outline-pasture; }
-}
+  body {
+    @apply bg-surface-app font-sans text-brand-slate antialiased overflow-hidden;
+  }
 
-@layer components {
-  .button-primary { @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-pasture px-4 py-2 font-semibold text-white hover:bg-pasture-dark disabled:hover:bg-pasture; }
-  .button-secondary { @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 font-semibold hover:bg-slate-50; }
-  .form-input { @apply mt-1 block min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-base; }
+  /* Aplicar fuente condensada a métricas y títulos automáticamente */
+  h1, h2, h3, h4, .font-condensed, .metric-value {
+    @apply font-condensed tracking-tight;
+  }
 }
