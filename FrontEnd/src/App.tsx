@@ -18,6 +18,8 @@ import ReproductionPage from './components/management/ReproductionPage';
 import GenealogyPage from './components/management/GenealogyPage';
 import PlaceholderPage from './components/ui/PlaceholderPage';
 
+import BoviScalePage from './components/management/BoviScalePage';
+
 const router = createBrowserRouter([
   {
     path: '/',
@@ -39,9 +41,10 @@ const router = createBrowserRouter([
       { path: 'health', element: <HealthPage /> },
       { path: 'reproduction', element: <ReproductionPage /> },
       { path: 'genealogy', element: <GenealogyPage /> },
+       { path: 'boviscale', element: <BoviScalePage /> },
 
       /* FUTUROS MÓDULOS */
-      { path: 'boviscale', element: <PlaceholderPage title="Captura Fotográfica" module="Manejo" /> },
+
       { path: 'alerts', element: <PlaceholderPage title="Alertas y Recordatorios" module="Seguimiento" /> },
       { path: 'reports', element: <PlaceholderPage title="Reportes" module="Seguimiento" /> },
       { path: 'settings', element: <PlaceholderPage title="Configuración del Rancho" module="Administración" /> },
