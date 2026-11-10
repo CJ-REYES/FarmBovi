@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
+import PwaStatus from '../shared/PwaStatus';
 
 export default function AppShell() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -29,6 +30,7 @@ export default function AppShell() {
             <Outlet />
           </div>
         </main>
+        <PwaStatus />
       </div>
     </div>
   );
