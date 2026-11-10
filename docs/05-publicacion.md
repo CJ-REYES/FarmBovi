@@ -32,7 +32,7 @@ mkdir -p artifacts/publish/wwwroot
 cp -R FrontEnd/dist/. artifacts/publish/wwwroot/
 ```
 
-Despliega el contenido de `artifacts/publish` en un host compatible con ASP.NET Core .NET 8. La API contiene `UseDefaultFiles` y `UseStaticFiles` para servir estos archivos. La pantalla inicial se sirve en `/`; esta base no tiene rutas de React Router ni una regla general que convierta errores de API en HTML.
+Despliega el contenido de `artifacts/publish` en un host compatible con ASP.NET Core .NET 10. La API contiene `UseDefaultFiles` y `UseStaticFiles` para servir estos archivos. La pantalla inicial se sirve en `/`; esta base no tiene rutas de React Router ni una regla general que convierta errores de API en HTML.
 
 Configura el entorno `Production`, una base SQLite en disco persistente y HTTPS. Aplica las migraciones antes de iniciar la API. `launchSettings.json` no se utiliza al ejecutar una publicación; proporciona los puertos y certificados desde la configuración del host.
 
@@ -43,7 +43,7 @@ Configura el entorno `Production`, una base SQLite en disco persistente y HTTPS.
 3. Publica la API en otro dominio HTTPS.
 4. Configura en el backend `Cors__AllowedOrigins__0=https://app.ejemplo.com`.
 
-El origen CORS debe incluir esquema, dominio y puerto cuando corresponda, sin una ruta ni barra final. En producción no se permiten orígenes externos de forma predeterminada. CORS controla al navegador; no reemplaza autenticación o autorización. La configuración sigue la [documentación oficial de CORS en ASP.NET Core](https://learn.microsoft.com/en-us/aspnet/core/security/cors?view=aspnetcore-8.0).
+El origen CORS debe incluir esquema, dominio y puerto cuando corresponda, sin una ruta ni barra final. En producción no se permiten orígenes externos de forma predeterminada. CORS controla al navegador; no reemplaza autenticación o autorización. La configuración sigue la [documentación oficial de CORS en ASP.NET Core](https://learn.microsoft.com/en-us/aspnet/core/security/cors?view=aspnetcore-10.0).
 
 `npm run preview` es para revisar un build local; no es el servidor de producción. El proxy configurado en Vite no se publica con `dist`. Si eliges una URL relativa `/api` en hosting estático, configura un proxy real del host hacia la API.
 
@@ -51,7 +51,7 @@ El origen CORS debe incluir esquema, dominio y puerto cuando corresponda, sin un
 
 El frontend y la API necesitan HTTPS en producción para evitar contenido mixto y habilitar el worker. El backend activa HSTS y redirección HTTPS en `Production`.
 
-Si usas un proxy que termina HTTPS y reenvía por HTTP, configura en ASP.NET Core el procesamiento de `X-Forwarded-Proto` y los proxies de confianza antes de `UseHttpsRedirection`; de lo contrario puedes obtener redirecciones en bucle. La configuración depende de la plataforma y no se habilita indiscriminadamente en esta base. Sigue la [guía de proxy inverso de Microsoft](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/proxy-load-balancer?view=aspnetcore-8.0).
+Si usas un proxy que termina HTTPS y reenvía por HTTP, configura en ASP.NET Core el procesamiento de `X-Forwarded-Proto` y los proxies de confianza antes de `UseHttpsRedirection`; de lo contrario puedes obtener redirecciones en bucle. La configuración depende de la plataforma y no se habilita indiscriminadamente en esta base. Sigue la [guía de proxy inverso de Microsoft](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/proxy-load-balancer?view=aspnetcore-10.0).
 
 Sirve `sw.js`, `index.html` y `manifest.webmanifest` con revalidación (`Cache-Control: no-cache`). El servidor estático de la API ya añade esta cabecera; si eliges otro host configura su equivalente. Los archivos con hash en `assets/` pueden conservar una caché larga.
 
