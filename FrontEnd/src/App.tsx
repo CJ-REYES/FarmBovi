@@ -19,6 +19,10 @@ import GenealogyPage from './components/management/GenealogyPage';
 import PlaceholderPage from './components/ui/PlaceholderPage';
 
 import BoviScalePage from './components/management/BoviScalePage';
+import AlertsPage from './components/management/AlertsPage';
+import ReportsPage from './components/management/ReportsPage';
+import SettingsPage from './components/management/SettingsPage';
+import ProfilePage from './components/management/ProfilePage';
 
 const router = createBrowserRouter([
   {
@@ -42,13 +46,12 @@ const router = createBrowserRouter([
       { path: 'reproduction', element: <ReproductionPage /> },
       { path: 'genealogy', element: <GenealogyPage /> },
        { path: 'boviscale', element: <BoviScalePage /> },
+       { path: 'alerts', element: <AlertsPage /> },
+{ path: 'reports', element: <ReportsPage /> },
+{ path: 'settings', element: <SettingsPage /> },
+{ path: 'profile', element: <ProfilePage /> },
 
       /* FUTUROS MÓDULOS */
-
-      { path: 'alerts', element: <PlaceholderPage title="Alertas y Recordatorios" module="Seguimiento" /> },
-      { path: 'reports', element: <PlaceholderPage title="Reportes" module="Seguimiento" /> },
-      { path: 'settings', element: <PlaceholderPage title="Configuración del Rancho" module="Administración" /> },
-      { path: 'profile', element: <PlaceholderPage title="Mi Perfil" module="Administración" /> },
       { path: '*', element: <PlaceholderPage title="Página no encontrada" module="Error 404" /> }
     ]
   }
