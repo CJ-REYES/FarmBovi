@@ -11,9 +11,9 @@ export interface Cattle {
 }
 
 export interface CattleInput {
-  earTag: string
-  name: string
-  breed: string
-  sex: CattleSex
-  birthDate: string | null
+    areteSiniiga: string;
+    nombre?: string;
+    raza: string;
+    gender: string;
+    fechaNacimiento?: string;
 }
