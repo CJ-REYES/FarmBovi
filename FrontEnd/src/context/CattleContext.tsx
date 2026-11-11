@@ -21,15 +21,23 @@ export function CattleProvider({ children }: { children: ReactNode }) {
   const [source, setSource] = useState<'cache' | 'server' | 'unavailable'>('cache');
   const [error, setError] = useState<string | null>(null);
 
-  const fetchCattle = useCallback(async () => {
+ const fetchCattle = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       await MigrationService.migrateLegacyCacheIfNeeded();
       const result = await CattleService.getAll();
-      const normalizedCattle: Cattle[] = result.data
-        .filter((item): item is Cattle => typeof item.id === 'number')
-        .map((item) => ({ ...item, id: item.id as number }));
+
+      const normalizedCattle: Cattle[] = result.data.map((item) => {
+        return {
+          ...item,
+          // Conservamos el id exacto proveniente de toCattle (remoto o negativo)
+          earTag: item.earTag || item.tagNumber || item.areteSiniiga || '',
+          name: item.name || item.nombre || '',
+          breed: item.breed || item.raza || '',
+          sex: item.sex || 'Hembra'
+        } as Cattle; // Casting seguro
+      });
 
       setCattle(normalizedCattle);
       setSource(result.source);

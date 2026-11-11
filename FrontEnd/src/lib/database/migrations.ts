@@ -1,8 +1,5 @@
 import type Dexie from 'dexie';
 
-/**
- * Aplica migraciones y configura actualizaciones evolutivas de la base de datos local.
- */
 export function configureMigrations(db: Dexie): void {
   db.version(1).stores({
     cattle: 'id, remoteId, ranchId, areteSiniiga, loteId, syncStatus, updatedAt, createdAt',
@@ -15,7 +12,8 @@ export function configureMigrations(db: Dexie): void {
     genealogy: 'id, remoteId, ranchId, cattleId, padreId, madreId, syncStatus, updatedAt',
     alerts: 'id, remoteId, ranchId, tipo, prioridad, leida, fecha, syncStatus',
     media: 'id, remoteId, ranchId, cattleId, tipo, syncStatus, updatedAt',
-    outbox: 'id, entityType, entityId, action, createdAt, attempts',
+    // Índices modificados del Outbox para las nuevas operaciones:
+    outbox: 'id, entity, entityId, operation, status, createdAt',
     syncMetadata: 'entityName'
   });
 }
