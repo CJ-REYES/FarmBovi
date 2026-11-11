@@ -1,15 +1,80 @@
-import { createContext, useContext, type ReactNode } from 'react';
-import { useCattle } from '../hooks/useCattle';
+import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
+import type { Cattle, CattleInput } from '../types/cattle';
+import { CattleService } from '../services/cattle.service';
+import { MigrationService } from '../lib/database/migration-service';
 
-// Inferimos el tipo de retorno de tu hook existente
-type CattleContextType = ReturnType<typeof useCattle>;
+interface CattleContextType {
+  cattle: Cattle[];
+  loading: boolean;
+  source: 'cache' | 'server' | 'unavailable';
+  error: string | null;
+  refresh: () => Promise<void>;
+  save: (data: CattleInput, id?: number) => Promise<void>;
+  remove: (id: number) => Promise<void>;
+}
 
 const CattleContext = createContext<CattleContextType | undefined>(undefined);
 
 export function CattleProvider({ children }: { children: ReactNode }) {
-  const cattleState = useCattle(); // Se ejecuta UNA sola vez en el ciclo de vida raíz
+  const [cattle, setCattle] = useState<Cattle[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [source, setSource] = useState<'cache' | 'server' | 'unavailable'>('cache');
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchCattle = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      await MigrationService.migrateLegacyCacheIfNeeded();
+      const result = await CattleService.getAll();
+      const normalizedCattle: Cattle[] = result.data
+        .filter((item): item is Cattle => typeof item.id === 'number')
+        .map((item) => ({ ...item, id: item.id as number }));
+
+      setCattle(normalizedCattle);
+      setSource(result.source);
+    } catch (err) {
+      console.error('Error al consultar datos de bovinos:', err);
+      setError('No se pudo cargar la información ganadera.');
+      setSource('unavailable');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchCattle();
+  }, [fetchCattle]);
+
+  const save = async (data: CattleInput, id?: number) => {
+    setLoading(true);
+    try {
+      await CattleService.save(data, id);
+      await fetchCattle();
+    } catch (err) {
+      console.error('Error al guardar bovino:', err);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const remove = async (id: number) => {
+    setLoading(true);
+    try {
+      await CattleService.delete(id);
+      await fetchCattle();
+    } catch (err) {
+      console.error('Error al eliminar bovino:', err);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
-    <CattleContext.Provider value={cattleState}>
+    <CattleContext.Provider value={{ cattle, loading, source, error, refresh: fetchCattle, save, remove }}>
       {children}
     </CattleContext.Provider>
   );
@@ -18,8 +83,8 @@ export function CattleProvider({ children }: { children: ReactNode }) {
 // eslint-disable-next-line react-refresh/only-export-components
 export function useSharedCattle() {
   const context = useContext(CattleContext);
-  if (context === undefined) {
-    throw new Error('useSharedCattle debe usarse dentro de un CattleProvider');
+  if (!context) {
+    throw new Error('useSharedCattle debe utilizarse dentro de un CattleProvider');
   }
   return context;
 }
