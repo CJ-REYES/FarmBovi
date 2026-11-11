@@ -1,4 +1,12 @@
 import type { Cattle, CattleInput } from '../types/cattle'
+import type {
+  EventoSanitario,
+  EventoSanitarioInput,
+  Recordatorio,
+  RecordatorioInput,
+  Tratamiento,
+  TratamientoInput,
+} from '../types/sanidad'
 
 export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '')
 
@@ -48,4 +56,63 @@ export const cattleApi = {
   create: (data: CattleInput) => request<Cattle>('/cattle', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: number, data: CattleInput) => request<Cattle>(`/cattle/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   remove: (id: number) => request<void>(`/cattle/${id}`, { method: 'DELETE' }),
+}
+
+export const eventosSanitariosApi = {
+  list: (idAnimal?: string, signal?: AbortSignal) => {
+    const query = idAnimal ? `?idAnimal=${encodeURIComponent(idAnimal)}` : ''
+    return request<EventoSanitario[]>(`/eventos-sanitarios${query}`, { signal })
+  },
+  create: (data: EventoSanitarioInput) =>
+    request<EventoSanitario>('/eventos-sanitarios', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id: string, data: EventoSanitarioInput) =>
+    request<EventoSanitario>(`/eventos-sanitarios/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  remove: (id: string) =>
+    request<void>(`/eventos-sanitarios/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+}
+
+export const tratamientosApi = {
+  list: (params?: { idEventoSanitario?: string; idAnimal?: string }, signal?: AbortSignal) => {
+    const search = new URLSearchParams()
+    if (params?.idEventoSanitario) search.set('idEventoSanitario', params.idEventoSanitario)
+    if (params?.idAnimal) search.set('idAnimal', params.idAnimal)
+    const qs = search.toString() ? `?${search.toString()}` : ''
+    return request<Tratamiento[]>(`/tratamientos${qs}`, { signal })
+  },
+  create: (data: TratamientoInput) =>
+    request<Tratamiento>('/tratamientos', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id: string, data: TratamientoInput) =>
+    request<Tratamiento>(`/tratamientos/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  remove: (id: string) =>
+    request<void>(`/tratamientos/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+}
+
+export const recordatoriosApi = {
+  list: (params?: { estado?: string; idAnimal?: string }, signal?: AbortSignal) => {
+    const search = new URLSearchParams()
+    if (params?.estado) search.set('estado', params.estado)
+    if (params?.idAnimal) search.set('idAnimal', params.idAnimal)
+    const qs = search.toString() ? `?${search.toString()}` : ''
+    return request<Recordatorio[]>(`/recordatorios${qs}`, { signal })
+  },
+  create: (data: RecordatorioInput) =>
+    request<Recordatorio>('/recordatorios', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id: string, data: RecordatorioInput) =>
+    request<Recordatorio>(`/recordatorios/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  cambiarEstado: (id: string, estado: string) =>
+    request<Recordatorio>(
+      `/recordatorios/${encodeURIComponent(id)}/estado?estado=${encodeURIComponent(estado)}`,
+      { method: 'PATCH' }
+    ),
+  remove: (id: string) =>
+    request<void>(`/recordatorios/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 }

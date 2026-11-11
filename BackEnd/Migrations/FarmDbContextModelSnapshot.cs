@@ -15,7 +15,7 @@ namespace FarmBovi.Api.Migrations
         protected override void BuildModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder.HasAnnotation("ProductVersion", "8.0.31");
+            modelBuilder.HasAnnotation("ProductVersion", "10.0.14");
 
             modelBuilder.Entity("FarmBovi.Api.Models.Cattle", b =>
                 {
@@ -55,6 +55,292 @@ namespace FarmBovi.Api.Migrations
                         .IsUnique();
 
                     b.ToTable("Cattle", (string)null);
+                });
+
+            modelBuilder.Entity("FarmBovi.Api.Models.EventoSanitario", b =>
+                {
+                    b.Property<string>("IdEventoSanitario")
+                        .HasMaxLength(36)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("idEventoSanitario");
+
+                    b.Property<DateTime>("CreadoEn")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("creadoEn");
+
+                    b.Property<string>("Diagnostico")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("diagnostico");
+
+                    b.Property<DateTime?>("EliminadoEn")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("eliminadoEn");
+
+                    b.Property<string>("EvidenciaDiagnosticoUri")
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("evidenciaDiagnosticoURI");
+
+                    b.Property<DateTime>("Fecha")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("fecha");
+
+                    b.Property<string>("IdAnimal")
+                        .IsRequired()
+                        .HasMaxLength(36)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("idAnimal");
+
+                    b.Property<string>("IdAutor")
+                        .IsRequired()
+                        .HasMaxLength(36)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("idAutor");
+
+                    b.Property<string>("Observaciones")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("observaciones");
+
+                    b.Property<string>("ProfesionalDiagnostico")
+                        .HasMaxLength(180)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("profesionalDiagnostico");
+
+                    b.Property<string>("Responsable")
+                        .IsRequired()
+                        .HasMaxLength(180)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("responsable");
+
+                    b.Property<string>("Sintomas")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("sintomas");
+
+                    b.Property<string>("Tipo")
+                        .IsRequired()
+                        .HasMaxLength(35)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("tipo");
+
+                    b.Property<long>("VersionRegistro")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("versionRegistro");
+
+                    b.HasKey("IdEventoSanitario");
+
+                    b.HasIndex("IdAnimal");
+
+                    b.ToTable("EventoSanitario", (string)null);
+                });
+
+            modelBuilder.Entity("FarmBovi.Api.Models.Recordatorio", b =>
+                {
+                    b.Property<string>("IdRecordatorio")
+                        .HasMaxLength(36)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("idRecordatorio");
+
+                    b.Property<DateTime>("CreadoEn")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("creadoEn");
+
+                    b.Property<string>("Descripcion")
+                        .IsRequired()
+                        .HasMaxLength(250)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("descripcion");
+
+                    b.Property<DateTime?>("EliminadoEn")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("eliminadoEn");
+
+                    b.Property<string>("Estado")
+                        .IsRequired()
+                        .HasMaxLength(25)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("estado");
+
+                    b.Property<DateTime?>("FechaCompletado")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("fechaCompletado");
+
+                    b.Property<DateTime>("FechaProgramada")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("fechaProgramada");
+
+                    b.Property<string>("IdAnimal")
+                        .HasMaxLength(36)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("idAnimal");
+
+                    b.Property<string>("IdAutor")
+                        .IsRequired()
+                        .HasMaxLength(36)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("idAutor");
+
+                    b.Property<string>("IdLote")
+                        .HasMaxLength(36)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("idLote");
+
+                    b.Property<string>("IdRancho")
+                        .IsRequired()
+                        .HasMaxLength(36)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("idRancho");
+
+                    b.Property<string>("IdResponsable")
+                        .HasMaxLength(36)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("idResponsable");
+
+                    b.Property<string>("IdTratamiento")
+                        .HasMaxLength(36)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("idTratamiento");
+
+                    b.Property<string>("Tipo")
+                        .IsRequired()
+                        .HasMaxLength(35)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("tipo");
+
+                    b.Property<long>("VersionRegistro")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("versionRegistro");
+
+                    b.HasKey("IdRecordatorio");
+
+                    b.HasIndex("Estado");
+
+                    b.HasIndex("FechaProgramada");
+
+                    b.HasIndex("IdTratamiento");
+
+                    b.ToTable("Recordatorio", (string)null);
+                });
+
+            modelBuilder.Entity("FarmBovi.Api.Models.Tratamiento", b =>
+                {
+                    b.Property<string>("IdTratamiento")
+                        .HasMaxLength(36)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("idTratamiento");
+
+                    b.Property<DateTime>("CreadoEn")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("creadoEn");
+
+                    b.Property<decimal>("Dosis")
+                        .HasPrecision(10, 3)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("dosis");
+
+                    b.Property<DateTime?>("EliminadoEn")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("eliminadoEn");
+
+                    b.Property<string>("Estado")
+                        .IsRequired()
+                        .HasMaxLength(25)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("estado");
+
+                    b.Property<DateTime?>("FechaFin")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("fechaFin");
+
+                    b.Property<DateTime>("FechaInicio")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("fechaInicio");
+
+                    b.Property<string>("Frecuencia")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("frecuencia");
+
+                    b.Property<string>("IdAutor")
+                        .IsRequired()
+                        .HasMaxLength(36)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("idAutor");
+
+                    b.Property<string>("IdEventoSanitario")
+                        .IsRequired()
+                        .HasMaxLength(36)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("idEventoSanitario");
+
+                    b.Property<string>("PrescripcionUri")
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("prescripcionURI");
+
+                    b.Property<string>("Producto")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("producto");
+
+                    b.Property<string>("Responsable")
+                        .IsRequired()
+                        .HasMaxLength(180)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("responsable");
+
+                    b.Property<string>("UnidadDosis")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("unidadDosis");
+
+                    b.Property<long>("VersionRegistro")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("versionRegistro");
+
+                    b.Property<string>("ViaAdministracion")
+                        .HasMaxLength(60)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("viaAdministracion");
+
+                    b.HasKey("IdTratamiento");
+
+                    b.HasIndex("IdEventoSanitario");
+
+                    b.ToTable("Tratamiento", (string)null);
+                });
+
+            modelBuilder.Entity("FarmBovi.Api.Models.Recordatorio", b =>
+                {
+                    b.HasOne("FarmBovi.Api.Models.Tratamiento", "Tratamiento")
+                        .WithMany("Recordatorios")
+                        .HasForeignKey("IdTratamiento")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Tratamiento");
+                });
+
+            modelBuilder.Entity("FarmBovi.Api.Models.Tratamiento", b =>
+                {
+                    b.HasOne("FarmBovi.Api.Models.EventoSanitario", "EventoSanitario")
+                        .WithMany("Tratamientos")
+                        .HasForeignKey("IdEventoSanitario")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("EventoSanitario");
+                });
+
+            modelBuilder.Entity("FarmBovi.Api.Models.EventoSanitario", b =>
+                {
+                    b.Navigation("Tratamientos");
+                });
+
+            modelBuilder.Entity("FarmBovi.Api.Models.Tratamiento", b =>
+                {
+                    b.Navigation("Recordatorios");
                 });
 #pragma warning restore 612, 618
         }
