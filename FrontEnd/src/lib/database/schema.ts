@@ -34,6 +34,13 @@ export interface LocalOutboxQueue {
   lastError?: string;
 }
 
+export interface LocalMedia extends BaseLocalEntity {
+  cattleId?: string;           // Asegurar que esta línea exista
+  tipo: 'FotoPerfil' | 'BoviScaleVision' | 'Documento';
+  blobData?: Blob;
+  urlRemota?: string;
+}
+
 // Interfaces adicionales ya existentes: LocalWeighing, LocalHealthRecord...
 export interface LocalWeighing extends BaseLocalEntity { cattleId: string; peso: number; fecha: string; observaciones?: string; }
 export interface LocalHealthRecord extends BaseLocalEntity { cattleId: string; tipo: string; descripcion: string; fecha: string; }
@@ -43,5 +50,4 @@ export interface LocalLot extends BaseLocalEntity { nombre: string; capacidad: n
 export interface LocalMovement extends BaseLocalEntity { cattleId: string; fecha: string; motivo: string; }
 export interface LocalGenealogy extends BaseLocalEntity { cattleId: string; padreId?: string; madreId?: string; }
 export interface LocalAlert extends BaseLocalEntity { tipo: string; prioridad: string; mensaje: string; leida: boolean; fecha: string; }
-export interface LocalMedia extends BaseLocalEntity { tipo: string; blobData?: Blob; urlRemota?: string; }
 export interface LocalSyncMetadata { entityName: string; lastSyncedAt?: string; lastServerVersion?: number; }
