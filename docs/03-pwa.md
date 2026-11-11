@@ -24,7 +24,7 @@ El icono maskable sitúa el dibujo dentro de una zona segura para que Android pu
 
 **Archivos de la app:** Workbox guarda los archivos del build en Cache Storage. Así puede abrirse la pantalla sin pedir otra vez el HTML, los estilos y el código al servidor.
 
-**Datos del ganado:** React guarda una copia de la última lectura en `localStorage`, junto con `savedAt`. La clave empieza por `farmbovi:cattle:v1:` y contiene la URL base de la API para separar servidores. Esta copia no es la base SQLite y puede estar desactualizada.
+**Datos del ganado:** React guarda una copia de la última lectura en `localStorage`, junto con `savedAt`. La clave empieza por `farmbovi:cattle:v1:` y contiene la URL base de la API para separar servidores. Esta copia local puede estar desactualizada y no sustituye a MySQL.
 
 El service worker no guarda respuestas de `/api`, `/health` ni Swagger. La API se solicita por red y la aplicación decide explícitamente cuándo mostrar una copia. Si la red falla o el servidor devuelve un error 5xx, se puede recuperar esa copia; errores 4xx no activan esa recuperación.
 

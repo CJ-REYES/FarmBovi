@@ -1,37 +1,33 @@
 @baseUrl = http://localhost:5080
 
-### Database health
+### Health
 GET {{baseUrl}}/health
 
-### List cattle
-GET {{baseUrl}}/api/cattle
+### Consultar colecciones
+GET {{baseUrl}}/api/animales
+GET {{baseUrl}}/api/lotes
+GET {{baseUrl}}/api/ranchos
+GET {{baseUrl}}/api/usuarios
+GET {{baseUrl}}/api/usuario-ranchos
 
-### Create a sample bovine (modifies the database)
-POST {{baseUrl}}/api/cattle
+### Crear rancho
+POST {{baseUrl}}/api/ranchos
 Content-Type: application/json
 
 {
-  "earTag": "MX-001",
-  "name": "Luna",
-  "breed": "Holstein",
-  "sex": "Hembra",
-  "birthDate": "2024-03-15"
+  "nombre": "Rancho Norte",
+  "ubicacionGeneral": "Sonora",
+  "estado": "Activo",
+  "idAutor": 1
 }
 
-### Read one (replace 1 with the ID returned by POST)
-GET {{baseUrl}}/api/cattle/1
-
-### Update one
-PUT {{baseUrl}}/api/cattle/1
+### Crear usuario (la respuesta nunca incluye Contrasena)
+POST {{baseUrl}}/api/usuarios
 Content-Type: application/json
 
 {
-  "earTag": "MX-001",
-  "name": "Luna",
-  "breed": "Holstein",
-  "sex": "Hembra",
-  "birthDate": "2024-03-15"
+  "nombre": "Ana",
+  "correo": "ana@example.com",
+  "contrasena": "CambiaEstaClave123",
+  "estado": "Activo"
 }
-
-### Delete one permanently
-DELETE {{baseUrl}}/api/cattle/1

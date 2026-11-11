@@ -91,9 +91,9 @@ npm run dev
 
 | Servicio | Dirección | Propósito |
 | --- | --- | --- |
-| API | http://localhost:5080/api/cattle | Datos del ganado |
+| API | http://localhost:5080/api/animales | CRUD de animales |
 | Swagger | http://localhost:5080/swagger | Explorar y ejecutar la API |
-| Health | http://localhost:5080/health | Comprobar conexión a SQLite |
+| Health | http://localhost:5080/health | Comprobar conexión a MySQL |
 | React en desarrollo | http://localhost:5173 | Editar la interfaz |
 | React compilado | http://localhost:4173 | Inspeccionar la PWA local |
 
@@ -120,18 +120,18 @@ Vite incorpora las variables `VITE_` en el build: son públicas. Guarda contrase
 Para sobreescribir valores mediante variables de entorno, reemplaza `:` por `__`:
 
 ```bash
-export ConnectionStrings__FarmBovi='Data Source=/ruta/persistente/farmbovi.db'
+export ConnectionStrings__FarmBovi='Server=localhost;Port=3306;Database=farmbovi;User ID=farmbovi;Password=CAMBIA_ESTA_CLAVE;'
 export Cors__AllowedOrigins__0='https://app.ejemplo.com'
 ```
 
 En PowerShell:
 
 ```powershell
-$env:ConnectionStrings__FarmBovi = 'Data Source=C:/datos/farmbovi.db'
+$env:ConnectionStrings__FarmBovi = 'Server=localhost;Port=3306;Database=farmbovi;User ID=farmbovi;Password=CAMBIA_ESTA_CLAVE;'
 $env:Cors__AllowedOrigins__0 = 'https://app.ejemplo.com'
 ```
 
-La carpeta que contenga una ruta de base personalizada debe existir y ser escribible por el proceso de la API. La ruta predeterminada `App_Data/farmbovi.db` se resuelve desde la carpeta de la API y se crea automáticamente.
+La base `farmbovi` debe existir y la cuenta configurada debe tener permisos para aplicar migraciones. Para guardar credenciales locales fuera del archivo de configuración, usa `dotnet user-secrets init --project BackEnd` y `dotnet user-secrets set --project BackEnd ConnectionStrings:FarmBovi "Server=localhost;Port=3306;Database=farmbovi;User ID=farmbovi;Password=...;"`.
 
 Para secretos futuros puedes usar `dotnet user-secrets init --project BackEnd` y después `dotnet user-secrets set --project BackEnd Clave Valor`. El almacén de secretos es para desarrollo; en producción usa el gestor de secretos de tu servidor.
 

@@ -50,7 +50,7 @@ Comprueba conexión y permisos del proxy empresarial. Repite `dotnet restore Far
 
 Comprueba que el proceso tiene permisos en `App_Data` o en la carpeta configurada, que exista espacio en disco y que no haya otra herramienta manteniendo una transacción de escritura. Para una ruta personalizada crea antes su directorio. Ejecuta una sola instancia de la API con la base local del prototipo.
 
-## Cambié el modelo, pero SQLite no tiene la columna
+## Cambié el modelo, pero MySQL no tiene la columna
 
 Genera una migración y aplícala siguiendo [API y datos](04-api-y-datos.md). No uses `EnsureCreated` para evitar las migraciones. En `Development` se aplican al arrancar; en `Production` hay que aplicarlas explícitamente.
 

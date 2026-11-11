@@ -34,7 +34,7 @@ cp -R FrontEnd/dist/. artifacts/publish/wwwroot/
 
 Despliega el contenido de `artifacts/publish` en un host compatible con ASP.NET Core .NET 10. La API contiene `UseDefaultFiles` y `UseStaticFiles` para servir estos archivos. La pantalla inicial se sirve en `/`; esta base no tiene rutas de React Router ni una regla general que convierta errores de API en HTML.
 
-Configura el entorno `Production`, una base SQLite en disco persistente y HTTPS. Aplica las migraciones antes de iniciar la API. `launchSettings.json` no se utiliza al ejecutar una publicación; proporciona los puertos y certificados desde la configuración del host.
+Configura el entorno `Production`, una base MySQL y HTTPS. Aplica las migraciones antes de iniciar la API. `launchSettings.json` no se utiliza al ejecutar una publicación; proporciona los puertos y certificados desde la configuración del host.
 
 ## Opción B: servidores separados
 
@@ -59,10 +59,9 @@ El worker debe servirse desde `/sw.js` para controlar `/`. El manifest usa `id`,
 
 ## Datos y configuración
 
-- Configura `ConnectionStrings__FarmBovi` con una ruta persistente; evita guardar datos dentro de un directorio que se reemplaza al desplegar.
-- Asegura permisos de escritura y crea la carpeta antes de aplicar migraciones.
-- SQLite requiere un sistema de archivos persistente. Un host efímero puede perder la base al reiniciar.
-- Antes de cambios del esquema, realiza un respaldo consistente con las escrituras detenidas o con herramientas de backup de SQLite. Copiar únicamente `.db` mientras el proceso escribe puede omitir datos del WAL.
+- Configura `ConnectionStrings__FarmBovi` con las credenciales de MySQL fuera del repositorio.
+- Crea la base y limita los permisos de la cuenta de aplicación según tu proceso de despliegue.
+- Realiza respaldos de MySQL antes de migrar el esquema.
 - Las variables `VITE_` quedan visibles en el build. Los secretos pertenecen a la configuración del backend y del host.
 - Añade autenticación, autorización y permisos por rancho antes de usar esta API con datos reales en internet.
 
