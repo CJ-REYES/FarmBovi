@@ -1,21 +1,51 @@
 import { useState, useEffect, useCallback } from 'react';
 import { SyncEngine } from '../../services/sync/sync-engine';
 import { db } from '../../lib/database/db';
-import type { LocalOutboxQueue } from '../../lib/database/schema';
-import { RefreshCw, CloudCheck, Clock, AlertTriangle } from 'lucide-react';
+import type { LocalOutboxQueue, OutboxOperationState } from '../../lib/database/schema';
+import {
+  RefreshCw,
+  CloudCheck,
+  Clock,
+  AlertTriangle,
+  AlertOctagon,
+  CheckCircle2
+} from 'lucide-react';
+
+const STATE_LABELS: Record<OutboxOperationState, string> = {
+  pendiente: 'Pendiente',
+  en_proceso: 'En proceso',
+  confirmado: 'Confirmado',
+  fallido: 'Error temporal',
+  conflicto: 'Conflicto'
+};
+
+const STATE_BADGE_CLASSES: Record<OutboxOperationState, string> = {
+  pendiente: 'bg-status-warning/10 text-status-warning',
+  en_proceso: 'bg-brand-primary/10 text-brand-primary',
+  confirmado: 'bg-status-success/10 text-status-success',
+  fallido: 'bg-status-error/10 text-status-error',
+  conflicto: 'bg-purple-500/10 text-purple-700'
+};
 
 export default function SyncStatusPanel() {
   const [pendingOps, setPendingOps] = useState<LocalOutboxQueue[]>([]);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
-  const [lastSyncTime, setLastSyncTime] = useState<string>('Nunca');
+  const [lastSyncTime, setLastSyncTime] = useState<string>('Sin sincronizar');
 
   const loadPending = useCallback(async () => {
     try {
-      const ops = await db.outbox.toArray();
-      setPendingOps(ops);
-      const meta = await db.syncMetadata.get('cattle');
-      if (meta?.lastSyncedAt) {
-        setLastSyncTime(new Date(meta.lastSyncedAt).toLocaleTimeString());
+      const allOps = await db.outbox.orderBy('fechaCreacion').toArray();
+      const activeOps = allOps.filter((op) => op.estado !== 'confirmado');
+      setPendingOps(activeOps);
+
+      const checkpoint = await db.syncCheckpoints.get('cattle');
+      if (checkpoint?.ultimaFechaServidor) {
+        setLastSyncTime(new Date(checkpoint.ultimaFechaServidor).toLocaleTimeString());
+      } else {
+        const meta = await db.syncMetadata.get('cattle');
+        if (meta?.lastSyncedAt) {
+          setLastSyncTime(new Date(meta.lastSyncedAt).toLocaleTimeString());
+        }
       }
     } catch (err) {
       console.error('Error cargando estado de sincronización:', err);
@@ -25,7 +55,9 @@ export default function SyncStatusPanel() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadPending();
-    const interval = window.setInterval(loadPending, 5000);
+    const interval = window.setInterval(() => {
+      void loadPending();
+    }, 5000);
     return () => window.clearInterval(interval);
   }, [loadPending]);
 
@@ -39,6 +71,22 @@ export default function SyncStatusPanel() {
     }
   };
 
+  const renderOperationIcon = (estado: OutboxOperationState) => {
+    switch (estado) {
+      case 'fallido':
+        return <AlertTriangle size={16} className="text-status-error shrink-0" />;
+      case 'conflicto':
+        return <AlertOctagon size={16} className="text-purple-600 shrink-0" />;
+      case 'en_proceso':
+        return <RefreshCw size={16} className="text-brand-primary animate-spin shrink-0" />;
+      case 'confirmado':
+        return <CheckCircle2 size={16} className="text-status-success shrink-0" />;
+      case 'pendiente':
+      default:
+        return <Clock size={16} className="text-status-warning shrink-0" />;
+    }
+  };
+
   return (
     <div className="bg-surface-white border border-border-light rounded-xl p-5 shadow-sm space-y-4">
       <div className="flex items-center justify-between border-b border-border-light pb-3">
@@ -46,7 +94,7 @@ export default function SyncStatusPanel() {
           <h3 className="font-bold text-[15px] text-brand-slate flex items-center gap-2">
             <CloudCheck size={18} className="text-brand-primary" /> Centro de Sincronización
           </h3>
-          <p className="text-[12px] text-brand-slate/60">Última sincronización exitosa: {lastSyncTime}</p>
+          <p className="text-[12px] text-brand-slate/60">Última sincronización confirmada: {lastSyncTime}</p>
         </div>
         <button
           onClick={handleManualSync}
@@ -59,32 +107,35 @@ export default function SyncStatusPanel() {
       </div>
 
       <div className="space-y-2">
-        <h4 className="text-[12px] font-bold text-brand-slate/70 uppercase tracking-wider">Operaciones en Cola ({pendingOps.length})</h4>
+        <h4 className="text-[12px] font-bold text-brand-slate/70 uppercase tracking-wider">
+          Operaciones en Cola ({pendingOps.length})
+        </h4>
         {pendingOps.length === 0 ? (
           <div className="p-4 bg-surface-secondary/40 rounded-lg text-center text-[13px] text-brand-slate/60">
-            Todo al día. No hay cambios pendientes de subida.
+            Sin operaciones pendientes en la cola local.
           </div>
         ) : (
           <div className="max-h-48 overflow-y-auto space-y-2 pr-1">
             {pendingOps.map((op) => (
-              <div key={op.id} className="flex items-center justify-between p-2.5 bg-surface-secondary/60 rounded-lg border border-border-light text-[13px]">
+              <div
+                key={op.idOperacion}
+                className="flex items-center justify-between p-2.5 bg-surface-secondary/60 rounded-lg border border-border-light text-[13px]"
+              >
                 <div className="flex items-center gap-2.5">
-                  {op.status === 'failed' ? (
-                    <AlertTriangle size={16} className="text-status-error shrink-0" />
-                  ) : op.status === 'syncing' ? (
-                    <RefreshCw size={16} className="text-brand-primary animate-spin shrink-0" />
-                  ) : (
-                    <Clock size={16} className="text-status-warning shrink-0" />
-                  )}
+                  {renderOperationIcon(op.estado)}
                   <div>
-                    <p className="font-semibold text-brand-slate uppercase text-[11px]">{op.operation} : {op.entity}</p>
-                    <p className="text-[11px] text-brand-slate/60">Intentos: {op.attempts} {op.lastError ? `(${op.lastError})` : ''}</p>
+                    <p className="font-semibold text-brand-slate uppercase text-[11px]">
+                      {op.tipoOperacion} : {op.entidad}
+                    </p>
+                    <p className="text-[11px] text-brand-slate/60">
+                      Intentos: {op.intentos} {op.ultimoError ? `(${op.ultimoError})` : ''}
+                    </p>
                   </div>
                 </div>
-                <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${
-                  op.status === 'failed' ? 'bg-status-error/10 text-status-error' : 'bg-status-warning/10 text-status-warning'
-                }`}>
-                  {op.status}
+                <span
+                  className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${STATE_BADGE_CLASSES[op.estado]}`}
+                >
+                  {STATE_LABELS[op.estado]}
                 </span>
               </div>
             ))}
