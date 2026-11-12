@@ -6,6 +6,8 @@ namespace FarmBovi.Api.Data;
 public sealed class FarmDbContext(DbContextOptions<FarmDbContext> options) : DbContext(options)
 {
     public DbSet<Cattle> Cattle => Set<Cattle>();
+    public DbSet<MovimientoAnimal> MovimientosAnimales { get; set; }
+public DbSet<Alimentacion> Alimentaciones { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
