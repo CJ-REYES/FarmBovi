@@ -188,8 +188,8 @@ Estas actividades se implementan en tareas pequeñas, cada una en su propia rama
 
 | Actividad | Estado | Alcance |
 | --- | --- | --- |
-| 1. Terminar el inicio de sesión | En implementación | Login con contraseña verificada contra su hash, token JWT de 8 horas, rutas protegidas por defecto, formulario web y cierre de sesión. Las altas de usuarios requieren iniciar sesión. |
-| 2. Registrar cambios remotos | Pendiente | Historial de altas, modificaciones y eliminaciones con tipo/ID de registro, fecha y rancho. |
+| 1. Terminar el inicio de sesión | Implementado en `ea5ca98` | Login con contraseña verificada contra su hash, token JWT de 8 horas, rutas protegidas por defecto, formulario web y cierre de sesión. Las altas de usuarios requieren iniciar sesión. |
+| 2. Registrar cambios remotos | Implementado en la rama actual | El historial `CambioServidor` guarda altas, ediciones y eliminaciones con entidad, ID, fecha UTC, rancho y datos del registro; se escribe junto con la modificación en la misma transacción. |
 | 3. Endpoint para consultar cambios | Pendiente | Entrega únicamente los cambios posteriores al cursor y autorizados para el usuario y sus ranchos. |
 | 4. Paginación y cursor | Pendiente | Lotes ordenados y continuación desde el cursor confirmado por el dispositivo. |
 | 5. Enviar borrados | Pendiente | Marcas de eliminación conservadas en el servidor y transmitidas a los dispositivos. |
