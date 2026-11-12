@@ -1,44 +1,94 @@
 import { db } from '../../lib/database/db';
-import type { LocalCattle } from '../../lib/database/schema';
-
-export interface SyncConflict {
-  entityId: string;
-  localData: Partial<LocalCattle>;
-  serverData: Partial<LocalCattle>; // Lo que devuelve el 409 del backend
-}
-
-const conflictStore = new Map<string, SyncConflict>();
+import { ConflictRepository } from '../../lib/database/repositories/conflict.repository';
+import { OutboxRepository } from '../../lib/database/repositories/outbox.repository';
+import type {
+  ConflictType,
+  LocalCattle,
+  LocalOutboxQueue,
+  LocalSyncConflict
+} from '../../lib/database/schema';
 
 export const ConflictResolver = {
-  async registerConflict(entityId: string, localData: Partial<LocalCattle>, serverData: Partial<LocalCattle>): Promise<void> {
-    conflictStore.set(entityId, { entityId, localData, serverData });
-    await db.cattle.update(entityId, { syncStatus: 'conflict' });
+  async registerConflict(params: {
+    operacionLocal: LocalOutboxQueue;
+    datosLocales: Partial<LocalCattle>;
+    estadoServidor: Record<string, unknown> | null;
+    versionServidor?: number | string | null;
+    tipoConflicto?: ConflictType;
+  }): Promise<LocalSyncConflict> {
+    const { operacionLocal, datosLocales, estadoServidor, versionServidor, tipoConflicto } = params;
+
+    return await db.transaction('rw', db.syncConflicts, db.cattle, db.outbox, async () => {
+      const conflict = await ConflictRepository.create({
+        idOperacion: operacionLocal.idOperacion,
+        entidad: operacionLocal.entidad,
+        idEntidad: operacionLocal.idEntidad,
+        remoteId: datosLocales.remoteId ?? null,
+        operacionLocal,
+        datosLocales: datosLocales as Record<string, unknown>,
+        versionBase: operacionLocal.versionBase,
+        estadoServidor,
+        versionServidor: versionServidor ?? null,
+        tipoConflicto: tipoConflicto ?? 'VERSION_MISMATCH'
+      });
+
+      await OutboxRepository.markConflict(
+        operacionLocal.idOperacion,
+        `Conflicto detectado (${conflict.tipoConflicto})`
+      );
+
+      if (operacionLocal.entidad === 'cattle') {
+        await db.cattle.update(operacionLocal.idEntidad, {
+          syncStatus: 'conflict'
+        });
+      }
+
+      return conflict;
+    });
   },
 
-  getPendingConflicts(): SyncConflict[] {
-    return Array.from(conflictStore.values());
+  async getPendingConflicts(): Promise<LocalSyncConflict[]> {
+    return await ConflictRepository.getPending();
   },
 
-  async resolveConflict(entityId: string, resolution: 'keep_local' | 'keep_server'): Promise<void> {
-    const conflict = conflictStore.get(entityId);
-    if (!conflict) return;
+  async resolveConflict(
+    idConflicto: string,
+    resolution: 'keep_local' | 'keep_server'
+  ): Promise<void> {
+    const conflict = await ConflictRepository.getById(idConflicto);
+    if (!conflict || conflict.estadoResolucion !== 'pendiente') return;
 
-    if (resolution === 'keep_server') {
-      // Sobrescribimos nuestra DB local con la verdad del servidor
-      await db.cattle.update(entityId, {
-        ...conflict.serverData,
-        syncStatus: 'synced',
-        serverVersion: conflict.serverData.serverVersion
-      });
-    } else {
-      // Forzar local: Actualizamos la versión local a la del servidor para vencer el bloqueo If-Match
-      await db.cattle.update(entityId, {
-        syncStatus: 'pending',
-        serverVersion: conflict.serverData.serverVersion
-      });
-      // (En producción, aquí se inyecta un nuevo evento UPDATE al Outbox)
-    }
+    await db.transaction('rw', db.syncConflicts, db.cattle, db.outbox, async () => {
+      if (resolution === 'keep_server') {
+        if (conflict.entidad === 'cattle' && conflict.estadoServidor) {
+          await db.cattle.update(conflict.idEntidad, {
+            ...(conflict.estadoServidor as Partial<LocalCattle>),
+            syncStatus: 'synced',
+            serverVersion: conflict.versionServidor ?? null,
+            updatedAt: new Date().toISOString()
+          });
+        }
+        await ConflictRepository.updateResolution(idConflicto, 'resuelto_servidor');
+      } else {
+        // Conserva cambios locales, actualiza la versión base y encola una nueva operación con UUID propio
+        if (conflict.entidad === 'cattle') {
+          await db.cattle.update(conflict.idEntidad, {
+            syncStatus: 'pending',
+            serverVersion: conflict.versionServidor ?? null,
+            updatedAt: new Date().toISOString()
+          });
+        }
 
-    conflictStore.delete(entityId);
+        await OutboxRepository.enqueue({
+          entidad: conflict.entidad,
+          idEntidad: conflict.idEntidad,
+          tipoOperacion: 'UPDATE',
+          versionBase: conflict.versionServidor ?? null,
+          payload: conflict.datosLocales
+        });
+
+        await ConflictRepository.updateResolution(idConflicto, 'resuelto_local');
+      }
+    });
   }
 };
