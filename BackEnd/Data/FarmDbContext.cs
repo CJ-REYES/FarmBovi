@@ -10,6 +10,8 @@ public sealed class FarmDbContext(DbContextOptions<FarmDbContext> options) : DbC
     public DbSet<Rancho> Ranchos => Set<Rancho>();
     public DbSet<Usuario> Usuarios => Set<Usuario>();
     public DbSet<UsuarioRancho> UsuarioRanchos => Set<UsuarioRancho>();
+        public DbSet<MovimientoAnimal> MovimientosAnimales { get; set; }
+public DbSet<Alimentacion> Alimentaciones { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
