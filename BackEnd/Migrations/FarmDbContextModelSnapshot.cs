@@ -532,6 +532,58 @@ namespace FarmBovi.Api.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });
+
+            modelBuilder.Entity("FarmBovi.Api.Models.MovimientoAnimal", b =>
+                {
+                    b.Property<string>("IdMovimiento")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreadoEn")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DestinoExterno")
+                        .HasMaxLength(250)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("EliminadoEn")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("Fecha")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("IdAnimal")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("IdAutor")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("IdLoteDestino")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("IdLoteOrigen")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Motivo")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OrigenExterno")
+                        .HasMaxLength(250)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Tipo")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("VersionRegistro")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("IdMovimiento");
+
+                    b.ToTable("MovimientoAnimal");
+                });
 #pragma warning restore 612, 618
         }
     }
