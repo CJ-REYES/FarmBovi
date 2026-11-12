@@ -33,6 +33,12 @@ Todos los recursos tienen `GET` para colección y elemento, `POST`, `PUT` y `DEL
 
 Las respuestas habituales son `200` para consultas, `201` al crear, `204` al actualizar o eliminar, `404` si la clave no existe y `400` si la validación del request falla. Las contraseñas se reciben como `Contrasena`, se guardan con hash y nunca se devuelven en el CRUD de usuarios.
 
+### Inicio de sesión
+
+`POST /api/usuarios/login` recibe `{ "correo": "...", "contrasena": "..." }`. Si las credenciales son válidas y la cuenta está activa, responde con un JWT bearer de ocho horas y datos públicos del usuario; las credenciales incorrectas responden `401` sin revelar si existe el correo. El resto de rutas requiere `Authorization: Bearer <token>`. Crear usuarios también requiere sesión.
+
+En producción define `Authentication__SigningKey` mediante un gestor de secretos con al menos 32 bytes. En Development se genera una clave aleatoria temporal cuando falta la configuración; los tokens dejan de ser válidos después de reiniciar la API. La identidad ya está implementada; todavía falta aplicar permisos por rancho a cada recurso.
+
 Las relaciones entre animal, lote y rancho, y entre usuario y rancho, tienen claves foráneas. Los aretes y nombres de lote son únicos dentro de cada rancho; el correo y la asignación usuario-rancho también son únicos.
 
 ## Esquema y cambio desde SQLite

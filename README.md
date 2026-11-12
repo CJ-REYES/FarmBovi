@@ -178,6 +178,30 @@ dotnet build FarmBovi.sln --configuration Release --no-restore
 
 ## Alcance inicial
 
-Esta base tiene un solo registro de ganado. Autenticación, usuarios, varios ranchos, pesajes, vacunas, reproducción, permisos y sincronización de escrituras sin conexión son siguientes módulos, todavía no implementados. Antes de exponer la API con datos reales, incorpora autenticación y autorización.
+Esta base incluye usuarios, varios ranchos y módulos ganaderos. El inicio de sesión está en implementación en esta rama; los permisos detallados por rancho y la sincronización completa siguen pendientes. Antes de exponer la API con datos reales, implementa y valida la autorización por rancho.
 
 Repositorio público: [CJ-REYES/FarmBovi](https://github.com/CJ-REYES/FarmBovi).
+
+## Actividades de autenticación y sincronización
+
+Estas actividades se implementan en tareas pequeñas, cada una en su propia rama `codex/` y con documentación y commit identificables.
+
+| Actividad | Estado | Alcance |
+| --- | --- | --- |
+| 1. Terminar el inicio de sesión | En implementación | Login con contraseña verificada contra su hash, token JWT de 8 horas, rutas protegidas por defecto, formulario web y cierre de sesión. Las altas de usuarios requieren iniciar sesión. |
+| 2. Registrar cambios remotos | Pendiente | Historial de altas, modificaciones y eliminaciones con tipo/ID de registro, fecha y rancho. |
+| 3. Endpoint para consultar cambios | Pendiente | Entrega únicamente los cambios posteriores al cursor y autorizados para el usuario y sus ranchos. |
+| 4. Paginación y cursor | Pendiente | Lotes ordenados y continuación desde el cursor confirmado por el dispositivo. |
+| 5. Enviar borrados | Pendiente | Marcas de eliminación conservadas en el servidor y transmitidas a los dispositivos. |
+
+### Configurar autenticación
+
+En desarrollo, si no se define una clave, el backend crea una clave JWT temporal por ejecución; al reiniciarlo, los tokens anteriores expiran. En producción configura `Authentication__SigningKey` como secreto de al menos 32 bytes y no lo guardes en Git. Por ejemplo, en PowerShell:
+
+```powershell
+$env:Authentication__SigningKey = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(48))
+```
+
+El endpoint `POST /api/usuarios/login` acepta `correo` y `contrasena`, y devuelve un token bearer válido por ocho horas. La aplicación conserva el token en `sessionStorage`, lo envía en solicitudes protegidas y permite cerrar sesión. Para crear usuarios se requiere una sesión autenticada.
+
+La autenticación identifica al usuario; la autorización granular por rancho se completa junto con las actividades de sincronización. No publiques el sistema con datos reales hasta implementar y verificar esos permisos.

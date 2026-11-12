@@ -3,18 +3,44 @@ using FarmBovi.Api.Data;
 using FarmBovi.Api.Models;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.IdentityModel.Tokens;
 using Microsoft.EntityFrameworkCore;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
 
 namespace FarmBovi.Api.Controllers;
 
 public sealed record UsuarioRequest([Required, StringLength(120)] string Nombre, [Required, EmailAddress, StringLength(254)] string Correo, [StringLength(200, MinimumLength = 8)] string? Contrasena, [Required, StringLength(30)] string Estado);
 public sealed record UsuarioResponse(int Id, string Nombre, string Correo, string Estado);
+public sealed record LoginRequest([Required, EmailAddress, StringLength(254)] string Correo, [Required, StringLength(200)] string Contrasena);
+public sealed record LoginResponse(string Token, DateTime ExpiraEn, UsuarioResponse Usuario);
 
 [ApiController, Route("api/usuarios")]
 public sealed class UsuarioController(FarmDbContext db) : ControllerBase
 {
     private static readonly PasswordHasher<Usuario> Hasher = new();
     private static UsuarioResponse ToResponse(Usuario user) => new(user.Id, user.Nombre, user.Correo, user.Estado);
+
+    [AllowAnonymous, HttpPost("login")]
+    public async Task<ActionResult<LoginResponse>> Login(LoginRequest input, IConfiguration configuration, CancellationToken ct)
+    {
+        var correo = input.Correo.Trim().ToLowerInvariant();
+        var user = await db.Usuarios.SingleOrDefaultAsync(x => x.Correo == correo, ct);
+        if (user is null || !string.Equals(user.Estado, "Activo", StringComparison.OrdinalIgnoreCase) ||
+            Hasher.VerifyHashedPassword(user, user.Contrasena, input.Contrasena) == PasswordVerificationResult.Failed)
+            return Unauthorized(new { mensaje = "Correo o contraseña incorrectos." });
+
+        var expires = DateTime.UtcNow.AddHours(8);
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuration["Authentication:SigningKey"]!));
+        var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+        var token = new JwtSecurityToken("FarmBovi", "FarmBovi.Client",
+            [new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()), new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+             new Claim(ClaimTypes.Name, user.Nombre), new Claim(ClaimTypes.Email, user.Correo)],
+            expires: expires, signingCredentials: credentials);
+        return Ok(new LoginResponse(new JwtSecurityTokenHandler().WriteToken(token), expires, ToResponse(user)));
+    }
 
     [HttpGet] public async Task<ActionResult<List<UsuarioResponse>>> GetAll(CancellationToken ct) => (await db.Usuarios.AsNoTracking().ToListAsync(ct)).Select(ToResponse).ToList();
     [HttpGet("{id:int}")] public async Task<ActionResult<UsuarioResponse>> Get(int id, CancellationToken ct) { var item=await db.Usuarios.FindAsync([id],ct); return item is null ? NotFound() : Ok(ToResponse(item)); }

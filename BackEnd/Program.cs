@@ -1,9 +1,35 @@
 using FarmBovi.Api.Data;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
+var signingKey = builder.Configuration["Authentication:SigningKey"];
+if (string.IsNullOrWhiteSpace(signingKey) && builder.Environment.IsDevelopment())
+{
+    signingKey = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(48));
+    Console.Error.WriteLine("Advertencia: se generó una clave JWT temporal para desarrollo; los tokens dejarán de funcionar al reiniciar.");
+}
+if (string.IsNullOrWhiteSpace(signingKey) || Encoding.UTF8.GetByteCount(signingKey) < 32)
+    throw new InvalidOperationException("Configura Authentication:SigningKey con al menos 32 bytes.");
+builder.Configuration["Authentication:SigningKey"] = signingKey;
+var signingKeyBytes = Encoding.UTF8.GetBytes(signingKey);
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true, ValidIssuer = "FarmBovi",
+        ValidateAudience = true, ValidAudience = "FarmBovi.Client",
+        ValidateIssuerSigningKey = true, IssuerSigningKey = new SymmetricSecurityKey(signingKeyBytes),
+        ValidateLifetime = true, ClockSkew = TimeSpan.FromSeconds(30)
+    };
+});
+builder.Services.AddAuthorization(options => options.FallbackPolicy = new AuthorizationPolicyBuilder()
+    .RequireAuthenticatedUser().Build());
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddProblemDetails();
@@ -27,6 +53,8 @@ var app = builder.Build();
 
 app.UseExceptionHandler();
 app.UseStatusCodePages();
+app.UseAuthentication();
+app.UseAuthorization();
 
 if (app.Environment.IsDevelopment())
 {
