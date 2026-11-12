@@ -191,8 +191,8 @@ Estas actividades se implementan en tareas pequeñas, cada una en su propia rama
 | 1. Terminar el inicio de sesión | Implementado en `ea5ca98` | Login con contraseña verificada contra su hash, token JWT de 8 horas, rutas protegidas por defecto, formulario web y cierre de sesión. Las altas de usuarios requieren iniciar sesión. |
 | 2. Registrar cambios remotos | Implementado en `26b5e08` | El historial `CambioServidor` guarda altas, ediciones y eliminaciones con entidad, ID, fecha UTC, rancho y datos del registro en la misma transacción. |
 | 3. Endpoint para consultar cambios | Implementado en la rama actual | `GET /api/sync/cambios` consulta cambios autorizados por rancho para el usuario autenticado. |
-| 4. Paginación y cursor | API implementada | El endpoint pagina lotes de hasta 200 y devuelve un cursor firmado. Falta conectar el motor de sincronización local para persistirlo tras aplicar cada lote. |
-| 5. Enviar borrados | Implementado en la rama actual | Las eliminaciones se guardan como eventos `eliminar` en el historial y se entregan junto con la clave y los datos previos del registro. |
+| 4. Paginación y cursor | Implementado en la rama actual | El motor descarga las páginas y guarda cada lote en la bandeja IndexedDB junto con el cursor por usuario, en una transacción local. |
+| 5. Enviar borrados | Implementado en la rama actual | El servidor envía eventos `eliminar`; el cliente conserva el tombstone y marca eliminado localmente el registro sincronizado si lo tiene. |
 
 ### Configurar autenticación
 
@@ -206,4 +206,4 @@ El endpoint `POST /api/usuarios/login` acepta `correo` y `contrasena`, y devuelv
 
 La autenticación identifica al usuario y el endpoint de cambios filtra por sus asignaciones activas a ranchos. La autorización granular para las demás rutas CRUD sigue pendiente; no publiques el sistema con datos reales hasta implementarla y verificarla.
 
-El endpoint de cambios filtra mediante las asignaciones activas del usuario a ranchos, recibe el cursor opaco como parámetro `cursor` y acepta `limite` entre 1 y 200. La respuesta contiene `cambios`, `cursorSiguiente` y `hayMas`. Cada dispositivo debe conservar su propio cursor y guardarlo solo después de aplicar correctamente el lote recibido. El cursor va firmado y ligado al usuario autenticado.
+El endpoint de cambios filtra mediante las asignaciones activas del usuario a ranchos, recibe el cursor opaco como parámetro `cursor` y acepta `limite` entre 1 y 200. La respuesta contiene `cambios`, `cursorSiguiente` y `hayMas`. Cada dispositivo conserva un cursor por usuario y guarda el lote en su bandeja IndexedDB antes de confirmar localmente el cursor. Los tombstones eliminan de forma lógica las filas locales sincronizadas que ya existen. Las altas y ediciones descargadas quedan en la bandeja `serverChanges` para su proyección a los módulos; esa proyección completa y los permisos por rancho del resto de la API siguen pendientes.

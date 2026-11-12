@@ -174,4 +174,10 @@ export function configureMigrations(db: Dexie): void {
         }
       }
     });
+
+  // Versión 3: bandeja local duradera para cambios remotos.
+  db.version(3).stores({
+    serverChanges: 'idCambio, entidad, idRegistro, idRancho, operacion, recibidoEn, aplicadoEn',
+    syncCheckpoints: 'entidad, cursorOpaco, actualizadoEn'
+  });
 }
