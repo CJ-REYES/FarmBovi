@@ -42,22 +42,24 @@ export type MediaSyncState =
   | 'error_subida';
 
 export type WeighingJobState =
-  | 'pendiente_envio'
-  | 'enviado_procesando'
-  | 'completado'
-  | 'fallido'
+  | 'pendiente_de_analisis'
+  | 'enviando_analisis'
+  | 'pendiente_de_revision'
+  | 'confirmado'
+  | 'error_analisis'
+  | 'cuota_excedida'
   | 'cancelado';
 
 export interface BaseLocalEntity {
-  id: string;                  // UUID v4 permanente en IndexedDB
-  localNumericId?: number;     // Entero negativo determinista persistido para compatibilidad UI sin mapas en RAM
-  remoteId?: string | number;  // ID remoto asignado por el servidor central
-  ranchId?: string;            // Identificador del rancho propietario
-  createdAt: string;           // ISO 8601
-  updatedAt: string;           // ISO 8601
+  id: string;
+  localNumericId?: number;
+  remoteId?: string | number;
+  ranchId?: string;
+  createdAt: string;
+  updatedAt: string;
   syncStatus: SyncStatus;
   serverVersion?: number | string | null;
-  deletedAt?: string | null;   // Tombstone para borrado lógico
+  deletedAt?: string | null;
 }
 
 export interface LocalCattle extends BaseLocalEntity {
@@ -74,6 +76,9 @@ export interface LocalWeighing extends BaseLocalEntity {
   peso: number;
   fecha: string;
   observaciones?: string;
+  origenPesaje?: 'manual' | 'boviscale_ia';
+  sourceAnalysisJobId?: string | null;
+  sourceMediaId?: string | null;
 }
 
 export interface LocalHealthRecord extends BaseLocalEntity {
@@ -145,32 +150,39 @@ export interface LocalMedia extends BaseLocalEntity {
 }
 
 export interface LocalWeighingAnalysisJob {
-  idTrabajo: string;           // UUID v4 permanente del trabajo de análisis
-  idMedia: string;             // FK a LocalMedia.id
-  idBovino: string;            // FK a LocalCattle.id
+  idTrabajo: string;
+  idMedia: string;
+  idBovino: string;
   ranchId?: string;
-  idOperacion?: string | null; // FK a LocalOutboxQueue.idOperacion
+  idOperacion?: string | null;
   estado: WeighingJobState;
   pesoEstimadoKg?: number | null;
+  pesoConfirmadoKg?: number | null;
+  idPesajeConfirmado?: string | null;
   confianzaModelo?: number | null;
   versionModelo?: string | null;
+  observacionesModelo?: string | null;
   metadatosCaptura?: {
     angulo?: string;
     distanciaEstimadaCm?: number;
     resolucion?: string;
+    dispositivo?: string;
   };
   intentos: number;
   ultimoError?: string | null;
+  codigoErrorHttp?: number | null;
+  proximoIntento?: string | null;
   fechaCreacion: string;
   actualizadoEn: string;
+  analizadoEn?: string | null;
   completadoEn?: string | null;
 }
 
 export interface LocalOutboxQueue {
-  id: string;                  // Igual a idOperacion (mantiene compatibilidad de clave primaria en Dexie)
-  idOperacion: string;         // UUID v4 permanente generado una sola vez y conservado en reintentos
+  id: string;
+  idOperacion: string;
   entidad: SyncEntityName;
-  idEntidad: string;           // UUID local de la entidad afectada
+  idEntidad: string;
   tipoOperacion: OutboxOperationType;
   versionBase: number | string | null;
   payload: unknown;
@@ -182,10 +194,10 @@ export interface LocalOutboxQueue {
 }
 
 export interface LocalSyncConflict {
-  idConflicto: string;         // UUID v4 permanente del conflicto
-  idOperacion: string;         // UUID de la operación local que generó el conflicto
+  idConflicto: string;
+  idOperacion: string;
   entidad: SyncEntityName;
-  idEntidad: string;           // UUID local de la entidad en conflicto
+  idEntidad: string;
   remoteId?: string | number | null;
   operacionLocal: LocalOutboxQueue;
   datosLocales: Record<string, unknown>;
@@ -200,8 +212,8 @@ export interface LocalSyncConflict {
 }
 
 export interface LocalSyncCheckpoint {
-  entidad: SyncEntityName;     // Clave primaria por entidad sincronizable
-  cursorOpaco: string | null;  // Cursor opaco emitido por el servidor (nunca solo fecha)
+  entidad: SyncEntityName;
+  cursorOpaco: string | null;
   ultimaFechaServidor?: string | null;
   actualizadoEn: string;
 }

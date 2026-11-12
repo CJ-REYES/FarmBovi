@@ -7,13 +7,10 @@ import type {
   LocalSyncMetadata,
   OutboxOperationState,
   OutboxOperationType,
-  SyncEntityName
+  SyncEntityName,
+  WeighingJobState
 } from './schema';
 
-/**
- * Genera un entero negativo estable de 32 bits a partir de un UUID v4
- * para evitar mapas volátiles en memoria y colisiones con IDs positivos del servidor.
- */
 export function computeStableNegativeId(uuid: string): number {
   let hash = 0;
   for (let i = 0; i < uuid.length; i++) {
@@ -55,8 +52,32 @@ function normalizeLegacyOperationType(rawOp: unknown): OutboxOperationType {
   return 'UPDATE';
 }
 
+function normalizeLegacyWeighingJobState(rawState: unknown): WeighingJobState {
+  switch (rawState) {
+    case 'pendiente_de_analisis':
+    case 'pendiente_envio':
+      return 'pendiente_de_analisis';
+    case 'enviando_analisis':
+    case 'enviado_procesando':
+      return 'enviando_analisis';
+    case 'pendiente_de_revision':
+      return 'pendiente_de_revision';
+    case 'confirmado':
+    case 'completado':
+      return 'confirmado';
+    case 'cuota_excedida':
+      return 'cuota_excedida';
+    case 'error_analisis':
+    case 'fallido':
+      return 'error_analisis';
+    case 'cancelado':
+      return 'cancelado';
+    default:
+      return 'pendiente_de_analisis';
+  }
+}
+
 export function configureMigrations(db: Dexie): void {
-  // Versión 1: Esquema base histórico (conservado para trazabilidad de actualización)
   db.version(1).stores({
     cattle: 'id, remoteId, ranchId, areteSiniiga, loteId, syncStatus, updatedAt, createdAt',
     weighings: 'id, remoteId, ranchId, cattleId, fecha, syncStatus, updatedAt',
@@ -72,7 +93,6 @@ export function configureMigrations(db: Dexie): void {
     syncMetadata: 'entityName'
   });
 
-  // Versión 2: Normalización Offline-First (Outbox idempotente, Conflictos, Checkpoints opacos, Media y Trabajos BoviScale)
   db.version(2)
     .stores({
       cattle: 'id, localNumericId, remoteId, ranchId, areteSiniiga, loteId, syncStatus, updatedAt, createdAt',
@@ -94,7 +114,6 @@ export function configureMigrations(db: Dexie): void {
     .upgrade(async (tx) => {
       const now = new Date().toISOString();
 
-      // 1. Asignar localNumericId persistente a bovinos existentes sin borrar registros
       const cattleTable = tx.table<LocalCattle, string>('cattle');
       await cattleTable.toCollection().modify((record) => {
         if (typeof record.localNumericId !== 'number') {
@@ -105,7 +124,6 @@ export function configureMigrations(db: Dexie): void {
         }
       });
 
-      // 2. Migrar operaciones existentes en outbox preservando su UUID y datos
       const outboxTable = tx.table<Record<string, unknown>, string>('outbox');
       await outboxTable.toCollection().modify((raw) => {
         const legacyId = typeof raw.id === 'string' && raw.id.length > 0
@@ -135,7 +153,6 @@ export function configureMigrations(db: Dexie): void {
         Object.assign(raw, normalized);
       });
 
-      // 3. Normalizar metadatos de archivos en media sin perder Blobs existentes
       const mediaTable = tx.table<Record<string, unknown>, string>('media');
       await mediaTable.toCollection().modify((raw) => {
         const blob = raw.blobData instanceof Blob ? raw.blobData : undefined;
@@ -156,7 +173,6 @@ export function configureMigrations(db: Dexie): void {
         Object.assign(raw, updates);
       });
 
-      // 4. Inicializar checkpoints sin avanzar cursores opacos artificialmente
       const metaTable = tx.table<LocalSyncMetadata, string>('syncMetadata');
       const checkpointTable = tx.table<LocalSyncCheckpoint, SyncEntityName>('syncCheckpoints');
       const existingMetas = await metaTable.toArray();
@@ -167,11 +183,41 @@ export function configureMigrations(db: Dexie): void {
         if (!alreadyExists) {
           await checkpointTable.put({
             entidad: entity,
-            cursorOpaco: null, // No se inventa ni avanza cursor sin respuesta real del servidor
+            cursorOpaco: null,
             ultimaFechaServidor: meta.lastSyncedAt ?? null,
             actualizadoEn: now
           });
         }
       }
+    });
+
+  // Versión 3: Estados explícitos de análisis diferido BoviScale y vínculo idempotente con pesajes
+  db.version(3)
+    .stores({
+      cattle: 'id, localNumericId, remoteId, ranchId, areteSiniiga, loteId, syncStatus, updatedAt, createdAt',
+      weighings: 'id, localNumericId, remoteId, ranchId, cattleId, sourceAnalysisJobId, fecha, syncStatus, updatedAt',
+      healthRecords: 'id, localNumericId, remoteId, ranchId, cattleId, tipo, fecha, syncStatus, updatedAt',
+      feedingRecords: 'id, localNumericId, remoteId, ranchId, lotId, fecha, syncStatus, updatedAt',
+      reproductionRecords: 'id, localNumericId, remoteId, ranchId, cattleId, evento, fecha, syncStatus, updatedAt',
+      lots: 'id, localNumericId, remoteId, ranchId, nombre, syncStatus, updatedAt',
+      movements: 'id, localNumericId, remoteId, ranchId, cattleId, fecha, syncStatus, updatedAt',
+      genealogy: 'id, localNumericId, remoteId, ranchId, cattleId, padreId, madreId, syncStatus, updatedAt',
+      alerts: 'id, localNumericId, remoteId, ranchId, tipo, prioridad, leida, fecha, syncStatus',
+      media: 'id, remoteId, ranchId, cattleId, idEntidadRelacionada, tipo, estadoArchivo, idOperacionSubida, fechaCaptura, syncStatus, updatedAt',
+      weighingAnalysisJobs: 'idTrabajo, idMedia, idBovino, ranchId, idPesajeConfirmado, estado, proximoIntento, fechaCreacion, actualizadoEn',
+      outbox: 'id, &idOperacion, entidad, idEntidad, tipoOperacion, estado, fechaCreacion, proximoIntento',
+      syncConflicts: 'idConflicto, idOperacion, entidad, idEntidad, tipoConflicto, estadoResolucion, fechaDeteccion',
+      syncCheckpoints: 'entidad, cursorOpaco, actualizadoEn',
+      syncMetadata: 'entityName'
+    })
+    .upgrade(async (tx) => {
+      const jobsTable = tx.table<Record<string, unknown>, string>('weighingAnalysisJobs');
+      await jobsTable.toCollection().modify((raw) => {
+        raw.estado = normalizeLegacyWeighingJobState(raw.estado);
+        if (raw.proximoIntento === undefined) raw.proximoIntento = null;
+        if (raw.codigoErrorHttp === undefined) raw.codigoErrorHttp = null;
+        if (raw.pesoConfirmadoKg === undefined) raw.pesoConfirmadoKg = null;
+        if (raw.idPesajeConfirmado === undefined) raw.idPesajeConfirmado = null;
+      });
     });
 }
