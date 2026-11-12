@@ -9,6 +9,7 @@ using Microsoft.EntityFrameworkCore;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
+using System.Security.Cryptography;
 
 namespace FarmBovi.Api.Controllers;
 
@@ -16,10 +17,12 @@ public sealed record UsuarioRequest([Required, StringLength(120)] string Nombre,
 public sealed record UsuarioResponse(int Id, string Nombre, string Correo, string Estado);
 public sealed record LoginRequest([Required, EmailAddress, StringLength(254)] string Correo, [Required, StringLength(200)] string Contrasena);
 public sealed record LoginResponse(string Token, DateTime ExpiraEn, UsuarioResponse Usuario);
+public sealed record BootstrapRequest([Required] UsuarioRequest Usuario, [Required, StringLength(200, MinimumLength = 32)] string CodigoInicial);
 
 [ApiController, Route("api/usuarios")]
 public sealed class UsuarioController(FarmDbContext db) : ControllerBase
 {
+    private static readonly SemaphoreSlim BootstrapLock = new(1, 1);
     private static readonly PasswordHasher<Usuario> Hasher = new();
     private static UsuarioResponse ToResponse(Usuario user) => new(user.Id, user.Nombre, user.Correo, user.Estado);
 
@@ -40,6 +43,34 @@ public sealed class UsuarioController(FarmDbContext db) : ControllerBase
              new Claim(ClaimTypes.Name, user.Nombre), new Claim(ClaimTypes.Email, user.Correo)],
             expires: expires, signingCredentials: credentials);
         return Ok(new LoginResponse(new JwtSecurityTokenHandler().WriteToken(token), expires, ToResponse(user)));
+    }
+
+    [AllowAnonymous, HttpPost("bootstrap")]
+    public async Task<ActionResult<UsuarioResponse>> Bootstrap(BootstrapRequest input, IConfiguration configuration, CancellationToken ct)
+    {
+        var expected = configuration["Authentication:BootstrapKey"];
+        if (string.IsNullOrWhiteSpace(expected) || expected.Length < 32 ||
+            !CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(expected), Encoding.UTF8.GetBytes(input.CodigoInicial)))
+            return Unauthorized(new { mensaje = "Código inicial inválido." });
+
+        await BootstrapLock.WaitAsync(ct);
+        try
+        {
+            if (await db.Usuarios.AnyAsync(ct)) return Conflict("El registro inicial ya fue utilizado.");
+            var user = input.Usuario;
+            if (string.IsNullOrWhiteSpace(user.Contrasena) || user.Contrasena.Length < 8)
+                return BadRequest("La contraseña debe tener al menos 8 caracteres.");
+            var item = new Usuario
+            {
+                Nombre = user.Nombre.Trim(), Correo = user.Correo.Trim().ToLowerInvariant(), Estado = "Activo"
+            };
+            item.Contrasena = Hasher.HashPassword(item, user.Contrasena);
+            db.Usuarios.Add(item);
+            try { await db.SaveChangesAsync(ct); }
+            catch (DbUpdateException) { return Conflict("No se pudo crear el usuario inicial."); }
+            return CreatedAtAction(nameof(Get), new { id = item.Id }, ToResponse(item));
+        }
+        finally { BootstrapLock.Release(); }
     }
 
     [HttpGet] public async Task<ActionResult<List<UsuarioResponse>>> GetAll(CancellationToken ct) => (await db.Usuarios.AsNoTracking().ToListAsync(ct)).Select(ToResponse).ToList();

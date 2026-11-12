@@ -37,6 +37,8 @@ Las respuestas habituales son `200` para consultas, `201` al crear, `204` al act
 
 `POST /api/usuarios/login` recibe `{ "correo": "...", "contrasena": "..." }`. Si las credenciales son válidas y la cuenta está activa, responde con un JWT bearer de ocho horas y datos públicos del usuario; las credenciales incorrectas responden `401` sin revelar si existe el correo. El resto de rutas requiere `Authorization: Bearer <token>`. Crear usuarios también requiere sesión.
 
+Para crear el primer usuario de una base vacía, configura temporalmente `Authentication__BootstrapKey` con un secreto de al menos 32 bytes y llama `POST /api/usuarios/bootstrap` con `{ "codigoInicial": "...", "usuario": { "nombre": "...", "correo": "...", "contrasena": "...", "estado": "Activo" } }`. Solo funciona mientras no exista ningún usuario; retira el secreto después de usarlo.
+
 En producción define `Authentication__SigningKey` mediante un gestor de secretos con al menos 32 bytes. En Development se genera una clave aleatoria temporal cuando falta la configuración; los tokens dejan de ser válidos después de reiniciar la API. La identidad ya está implementada; todavía falta aplicar permisos por rancho a cada recurso.
 
 ### Historial de cambios
