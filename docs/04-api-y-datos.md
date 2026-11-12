@@ -43,6 +43,8 @@ En producción define `Authentication__SigningKey` mediante un gestor de secreto
 
 La migración `AddServerChangeLog` agrega `CambioServidor`. El contexto registra en la misma operación de base de datos las altas, ediciones y eliminaciones, junto con entidad, clave, rancho, fecha UTC y una copia JSON de los datos. Para eventos sanitarios, tratamientos, movimientos y alimentación, el rancho se obtiene a través del animal relacionado. El endpoint paginado que expondrá estos cambios se documenta al completar la actividad 3.
 
+`GET /api/sync/cambios?cursor=<cursor>&limite=100` requiere JWT. Omite `cursor` para la primera página; el máximo es 200. Solo devuelve cambios de ranchos con asignación activa del usuario del token. La respuesta incluye cada cambio (`idCambio`, `entidad`, `idRegistro`, `idRancho`, `operacion`, `ocurrioEn`, `datos`), un `cursorSiguiente` firmado y `hayMas`. Los borrados llegan como `operacion: "eliminar"`, porque permanecen en el historial aunque el registro original ya no exista. El dispositivo confirma un cursor localmente después de aplicar todo el lote.
+
 Las relaciones entre animal, lote y rancho, y entre usuario y rancho, tienen claves foráneas. Los aretes y nombres de lote son únicos dentro de cada rancho; el correo y la asignación usuario-rancho también son únicos.
 
 ## Esquema y cambio desde SQLite
