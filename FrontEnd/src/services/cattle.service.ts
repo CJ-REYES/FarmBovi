@@ -52,22 +52,13 @@ export const CattleService = {
         const remoteData: Cattle[] = await cattleApi.list();
         const now = new Date().toISOString();
 
-        const pendingRemoteIds = new Set(
-          localRecords
-            .filter((r) => r.syncStatus === 'pending' || r.syncStatus === 'conflict')
-            .filter((r) => r.remoteId !== undefined && r.remoteId !== null)
-            .map((r) => String(r.remoteId))
-        );
-
-        const localUpserts: LocalCattle[] = [];
+        const serverUpserts: LocalCattle[] = [];
         for (const remote of remoteData) {
-          if (pendingRemoteIds.has(String(remote.id))) continue;
-
           const existingByRemote = await CattleRepository.getByRemoteId(remote.id);
           const localUuid = existingByRemote?.id || crypto.randomUUID();
           const remoteAsAny = remote as ExtendedCattle;
 
-          localUpserts.push({
+          serverUpserts.push({
             id: localUuid,
             localNumericId: existingByRemote?.localNumericId ?? computeStableNegativeId(localUuid),
             remoteId: remote.id,
@@ -84,8 +75,8 @@ export const CattleService = {
           });
         }
 
-        if (localUpserts.length > 0) {
-          await CattleRepository.bulkUpsert(localUpserts);
+        if (serverUpserts.length > 0) {
+          await CattleRepository.upsertFromServer(serverUpserts);
         }
 
         const updatedLocal = await CattleRepository.getAll();
@@ -100,33 +91,22 @@ export const CattleService = {
 
   async save(input: CattleInput, id?: number | string): Promise<void> {
     if (id !== undefined && id !== null) {
-      const existing = await CattleRepository.resolveByIdentifier(id);
-      if (!existing) {
-        throw new Error('Registro no encontrado localmente.');
-      }
-
-      await CattleRepository.executeOutboxTransaction(
-        { id: existing.id, ...input },
-        'UPDATE',
-        input
-      );
+      await CattleRepository.update(id, input, input);
     } else {
-      await CattleRepository.executeOutboxTransaction(
-        { ...input } as Partial<LocalCattle>,
-        'CREATE',
+      await CattleRepository.create(
+        {
+          areteSiniiga: input.areteSiniiga,
+          nombre: input.nombre,
+          raza: input.raza,
+          gender: input.gender,
+          fechaNacimiento: input.fechaNacimiento
+        },
         input
       );
     }
   },
 
   async delete(id: number | string): Promise<void> {
-    const existing = await CattleRepository.resolveByIdentifier(id);
-    if (existing) {
-      await CattleRepository.executeOutboxTransaction(
-        { id: existing.id },
-        'DELETE',
-        { id: existing.remoteId ?? existing.id }
-      );
-    }
+    await CattleRepository.softDelete(id);
   }
 };

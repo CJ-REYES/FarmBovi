@@ -31,9 +31,7 @@ export const MediaRepository = {
     try {
       return await db.transaction(
         'rw',
-        db.media,
-        db.weighingAnalysisJobs,
-        db.outbox,
+        [db.media, db.weighingAnalysisJobs, db.outbox],
         async () => {
           const now = new Date().toISOString();
           const mediaId = crypto.randomUUID();
@@ -63,7 +61,8 @@ export const MediaRepository = {
             entidadRelacionada: options.entidadRelacionada || 'cattle',
             idEntidadRelacionada: cattleUuid,
             tipo: options.tipo,
-            nombreArchivo: options.nombreArchivo || `${options.tipo.toLowerCase()}-${mediaId}.${extension}`,
+            nombreArchivo:
+              options.nombreArchivo || `${options.tipo.toLowerCase()}-${mediaId}.${extension}`,
             mimeType,
             tamanoBytes: options.fileOrBlob.size,
             checksumSha256: null,
@@ -132,8 +131,56 @@ export const MediaRepository = {
     }
   },
 
+  async cancelAnalysisJob(idTrabajo: string): Promise<void> {
+    await db.transaction('rw', [db.weighingAnalysisJobs, db.outbox], async () => {
+      const job = await db.weighingAnalysisJobs.get(idTrabajo);
+      if (!job || job.estado === 'cancelado' || job.estado === 'completado') return;
+
+      const now = new Date().toISOString();
+      await db.weighingAnalysisJobs.update(idTrabajo, {
+        estado: 'cancelado',
+        actualizadoEn: now
+      });
+
+      const cancelOp = OutboxRepository.createOperationRecord({
+        entidad: 'weighingAnalysisJobs',
+        idEntidad: idTrabajo,
+        tipoOperacion: 'UPDATE',
+        versionBase: null,
+        payload: { idTrabajo, estado: 'cancelado' }
+      });
+
+      await db.outbox.put(cancelOp);
+    });
+  },
+
+  async softDeleteMedia(mediaId: string): Promise<void> {
+    await db.transaction('rw', [db.media, db.outbox], async () => {
+      const existing = await db.media.get(mediaId);
+      if (!existing || existing.deletedAt) return;
+
+      const now = new Date().toISOString();
+      await db.media.update(mediaId, {
+        deletedAt: now,
+        updatedAt: now,
+        syncStatus: 'pending'
+      });
+
+      const deleteOp = OutboxRepository.createOperationRecord({
+        entidad: 'media',
+        idEntidad: mediaId,
+        tipoOperacion: 'DELETE',
+        versionBase: existing.serverVersion ?? null,
+        payload: { id: existing.remoteId ?? existing.id }
+      });
+
+      await db.outbox.put(deleteOp);
+    });
+  },
+
   async getById(id: string): Promise<LocalMedia | undefined> {
-    return await db.media.get(id);
+    const record = await db.media.get(id);
+    return record && !record.deletedAt ? record : undefined;
   },
 
   async getByCattleId(cattleId: string): Promise<LocalMedia[]> {
