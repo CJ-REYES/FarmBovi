@@ -1,124 +1,58 @@
 # API y base de datos
 
-La API usa ASP.NET Core .NET 10 con controladores, Entity Framework Core 10 y SQLite. Para comenzar no necesitas SQL Server ni otra instalación de base de datos.
+La API ASP.NET Core .NET 10 usa Entity Framework Core 10 con el proveedor oficial `MySql.EntityFrameworkCore` 10.0.12. La cadena de conexión se lee de `ConnectionStrings:FarmBovi` y puede sobrescribirse mediante `ConnectionStrings__FarmBovi`.
 
-## Endpoints
+## Preparar MySQL
 
-Base local: `http://localhost:5080`.
+Crea la base antes de iniciar la API (la cuenta de conexión necesita permisos para crear y modificar tablas):
 
-| Método | Ruta | Respuesta correcta |
+```sql
+CREATE DATABASE farmbovi CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+```
+
+Configura la conexión con variable de entorno para no guardar credenciales reales en Git:
+
+```powershell
+$env:ConnectionStrings__FarmBovi = 'Server=localhost;Port=3306;Database=farmbovi;User ID=farmbovi;Password=CAMBIA_ESTA_CLAVE;'
+dotnet run --project BackEnd
+```
+
+En desarrollo la API aplica migraciones al arrancar. En producción aplica `dotnet ef database update --project BackEnd --startup-project BackEnd` durante el despliegue, antes de iniciar la nueva versión.
+
+## Controladores CRUD
+
+Todos los recursos tienen `GET` para colección y elemento, `POST`, `PUT` y `DELETE`. Las claves se generan en la base.
+
+| Modelo | Ruta | Clave |
 | --- | --- | --- |
-| GET | `/api/cattle` | `200` con todos los bovinos, ordenados por arete |
-| GET | `/api/cattle/{id}` | `200` con un bovino; `404` si no existe |
-| POST | `/api/cattle` | `201` con el registro y cabecera `Location` |
-| PUT | `/api/cattle/{id}` | `200` con el registro actualizado; `404` si no existe |
-| DELETE | `/api/cattle/{id}` | `204` sin cuerpo; `404` si no existe |
-| GET | `/health` | `200 Healthy` si SQLite responde; `503` si falla |
+| Animal | `/api/animales` | `IdAnimal` |
+| Lote | `/api/lotes` | `IdLote` |
+| Rancho | `/api/ranchos` | `IdRancho` |
+| Usuario | `/api/usuarios` | `Id` |
+| UsuarioRancho | `/api/usuario-ranchos` | `IdUsuarioRancho` |
 
-Swagger está habilitado solo en `Development`: abre `http://localhost:5080/swagger`. Las peticiones de ejemplo están en `BackEnd/FarmBovi.Api.http`.
+Las respuestas habituales son `200` para consultas, `201` al crear, `204` al actualizar o eliminar, `404` si la clave no existe y `400` si la validación del request falla. Las contraseñas se reciben como `Contrasena`, se guardan con hash y nunca se devuelven en el CRUD de usuarios.
 
-La lista inicial devuelve todos los registros porque es un módulo de arranque. Para crecer incorpora filtros, paginación y autorización. El `DELETE` actual elimina físicamente el bovino; si después registras vacunas o movimientos relacionados, define un archivado y reglas para conservar el historial.
+Las relaciones entre animal, lote y rancho, y entre usuario y rancho, tienen claves foráneas. Los aretes y nombres de lote son únicos dentro de cada rancho; el correo y la asignación usuario-rancho también son únicos.
 
-## Datos de entrada
+## Esquema y cambio desde SQLite
 
-POST y PUT reciben el mismo cuerpo:
+La migración `InitialMySqlModels` crea las cinco tablas para MySQL. La migración previa creaba una tabla SQLite `Cattle` y no es compatible con este esquema. Cambiar el proveedor no copia los datos existentes: exporta y transforma los registros de SQLite por separado antes de usar información que necesites conservar.
 
-```json
-{
-  "earTag": "MX-001",
-  "name": "Luna",
-  "breed": "Holstein",
-  "sex": "Hembra",
-  "birthDate": "2024-03-15"
-}
+Para crear una migración después de modificar los modelos:
+
+```powershell
+dotnet ef migrations add NombreDelCambio --project BackEnd --startup-project BackEnd
 ```
 
-| Campo | Regla |
-| --- | --- |
-| `earTag` | Obligatorio, de 1 a 40 letras ASCII, números o guiones; comienza con letra o número |
-| `name` | Opcional, hasta 80 caracteres; omitirlo conserva la cadena vacía del DTO |
-| `breed` | Obligatorio, hasta 80 caracteres |
-| `sex` | `Hembra` o `Macho`, respetando mayúsculas; si se omite usa `Hembra` |
-| `birthDate` | Opcional: `null` o fecha `YYYY-MM-DD`; no puede ser futura según la fecha UTC del servidor |
+Revisa la migración y aplícala con `dotnet ef database update --project BackEnd --startup-project BackEnd`.
 
-El arete se normaliza a mayúsculas antes de guardarse. `mx-001` y `MX-001` representan el mismo identificador. El índice único de SQLite evita duplicados incluso si dos peticiones coinciden.
+## Pruebas
 
-Ejemplo de respuesta:
+Ejecuta las pruebas de los cinco controladores con:
 
-```json
-{
-  "id": 1,
-  "earTag": "MX-001",
-  "name": "Luna",
-  "breed": "Holstein",
-  "sex": "Hembra",
-  "birthDate": "2024-03-15",
-  "createdAt": "2026-10-08T18:00:00Z"
-}
+```powershell
+dotnet run --project BackEnd.Tests
 ```
 
-`id` y `createdAt` los genera el servidor. La fecha de nacimiento usa `DateOnly`, sin hora ni zona horaria. La fecha de creación se devuelve en UTC. PUT reemplaza los campos editables; no es una actualización parcial.
-
-## Errores
-
-Los errores de entrada devuelven `400` con `ValidationProblemDetails`, incluyendo un diccionario `errors`. Un arete duplicado devuelve `409`:
-
-```json
-{
-  "title": "Arete duplicado",
-  "status": 409,
-  "detail": "Ya existe un bovino con este arete. Usa un identificador diferente."
-}
-```
-
-El navegador muestra los mensajes de validación y conflicto. Si ocurre un fallo interno, la API usa un error estándar y registra los detalles en el servidor.
-
-## SQLite local
-
-Ruta predeterminada: `BackEnd/App_Data/farmbovi.db`. La API la resuelve desde su carpeta de contenido para que `dotnet run --project BackEnd` funcione desde la raíz. La base y sus archivos auxiliares están excluidos de Git.
-
-Los registros sobreviven al reinicio de la API. La copia del navegador no sustituye esta persistencia. Para comenzar desde cero en desarrollo, detén la API y elimina la base local; en el siguiente inicio se reconstruye con las migraciones. Esto elimina permanentemente tus registros locales.
-
-SQLite es una elección de arranque para un proceso con disco persistente. Para múltiples réplicas o mayor concurrencia conviene elegir una base de servidor, como PostgreSQL o SQL Server, y generar migraciones adecuadas a ese proveedor.
-
-## Migraciones
-
-Una migración es código C# que describe un cambio de tablas. Se sube a Git para que otra computadora pueda crear el mismo esquema. La migración inicial está incluida; no necesitas generarla otra vez.
-
-El proyecto evita `EnsureCreated` porque esa técnica no evoluciona el esquema con migraciones. Durante desarrollo, `Program.cs` aplica `MigrateAsync` al iniciar. En producción debes aplicar las migraciones explícitamente.
-
-Para añadir una propiedad o entidad:
-
-1. Edita `Models` y la configuración de `FarmDbContext`.
-2. Ajusta los DTOs y la interfaz si cambió el contrato.
-3. Desde la raíz, ejecuta:
-
-```bash
-dotnet tool restore
-dotnet ef migrations add NombreDescriptivo --project BackEnd --startup-project BackEnd --output-dir Migrations
-dotnet ef database update --project BackEnd --startup-project BackEnd
-```
-
-4. Revisa `Up`, `Down` y el snapshot generado antes de subirlos a Git.
-
-Consulta las migraciones:
-
-```bash
-dotnet ef migrations list --project BackEnd --startup-project BackEnd
-```
-
-Para una base de producción, detén escrituras y respalda la base; luego aplica al archivo persistente previsto:
-
-```bash
-export ASPNETCORE_ENVIRONMENT=Production
-export ConnectionStrings__FarmBovi='Data Source=/ruta/persistente/farmbovi.db'
-dotnet ef database update --project BackEnd --startup-project BackEnd
-```
-
-La carpeta de destino debe existir. No mezcles migraciones de distintos proveedores. Microsoft documenta los procedimientos en [Aplicar migraciones de EF Core](https://learn.microsoft.com/en-us/ef/core/managing-schemas/migrations/applying).
-
-## Cambiar dependencias
-
-En este repositorio, los paquetes `Microsoft.EntityFrameworkCore.*` y la herramienta local `dotnet-ef` están en `10.0.14`. Mantén los paquetes de EF Core y `dotnet-ef` en la misma versión de parche `10.0.x`. Para actualizar el parche, modifica las referencias del proyecto y `.config/dotnet-tools.json`, ejecuta `dotnet restore --force-evaluate FarmBovi.sln` y sube `BackEnd/packages.lock.json`. CI usa `--locked-mode` para detectar cambios no reflejados en el lockfile.
-
-Cambiar de .NET 8 a .NET 10 no exige por sí solo una migración de esquema de SQLite. Genera una migración únicamente cuando cambie el modelo de datos y revisa su contenido antes de aplicarla.
+El verificador usa EF Core InMemory y comprueba las acciones CRUD; no sustituye una prueba de integración contra una instancia MySQL.

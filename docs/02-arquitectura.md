@@ -1,13 +1,13 @@
 # Arquitectura
 
-Hay dos aplicaciones independientes dentro de un mismo repositorio. React dibuja la interfaz y ASP.NET Core procesa los datos. SQLite pertenece al backend; el navegador nunca abre directamente esa base de datos.
+Hay dos aplicaciones independientes dentro de un mismo repositorio. React dibuja la interfaz y ASP.NET Core procesa los datos. MySQL pertenece al backend; el navegador nunca se conecta directamente a la base de datos.
 
 ```mermaid
 flowchart LR
     Persona[Persona en el navegador o PWA] --> React[FrontEnd: React y Tailwind]
-    React -->|HTTP JSON /api/cattle| API[BackEnd: Controllers]
+    React -->|HTTP JSON /api| API[BackEnd: Controllers]
     API --> EF[Data: EF Core]
-    EF --> SQLite[(SQLite)]
+    EF --> MySQL[(MySQL)]
     React -->|Última lectura correcta| Local[(localStorage del navegador)]
     Worker[Service worker] -->|Archivos para abrir sin conexión| React
 ```
@@ -41,10 +41,10 @@ Las fuentes se incluyen como dependencias `@fontsource` y se guardan en la preca
 | `Controllers/` | Recibe peticiones y devuelve respuestas HTTP |
 | `DTOs/` | Define los datos de entrada y salida, con validación |
 | `Models/` | Representa las entidades persistentes |
-| `Data/FarmDbContext.cs` | Configura tablas y el índice único del arete |
-| `Data/DatabaseHealthCheck.cs` | Comprueba la conexión a SQLite |
+| `Data/FarmDbContext.cs` | Configura las cinco entidades, relaciones e índices únicos |
+| `Data/DatabaseHealthCheck.cs` | Comprueba la conexión a MySQL |
 | `Migrations/` | Guarda cambios del esquema para reconstruir la base |
-| `App_Data/` | Base SQLite local, generada e ignorada por Git |
+| `Migrations/` | Cambios de esquema para MySQL |
 | `Properties/launchSettings.json` | Puertos y entornos de los perfiles locales |
 
 El `DbContext` se registra con duración *scoped*: cada petición recibe su instancia. Las consultas usan operaciones asíncronas y admiten cancelación. La lectura usa `AsNoTracking`, porque no va a modificar entidades cargadas.
@@ -53,13 +53,9 @@ El alcance inicial permite usar EF Core desde el controlador sin otra capa de re
 
 ## Recorrido de un alta
 
-1. El formulario recoge arete, nombre opcional, raza, sexo y fecha opcional.
-2. `api.ts` envía JSON por `POST /api/cattle` con un timeout de 10 segundos.
-3. ASP.NET Core valida `CattleRequest`. Si falla, responde `400` con detalles.
-4. El controlador normaliza el arete a mayúsculas y guarda mediante EF Core.
-5. SQLite impide duplicar un arete. El conflicto se transforma en `409`.
-6. La API devuelve `201`, el registro y su URL en `Location`.
-7. React actualiza el listado y vuelve a consultarlo. La lectura se guarda con fecha.
+La API expone CRUD para `Animal`, `Lote`, `Rancho`, `Usuario` y `UsuarioRancho`. Los índices únicos y las claves foráneas hacen cumplir las restricciones de datos en MySQL. Las contraseñas de usuario se almacenan con hash y se excluyen de las respuestas.
+
+La pantalla actual del frontend todavía consume `/api/cattle`; el CRUD de modelos nuevo queda disponible en las rutas descritas en `docs/04-api-y-datos.md` y la interfaz requerirá adaptarse para consumir esas rutas.
 
 Los errores no capturados usan `ProblemDetails`, un contrato de error HTTP; los detalles internos se registran en el servidor. Una respuesta de error de validación o autorización no se disfraza como una lectura sin conexión.
 
