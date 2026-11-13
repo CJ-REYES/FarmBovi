@@ -1,85 +1,37 @@
 @baseUrl = http://localhost:5080
 
-### Health
+### Database health
 GET {{baseUrl}}/health
 
-### Consultar colecciones
-GET {{baseUrl}}/api/animales
-GET {{baseUrl}}/api/lotes
-GET {{baseUrl}}/api/ranchos
-GET {{baseUrl}}/api/usuarios
-GET {{baseUrl}}/api/usuario-ranchos
-GET {{baseUrl}}/api/eventos-sanitarios
-GET {{baseUrl}}/api/tratamientos
-GET {{baseUrl}}/api/recordatorios
+### List cattle
+GET {{baseUrl}}/api/cattle
 
-### Crear rancho
-POST {{baseUrl}}/api/ranchos
+### Create a sample bovine (modifies the database)
+POST {{baseUrl}}/api/cattle
 Content-Type: application/json
 
 {
-  "nombre": "Rancho Norte",
-  "ubicacionGeneral": "Sonora",
-  "estado": "Activo",
-  "idAutor": 1
+  "earTag": "MX-001",
+  "name": "Luna",
+  "breed": "Holstein",
+  "sex": "Hembra",
+  "birthDate": "2024-03-15"
 }
 
-### Crear usuario (la respuesta nunca incluye Contrasena)
-POST {{baseUrl}}/api/usuarios
+### Read one (replace 1 with the ID returned by POST)
+GET {{baseUrl}}/api/cattle/1
+
+### Update one
+PUT {{baseUrl}}/api/cattle/1
 Content-Type: application/json
 
 {
-  "nombre": "Ana",
-  "correo": "ana@example.com",
-  "contrasena": "CambiaEstaClave123",
-  "estado": "Activo"
+  "earTag": "MX-001",
+  "name": "Luna",
+  "breed": "Holstein",
+  "sex": "Hembra",
+  "birthDate": "2024-03-15"
 }
 
-### Crear evento sanitario (Módulo 3: Sanidad y Agenda)
-POST {{baseUrl}}/api/eventos-sanitarios
-Content-Type: application/json
-
-{
-  "idAnimal": 1,
-  "tipo": "Vacunación",
-  "fecha": "2026-11-12T10:00:00Z",
-  "sintomas": "Ninguno",
-  "diagnostico": "Esquema preventivo anual",
-  "profesionalDiagnostico": "MVZ Roberto Gómez",
-  "responsable": "Juan Pérez",
-  "observaciones": "Lote vacuna clostridial",
-  "idAutor": 1
-}
-
-### Crear tratamiento (Módulo 3: Sanidad y Agenda)
-POST {{baseUrl}}/api/tratamientos
-Content-Type: application/json
-
-{
-  "idEventoSanitario": 1,
-  "producto": "Bacterina Triple",
-  "dosis": 5.000,
-  "unidadDosis": "ml",
-  "viaAdministracion": "Subcutánea",
-  "frecuencia": "Dosis única",
-  "fechaInicio": "2026-11-12T10:00:00Z",
-  "responsable": "Juan Pérez",
-  "estado": "Completado",
-  "idAutor": 1
-}
-
-### Crear recordatorio (Módulo 3: Sanidad y Agenda)
-POST {{baseUrl}}/api/recordatorios
-Content-Type: application/json
-
-{
-  "idRancho": 1,
-  "idAnimal": 1,
-  "idTratamiento": 1,
-  "idResponsable": 1,
-  "tipo": "Refuerzo",
-  "descripcion": "Aplicar segunda dosis de refuerzo",
-  "fechaProgramada": "2026-11-26T09:00:00Z",
-  "estado": "Pendiente",
-  "idAutor": 1
-}
+### Delete one permanently
+DELETE {{baseUrl}}/api/cattle/1

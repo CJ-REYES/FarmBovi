@@ -11,19 +11,19 @@ interface KpiCardProps {
 
 export function KpiCard({ title, icon: Icon, value, unit, sub, color }: KpiCardProps) {
   return (
-    <div className="bg-surface-white border border-border-light rounded-xl p-5 shadow-[0_2px_8px_rgba(0,0,0,0.02)] relative overflow-hidden flex flex-col justify-between min-h-[128px]">
+    <div className="bg-surface-container-lowest rounded-xl p-space-md shadow-sm relative overflow-hidden flex flex-col justify-between h-32">
       <div className="flex items-center justify-between mb-2">
-        <span className="text-[13px] font-bold text-brand-slate/60 uppercase tracking-widest">{title}</span>
-        <div className="w-8 h-8 rounded-lg bg-surface-secondary flex items-center justify-center text-brand-primary">
+        <span className="font-barlow text-[13px] font-bold text-outline uppercase tracking-widest">{title}</span>
+        <div className="w-8 h-8 rounded-lg bg-surface-container-low flex items-center justify-center text-on-surface-variant">
           <Icon size={18} />
         </div>
       </div>
       <div>
         <div className="flex items-baseline gap-1">
-          <span className="font-condensed text-3xl text-brand-slate font-bold">{value}</span>
-          {unit && <span className="font-condensed text-[14px] font-bold text-brand-slate/60">{unit}</span>}
+          <span className="font-barlow text-3xl text-on-surface font-bold">{value}</span>
+          <span className="font-barlow text-[13px] font-bold text-outline">{unit}</span>
         </div>
-        {sub && <div className="mt-1 text-[12px] font-medium text-brand-slate/60 truncate">{sub}</div>}
+        <div className="mt-1 text-xs text-outline truncate">{sub}</div>
       </div>
       <div className={`absolute bottom-0 left-0 right-0 h-1 ${color}`}></div>
     </div>

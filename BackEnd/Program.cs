@@ -11,7 +11,14 @@ builder.Services.AddProblemDetails();
 var connectionString = builder.Configuration.GetConnectionString("FarmBovi")
     ?? throw new InvalidOperationException("Configura ConnectionStrings:FarmBovi.");
 
-builder.Services.AddDbContext<FarmDbContext>(options => options.UseMySQL(connectionString));
+// The default SQLite path is relative to the API's content root, never the shell.
+Directory.CreateDirectory(Path.Combine(builder.Environment.ContentRootPath, "App_Data"));
+var sqlite = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder(connectionString);
+if (!Path.IsPathRooted(sqlite.DataSource) && sqlite.DataSource != ":memory:")
+{
+    sqlite.DataSource = Path.Combine(builder.Environment.ContentRootPath, sqlite.DataSource);
+}
+builder.Services.AddDbContext<FarmDbContext>(options => options.UseSqlite(sqlite.ToString()));
 builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database");
 
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];

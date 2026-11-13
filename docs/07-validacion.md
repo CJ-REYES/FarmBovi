@@ -29,7 +29,7 @@ Fecha: **8 de octubre de 2026**. Las comprobaciones se realizaron con Node 26.10
 | Recuperación de conexión | Vuelve a consultar el servidor |
 | Vista móvil de 390×844 | Sin desbordamiento horizontal |
 
-La API se compiló y se ejecutó un verificador CRUD con EF Core InMemory para los cinco controladores. No se probó una instancia MySQL real en este entorno.
+La API se inició con una conexión SQLite temporal bajo `/tmp`; los registros de comprobación no se incluyen en el repositorio ni en la base predeterminada. No se añadió una suite de pruebas unitarias; estas comprobaciones son de compilación y funcionamiento inicial.
 
 ## Comprobaciones manuales pendientes
 

@@ -2,7 +2,7 @@
 
 Base del proyecto ganadero con **React + TypeScript + Tailwind CSS**, una **PWA** instalable y una **Web API de ASP.NET Core en .NET 10 LTS**. Frontend y backend viven en carpetas separadas.
 
-Incluye una API CRUD para animales, lotes, ranchos, usuarios y asignaciones de usuarios a ranchos. Los datos se guardan en MySQL; contraseñas de usuario se almacenan con hash.
+Incluye un primer módulo de bovinos para aprender cómo se conectan las dos aplicaciones: registrar, listar, buscar, editar y eliminar animales. Los datos se guardan en SQLite; cada arete es único. La base comienza vacía, sin registros ficticios.
 
 ## Estructura
 
@@ -54,9 +54,9 @@ FarmBovi usa **.NET 10 LTS** para la API y Entity Framework Core:
 | Target framework | `net10.0` |
 | Banda base del SDK | `10.0.100` en `global.json` |
 | Política del SDK | `rollForward: latestFeature` |
-| Entity Framework Core y proveedor MySQL | `10.0.12` |
+| Entity Framework Core SQLite y Design | `10.0.14` |
 | Herramienta local `dotnet-ef` | `10.0.14` |
-| Base de datos | MySQL |
+| Base de datos | SQLite (se conserva; este cambio no la migra a MySQL) |
 
 .NET 10 es una versión LTS. La política oficial de Microsoft indica soporte hasta el **14 de noviembre de 2028**. Mantén .NET 10 y sus parches al día.
 
@@ -120,7 +120,7 @@ dotnet tool restore
 dotnet run --project BackEnd --launch-profile http
 ```
 
-La API escucha en **http://localhost:5080**. En desarrollo aplica las migraciones MySQL al iniciar. Crea primero la base de datos `farmbovi` y configura `ConnectionStrings:FarmBovi` con las credenciales del servidor. Swagger está en **http://localhost:5080/swagger**.
+La API escucha en **http://localhost:5080**. En desarrollo aplica la migración inicial y crea `BackEnd/App_Data/farmbovi.db` automáticamente. Swagger está en **http://localhost:5080/swagger**.
 
 En otra terminal:
 
@@ -152,7 +152,7 @@ Abre **http://localhost:4173**, consulta el ganado y espera el aviso de disponib
 | [Inicio y configuración](docs/01-inicio.md) | Instalación, terminales, puertos, variables y comandos |
 | [Arquitectura](docs/02-arquitectura.md) | Responsabilidad de cada carpeta y recorrido de una petición |
 | [Tu primera PWA](docs/03-pwa.md) | Manifest, service worker, instalación, cachés y actualizaciones |
-| [API y base de datos](docs/04-api-y-datos.md) | Endpoints CRUD, MySQL y migraciones |
+| [API y base de datos](docs/04-api-y-datos.md) | Endpoints, validación, SQLite y migraciones |
 | [Publicación](docs/05-publicacion.md) | Build, HTTPS, persistencia, CORS y GitHub |
 | [Solución de problemas](docs/06-problemas.md) | Errores habituales y cómo resolverlos |
 | [Estado de validación](docs/07-validacion.md) | Comprobaciones realizadas y pendientes |
