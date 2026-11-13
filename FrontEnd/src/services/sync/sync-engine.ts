@@ -4,6 +4,7 @@ import { authApi, syncApi } from '../../lib/api';
 import { db } from '../../lib/database/db';
 import type { BaseLocalEntity, LocalServerChange } from '../../lib/database/schema';
 import type { Table } from 'dexie';
+import { BoviScaleAnalysisService } from '../boviscale-analysis.service';
 
 const deletionTables: Record<string, Table<BaseLocalEntity, string> | undefined> = {
   Animal: db.cattle as unknown as Table<BaseLocalEntity, string>,
@@ -17,7 +18,6 @@ const deletionTables: Record<string, Table<BaseLocalEntity, string> | undefined>
 export const SyncEngine = {
   isSyncing: false,
 
-  /** Coordina subida local y descarga confirmada desde el servidor. */
   async sync(): Promise<void> {
     if (this.isSyncing || typeof navigator === 'undefined' || !navigator.onLine) return;
 
@@ -25,6 +25,7 @@ export const SyncEngine = {
       this.isSyncing = true;
       await this.pushChanges();
       await this.pullChanges();
+      await BoviScaleAnalysisService.processPendingQueue();
     } catch (err) {
       console.error('Error en el ciclo de sincronización:', err);
     } finally {
@@ -36,9 +37,9 @@ export const SyncEngine = {
     const operations = await OutboxService.getPendingOperations();
     if (operations.length === 0) return;
 
-    // Los endpoints idempotentes de sincronización batch aún no están expuestos en .NET 10.
-    // Las operaciones conservan su idOperacion UUID y su estado 'pendiente' sin simular éxito.
-    console.debug(`Outbox con ${operations.length} operación(es) lista(s) para envío cuando el endpoint esté disponible.`);
+    console.debug(
+      `Outbox con ${operations.length} operación(es) lista(s) para envío cuando el endpoint esté disponible.`
+    );
   },
 
   async pullChanges(): Promise<void> {
