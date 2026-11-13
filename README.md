@@ -178,34 +178,6 @@ dotnet build FarmBovi.sln --configuration Release --no-restore
 
 ## Alcance inicial
 
-Esta base incluye usuarios, varios ranchos y módulos ganaderos. El inicio de sesión está en implementación en esta rama; los permisos detallados por rancho y la sincronización completa siguen pendientes. Antes de exponer la API con datos reales, implementa y valida la autorización por rancho.
+Esta base tiene un solo registro de ganado. Autenticación, usuarios, varios ranchos, pesajes, vacunas, reproducción, permisos y sincronización de escrituras sin conexión son siguientes módulos, todavía no implementados. Antes de exponer la API con datos reales, incorpora autenticación y autorización.
 
 Repositorio público: [CJ-REYES/FarmBovi](https://github.com/CJ-REYES/FarmBovi).
-
-## Actividades de autenticación y sincronización
-
-Estas actividades se implementan en tareas pequeñas, cada una en su propia rama `codex/` y con documentación y commit identificables.
-
-| Actividad | Estado | Alcance |
-| --- | --- | --- |
-| 1. Terminar el inicio de sesión | Implementado en `ea5ca98` | Login con contraseña verificada contra su hash, token JWT de 8 horas, rutas protegidas por defecto, formulario web y cierre de sesión. Las altas de usuarios requieren iniciar sesión. |
-| 2. Registrar cambios remotos | Implementado en `26b5e08` | El historial `CambioServidor` guarda altas, ediciones y eliminaciones con entidad, ID, fecha UTC, rancho y datos del registro en la misma transacción. |
-| 3. Endpoint para consultar cambios | Implementado en la rama actual | `GET /api/sync/cambios` consulta cambios autorizados por rancho para el usuario autenticado. |
-| 4. Paginación y cursor | Implementado en la rama actual | El motor descarga las páginas y guarda cada lote en la bandeja IndexedDB junto con el cursor por usuario, en una transacción local. |
-| 5. Enviar borrados | Implementado en la rama actual | El servidor envía eventos `eliminar`; el cliente conserva el tombstone y marca eliminado localmente el registro sincronizado si lo tiene. |
-
-### Configurar autenticación
-
-En desarrollo, si no se define una clave, el backend crea una clave JWT temporal por ejecución; al reiniciarlo, los tokens anteriores expiran. En producción configura `Authentication__SigningKey` como secreto de al menos 32 bytes y no lo guardes en Git. Por ejemplo, en PowerShell:
-
-```powershell
-$env:Authentication__SigningKey = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(48))
-```
-
-El endpoint `POST /api/usuarios/login` acepta `correo` y `contrasena`, y devuelve un token bearer válido por ocho horas. La aplicación conserva el token en `sessionStorage`, lo envía en solicitudes protegidas y permite cerrar sesión. Para crear usuarios se requiere una sesión autenticada.
-
-En una base nueva, genera y configura `Authentication__BootstrapKey` con al menos 32 bytes y llama una sola vez a `POST /api/usuarios/bootstrap` con `codigoInicial` y el objeto `usuario` (`nombre`, `correo`, `contrasena`, `estado`). El código se compara en tiempo constante y el endpoint queda cerrado después de crear la primera cuenta. Guarda el código como secreto y retíralo de la configuración después del alta inicial. La primera cuenta puede iniciar sesión, crear el rancho y asignarse al rancho mediante `/api/usuario-ranchos`.
-
-La autenticación identifica al usuario y el endpoint de cambios filtra por sus asignaciones activas a ranchos. La autorización granular para las demás rutas CRUD sigue pendiente; no publiques el sistema con datos reales hasta implementarla y verificarla.
-
-El endpoint de cambios filtra mediante las asignaciones activas del usuario a ranchos, recibe el cursor opaco como parámetro `cursor` y acepta `limite` entre 1 y 200. La respuesta contiene `cambios`, `cursorSiguiente` y `hayMas`. Cada dispositivo conserva un cursor por usuario y guarda el lote en su bandeja IndexedDB antes de confirmar localmente el cursor. Los tombstones eliminan de forma lógica las filas locales sincronizadas que ya existen. Las altas y ediciones descargadas quedan en la bandeja `serverChanges` para su proyección a los módulos; esa proyección completa y los permisos por rancho del resto de la API siguen pendientes.

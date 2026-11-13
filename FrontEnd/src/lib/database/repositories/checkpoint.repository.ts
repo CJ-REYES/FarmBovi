@@ -1,8 +1,8 @@
 import { db } from '../db';
-import type { LocalSyncCheckpoint } from '../schema';
+import type { LocalSyncCheckpoint, SyncEntityName } from '../schema';
 
 export const CheckpointRepository = {
-  async getByEntity(entidad: string): Promise<LocalSyncCheckpoint | undefined> {
+  async getByEntity(entidad: SyncEntityName): Promise<LocalSyncCheckpoint | undefined> {
     return await db.syncCheckpoints.get(entidad);
   },
 
@@ -15,7 +15,7 @@ export const CheckpointRepository = {
    * No debe invocarse sin una respuesta real del backend.
    */
   async saveServerCursor(
-    entidad: string,
+    entidad: SyncEntityName,
     cursorOpaco: string | null,
     ultimaFechaServidor?: string | null
   ): Promise<LocalSyncCheckpoint> {

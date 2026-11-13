@@ -1,5 +1,4 @@
 import { createBrowserRouter, RouterProvider, Navigate } from 'react-router-dom';
-import { useEffect, useState } from 'react';
 import { CattleProvider } from './context/CattleContext';
 import AppShell from './components/layout/AppShell';
 import { DashboardPage } from './components/dashboard/DashboardPage';
@@ -24,8 +23,6 @@ import AlertsPage from './components/management/AlertsPage';
 import ReportsPage from './components/management/ReportsPage';
 import SettingsPage from './components/management/SettingsPage';
 import ProfilePage from './components/management/ProfilePage';
-import { LoginPage } from './components/auth/LoginPage';
-import { authApi } from './lib/api';
 
 const router = createBrowserRouter([
   {
@@ -61,13 +58,6 @@ const router = createBrowserRouter([
 ]);
 
 export function App() {
-  const [authenticated, setAuthenticated] = useState(() => Boolean(authApi.token()));
-  useEffect(() => {
-    const expire = () => setAuthenticated(false);
-    window.addEventListener('farmbovi:session-expired', expire);
-    return () => window.removeEventListener('farmbovi:session-expired', expire);
-  }, []);
-  if (!authenticated) return <LoginPage onLogin={() => setAuthenticated(true)} />;
   return (
     <CattleProvider>
       <RouterProvider router={router} />

@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from 'react';
 import { SyncEngine } from '../../services/sync/sync-engine';
 import { db } from '../../lib/database/db';
 import type { LocalOutboxQueue, OutboxOperationState } from '../../lib/database/schema';
-import { authApi } from '../../lib/api';
 import {
   RefreshCw,
   CloudCheck,
@@ -39,7 +38,7 @@ export default function SyncStatusPanel() {
       const activeOps = allOps.filter((op) => op.estado !== 'confirmado');
       setPendingOps(activeOps);
 
-      const checkpoint = await db.syncCheckpoints.get(`serverChanges:${authApi.userId()}`);
+      const checkpoint = await db.syncCheckpoints.get('cattle');
       if (checkpoint?.ultimaFechaServidor) {
         setLastSyncTime(new Date(checkpoint.ultimaFechaServidor).toLocaleTimeString());
       } else {

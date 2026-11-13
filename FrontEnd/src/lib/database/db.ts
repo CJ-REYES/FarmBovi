@@ -14,8 +14,7 @@ import type {
   LocalOutboxQueue,
   LocalSyncConflict,
   LocalSyncCheckpoint,
-  LocalSyncMetadata,
-  LocalServerChange
+  LocalSyncMetadata
 } from './schema';
 import { configureMigrations } from './migrations';
 
@@ -34,7 +33,6 @@ export class FarmBoviLocalDB extends Dexie {
   outbox!: Table<LocalOutboxQueue, string>;
   syncConflicts!: Table<LocalSyncConflict, string>;
   syncCheckpoints!: Table<LocalSyncCheckpoint, string>;
-  serverChanges!: Table<LocalServerChange, number>;
   syncMetadata!: Table<LocalSyncMetadata, string>;
 
   constructor() {

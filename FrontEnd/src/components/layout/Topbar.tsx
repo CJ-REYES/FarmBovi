@@ -1,7 +1,6 @@
 import { useNavigate } from 'react-router-dom';
-import { Search, Plus, Bell, MapPin, Database, Wifi, Menu, LogOut } from 'lucide-react';
+import { Search, Plus, Bell, MapPin, Database, Wifi, Menu } from 'lucide-react';
 import { useSharedCattle } from '../../context/CattleContext'; // Estado centralizado
-import { authApi } from '../../lib/api';
 
 export default function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
   const navigate = useNavigate();
@@ -66,9 +65,6 @@ export default function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
 
         <button onClick={() => navigate('/profile')} className="w-8 h-8 rounded-full bg-brand-forest text-white flex items-center justify-center font-bold text-[14px] uppercase cursor-pointer">
           CR
-        </button>
-        <button onClick={() => { authApi.clear(); window.location.reload(); }} aria-label="Cerrar sesión" title="Cerrar sesión" className="rounded-md p-2 text-brand-slate/70 hover:bg-surface-secondary">
-          <LogOut size={18} />
         </button>
       </div>
     </header>
