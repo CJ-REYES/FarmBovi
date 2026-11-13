@@ -11,7 +11,7 @@ namespace FarmBovi.Api.Models
         public string IdMovimiento { get; set; } = Guid.NewGuid().ToString();
 
         [Required]
-        public string IdAnimal { get; set; }
+        public string IdAnimal { get; set; } = string.Empty;
 
         public string? IdLoteOrigen { get; set; }
 
@@ -19,7 +19,7 @@ namespace FarmBovi.Api.Models
 
         [Required]
         [MaxLength(30)]
-        public string Tipo { get; set; }
+        public string Tipo { get; set; } = string.Empty;
 
         [Required]
         public DateTime Fecha { get; set; }
@@ -33,7 +33,7 @@ namespace FarmBovi.Api.Models
         public string? Motivo { get; set; }
 
         [Required]
-        public string IdAutor { get; set; }
+        public string IdAutor { get; set; } = string.Empty;
 
         [Required]
         public DateTime CreadoEn { get; set; } = DateTime.UtcNow;

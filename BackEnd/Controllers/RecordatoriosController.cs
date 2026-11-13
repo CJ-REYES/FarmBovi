@@ -114,8 +114,9 @@ public sealed class RecordatoriosController(FarmDbContext db) : ControllerBase
                 .SingleOrDefaultAsync(t => t.IdTratamiento == item.IdTratamiento.Value, ct);
             if (tratamiento is not null)
             {
-                var evento = await db.EventosSanitarios.AsNoTracking()
-                    .SingleOrDefaultAsync(e => e.IdEventoSanitario == tratamiento.IdEventoSanitario, ct);
+              var evento = await db.EventosSanitarios
+    .AsNoTracking()
+    .FirstOrDefaultAsync(e => e.IdAnimal == tratamiento.IdAnimal, ct);
                 if (evento is not null && item.IdAnimal.HasValue && item.IdAnimal.Value != evento.IdAnimal)
                     return BadRequest("El tratamiento debe corresponder al animal indicado en el recordatorio.");
             }

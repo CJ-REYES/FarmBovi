@@ -85,7 +85,6 @@ namespace FarmBovi.Api.Migrations
 
                     b.ToTable("Alimentacion", (string)null);
                 });
-
             modelBuilder.Entity("FarmBovi.Api.Models.Animal", b =>
                 {
                     b.Property<int>("IdAnimal")
@@ -157,7 +156,6 @@ namespace FarmBovi.Api.Migrations
 
                     b.ToTable("Animal", (string)null);
                 });
-
             modelBuilder.Entity("FarmBovi.Api.Models.EventoSanitario", b =>
                 {
                     b.Property<int>("IdEventoSanitario")
@@ -218,7 +216,6 @@ namespace FarmBovi.Api.Migrations
 
                     b.ToTable("EventoSanitario", (string)null);
                 });
-
             modelBuilder.Entity("FarmBovi.Api.Models.Lote", b =>
                 {
                     b.Property<int>("IdLote")
@@ -261,7 +258,6 @@ namespace FarmBovi.Api.Migrations
 
                     b.ToTable("Lote", (string)null);
                 });
-
             modelBuilder.Entity("FarmBovi.Api.Models.MovimientoAnimal", b =>
                 {
                     b.Property<string>("IdMovimiento")
@@ -313,7 +309,6 @@ namespace FarmBovi.Api.Migrations
 
                     b.ToTable("MovimientoAnimal", (string)null);
                 });
-
             modelBuilder.Entity("FarmBovi.Api.Models.Pesaje", b =>
                 {
                     b.Property<int>("IdPesaje")
@@ -345,7 +340,6 @@ namespace FarmBovi.Api.Migrations
 
                     b.ToTable("Pesajes");
                 });
-
             modelBuilder.Entity("FarmBovi.Api.Models.Rancho", b =>
                 {
                     b.Property<int>("IdRancho")
@@ -383,8 +377,6 @@ namespace FarmBovi.Api.Migrations
 
                     b.ToTable("Rancho", (string)null);
                 });
-
-<<<<<<< HEAD
             modelBuilder.Entity("FarmBovi.Api.Models.Reproduccion", b =>
                 {
                     b.Property<int>("IdReproduccion")
@@ -416,7 +408,7 @@ namespace FarmBovi.Api.Migrations
                     b.HasKey("IdReproduccion");
 
                     b.ToTable("Reproduccion");
-=======
+                       });
             modelBuilder.Entity("FarmBovi.Api.Models.Recordatorio", b =>
                 {
                     b.Property<int>("IdRecordatorio")
@@ -486,31 +478,22 @@ namespace FarmBovi.Api.Migrations
                     b.HasIndex("IdTratamiento");
 
                     b.ToTable("Recordatorio", (string)null);
->>>>>>> d9999792f4d9a2c9826e13b12a28be41cb0d0676
                 });
-
             modelBuilder.Entity("FarmBovi.Api.Models.Tratamiento", b =>
                 {
                     b.Property<int>("IdTratamiento")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("int");
-
-<<<<<<< HEAD
                     b.Property<string>("Dosis")
                         .HasColumnType("longtext");
-=======
                     b.Property<DateTime>("CreadoEn")
                         .HasColumnType("datetime(6)");
 
                     b.Property<decimal>("Dosis")
                         .HasPrecision(10, 3)
                         .HasColumnType("decimal(10,3)");
->>>>>>> d9999792f4d9a2c9826e13b12a28be41cb0d0676
-
                     b.Property<DateTime?>("EliminadoEn")
                         .HasColumnType("datetime(6)");
-
-<<<<<<< HEAD
                     b.Property<DateTime>("Fecha")
                         .HasColumnType("datetime(6)");
 
@@ -537,7 +520,6 @@ namespace FarmBovi.Api.Migrations
                     b.HasKey("IdTratamiento");
 
                     b.ToTable("Tratamientos");
-=======
                     b.Property<string>("Estado")
                         .IsRequired()
                         .HasMaxLength(25)
@@ -591,9 +573,7 @@ namespace FarmBovi.Api.Migrations
                     b.HasIndex("IdEventoSanitario");
 
                     b.ToTable("Tratamiento", (string)null);
->>>>>>> d9999792f4d9a2c9826e13b12a28be41cb0d0676
                 });
-
             modelBuilder.Entity("FarmBovi.Api.Models.Usuario", b =>
                 {
                     b.Property<int>("Id")
