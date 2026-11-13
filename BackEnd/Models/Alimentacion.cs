@@ -11,17 +11,16 @@ namespace FarmBovi.Api.Models
         public string IdAlimentacion { get; set; } = Guid.NewGuid().ToString();
 
         [Required]
-        public string IdAnimal { get; set; }
+        public string IdAnimal { get; set; } = string.Empty;
 
         public string? IdLote { get; set; }
 
         [Required]
         [MaxLength(150)]
-        public string Alimento { get; set; }
-
+        public string Alimento { get; set; } = string.Empty;
         [Required]
         [MaxLength(150)]
-        public string Racion { get; set; }
+        public string Racion { get; set; } = string.Empty;
 
         [Required]
         [Column(TypeName = "decimal(10,3)")]
@@ -29,11 +28,11 @@ namespace FarmBovi.Api.Models
 
         [Required]
         [MaxLength(20)]
-        public string Unidad { get; set; }
+        public string Unidad { get; set; } = string.Empty;
 
         [Required]
         [MaxLength(80)]
-        public string Frecuencia { get; set; }
+        public string Frecuencia { get; set; } = string.Empty;
 
         [Required]
         public DateTime Inicio { get; set; }
@@ -43,7 +42,7 @@ namespace FarmBovi.Api.Models
         public string? CambioDieta { get; set; }
 
         [Required]
-        public string IdAutor { get; set; }
+        public string IdAutor { get; set; } = string.Empty;
 
         [Required]
         public DateTime CreadoEn { get; set; } = DateTime.UtcNow;
@@ -52,5 +51,6 @@ namespace FarmBovi.Api.Models
         public long VersionRegistro { get; set; } = 1;
 
         public DateTime? EliminadoEn { get; set; }
+        public DateTime FechaCreacion { get; internal set; }
     }
 }

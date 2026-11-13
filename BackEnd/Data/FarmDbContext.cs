@@ -10,9 +10,11 @@ public sealed class FarmDbContext(DbContextOptions<FarmDbContext> options) : DbC
     public DbSet<Rancho> Ranchos => Set<Rancho>();
     public DbSet<Usuario> Usuarios => Set<Usuario>();
     public DbSet<UsuarioRancho> UsuarioRanchos => Set<UsuarioRancho>();
-        public DbSet<MovimientoAnimal> MovimientosAnimales { get; set; }
-public DbSet<Alimentacion> Alimentaciones { get; set; }
-
+    public DbSet<MovimientoAnimal> MovimientosAnimales => Set<MovimientoAnimal>();
+    public DbSet<Alimentacion> Alimentaciones => Set<Alimentacion>();
+    public DbSet<Pesaje> Pesajes => Set<Pesaje>();
+    public DbSet<Tratamiento> Tratamientos => Set<Tratamiento>();
+    public DbSet<Reproduccion> Reproduccion => Set<Reproduccion>();
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Animal>(e =>
@@ -65,6 +67,25 @@ public DbSet<Alimentacion> Alimentaciones { get; set; }
             e.HasIndex(x => new { x.IdUsuario, x.IdRancho }).IsUnique();
             e.HasOne<Usuario>().WithMany().HasForeignKey(x => x.IdUsuario).OnDelete(DeleteBehavior.Restrict);
             e.HasOne<Rancho>().WithMany().HasForeignKey(x => x.IdRancho).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<Alimentacion>(e =>
+        {
+            e.ToTable("Alimentacion");
+            e.HasKey(x => x.IdAlimentacion);
+            e.Property(x => x.IdAlimentacion).HasMaxLength(36);
+            e.Property(x => x.IdAnimal).HasMaxLength(36).IsRequired();
+            e.Property(x => x.Alimento).HasMaxLength(150).IsRequired();
+            e.Property(x => x.Racion).HasMaxLength(100).IsRequired();
+            e.Property(x => x.Unidad).HasMaxLength(50).IsRequired();
+            e.Property(x => x.Frecuencia).HasMaxLength(50).IsRequired();
+        });
+
+        modelBuilder.Entity<MovimientoAnimal>(e =>
+        {
+            e.ToTable("MovimientoAnimal");
+            e.HasKey(x => x.IdMovimiento); // Ajusta si tu propiedad de ID se llama diferente
+            e.Property(x => x.Tipo).HasMaxLength(50).IsRequired();
         });
     }
 }

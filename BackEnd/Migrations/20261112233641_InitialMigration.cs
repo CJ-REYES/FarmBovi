@@ -7,12 +7,62 @@ using MySql.EntityFrameworkCore.Metadata;
 namespace FarmBovi.Api.Migrations
 {
     /// <inheritdoc />
-    public partial class InitialMySqlModels : Migration
+    public partial class InitialMigration : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.AlterDatabase()
+                .Annotation("MySQL:Charset", "utf8mb4");
+
+            migrationBuilder.CreateTable(
+                name: "Alimentacion",
+                columns: table => new
+                {
+                    IdAlimentacion = table.Column<string>(type: "varchar(36)", maxLength: 36, nullable: false),
+                    IdAnimal = table.Column<string>(type: "varchar(36)", maxLength: 36, nullable: false),
+                    IdLote = table.Column<string>(type: "longtext", nullable: true),
+                    Alimento = table.Column<string>(type: "varchar(150)", maxLength: 150, nullable: false),
+                    Racion = table.Column<string>(type: "varchar(100)", maxLength: 100, nullable: false),
+                    Cantidad = table.Column<decimal>(type: "decimal(10,3)", nullable: false),
+                    Unidad = table.Column<string>(type: "varchar(50)", maxLength: 50, nullable: false),
+                    Frecuencia = table.Column<string>(type: "varchar(50)", maxLength: 50, nullable: false),
+                    Inicio = table.Column<DateTime>(type: "datetime(6)", nullable: false),
+                    Fin = table.Column<DateTime>(type: "datetime(6)", nullable: true),
+                    CambioDieta = table.Column<string>(type: "longtext", nullable: true),
+                    IdAutor = table.Column<string>(type: "longtext", nullable: false),
+                    CreadoEn = table.Column<DateTime>(type: "datetime(6)", nullable: false),
+                    VersionRegistro = table.Column<long>(type: "bigint", nullable: false),
+                    EliminadoEn = table.Column<DateTime>(type: "datetime(6)", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_Alimentacion", x => x.IdAlimentacion);
+                })
+                .Annotation("MySQL:Charset", "utf8mb4");
+
+            migrationBuilder.CreateTable(
+                name: "MovimientoAnimal",
+                columns: table => new
+                {
+                    IdMovimiento = table.Column<string>(type: "varchar(255)", nullable: false),
+                    IdAnimal = table.Column<string>(type: "longtext", nullable: false),
+                    IdLoteOrigen = table.Column<string>(type: "longtext", nullable: true),
+                    IdLoteDestino = table.Column<string>(type: "longtext", nullable: true),
+                    Tipo = table.Column<string>(type: "varchar(50)", maxLength: 50, nullable: false),
+                    Fecha = table.Column<DateTime>(type: "datetime(6)", nullable: false),
+                    OrigenExterno = table.Column<string>(type: "varchar(250)", maxLength: 250, nullable: true),
+                    DestinoExterno = table.Column<string>(type: "varchar(250)", maxLength: 250, nullable: true),
+                    Motivo = table.Column<string>(type: "longtext", nullable: true),
+                    IdAutor = table.Column<string>(type: "longtext", nullable: false),
+                    CreadoEn = table.Column<DateTime>(type: "datetime(6)", nullable: false),
+                    VersionRegistro = table.Column<long>(type: "bigint", nullable: false),
+                    EliminadoEn = table.Column<DateTime>(type: "datetime(6)", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_MovimientoAnimal", x => x.IdMovimiento);
+                })
                 .Annotation("MySQL:Charset", "utf8mb4");
 
             migrationBuilder.CreateTable(
@@ -189,7 +239,13 @@ namespace FarmBovi.Api.Migrations
         protected override void Down(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.DropTable(
+                name: "Alimentacion");
+
+            migrationBuilder.DropTable(
                 name: "Animal");
+
+            migrationBuilder.DropTable(
+                name: "MovimientoAnimal");
 
             migrationBuilder.DropTable(
                 name: "UsuarioRancho");
