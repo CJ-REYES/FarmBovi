@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { authApi } from '../lib/api';
 
 export type ConnectionStatus = 'online' | 'offline' | 'checking';
 
@@ -19,6 +20,7 @@ export function useConnectivity(pollIntervalMs = 30000) {
       const response = await fetch('/api/cattle', {
         method: 'HEAD',
         cache: 'no-store',
+        headers: authApi.token() ? { Authorization: `Bearer ${authApi.token()}` } : {},
         signal: AbortSignal.timeout(4000)
       });
 

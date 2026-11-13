@@ -1,6 +1,7 @@
 export type SyncStatus = 'synced' | 'pending' | 'conflict' | 'error';
 
 export type SyncEntityName =
+  | 'serverChanges'
   | 'cattle'
   | 'weighings'
   | 'healthRecords'
@@ -212,10 +213,22 @@ export interface LocalSyncConflict {
 }
 
 export interface LocalSyncCheckpoint {
-  entidad: SyncEntityName;
-  cursorOpaco: string | null;
+  entidad: string;             // Clave primaria por entidad/usuario sincronizado
+  cursorOpaco: string | null;  // Cursor opaco emitido por el servidor (nunca solo fecha)
   ultimaFechaServidor?: string | null;
   actualizadoEn: string;
+}
+
+export interface LocalServerChange {
+  idCambio: number;
+  entidad: string;
+  idRegistro: string;
+  idRancho: number;
+  operacion: 'crear' | 'actualizar' | 'eliminar';
+  ocurrioEn: string;
+  datos: Record<string, unknown>;
+  recibidoEn: string;
+  aplicadoEn: string | null;
 }
 
 export interface LocalSyncMetadata {

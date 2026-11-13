@@ -220,4 +220,10 @@ export function configureMigrations(db: Dexie): void {
         if (raw.idPesajeConfirmado === undefined) raw.idPesajeConfirmado = null;
       });
     });
+
+  // Versión 4: bandeja local duradera para cambios remotos.
+  db.version(4).stores({
+    serverChanges: 'idCambio, entidad, idRegistro, idRancho, operacion, recibidoEn, aplicadoEn',
+    syncCheckpoints: 'entidad, cursorOpaco, actualizadoEn'
+  });
 }
