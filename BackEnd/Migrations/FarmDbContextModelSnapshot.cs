@@ -158,6 +158,67 @@ namespace FarmBovi.Api.Migrations
                     b.ToTable("Animal", (string)null);
                 });
 
+            modelBuilder.Entity("FarmBovi.Api.Models.EventoSanitario", b =>
+                {
+                    b.Property<int>("IdEventoSanitario")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreadoEn")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Diagnostico")
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
+
+                    b.Property<DateTime?>("EliminadoEn")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("EvidenciaDiagnosticoUri")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
+
+                    b.Property<DateTime>("Fecha")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("IdAnimal")
+                        .HasColumnType("int");
+
+                    b.Property<int>("IdAutor")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Observaciones")
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
+
+                    b.Property<string>("ProfesionalDiagnostico")
+                        .HasMaxLength(180)
+                        .HasColumnType("varchar(180)");
+
+                    b.Property<string>("Responsable")
+                        .IsRequired()
+                        .HasMaxLength(180)
+                        .HasColumnType("varchar(180)");
+
+                    b.Property<string>("Sintomas")
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
+
+                    b.Property<string>("Tipo")
+                        .IsRequired()
+                        .HasMaxLength(35)
+                        .HasColumnType("varchar(35)");
+
+                    b.Property<long>("VersionRegistro")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("IdEventoSanitario");
+
+                    b.HasIndex("IdAnimal");
+
+                    b.ToTable("EventoSanitario", (string)null);
+                });
+
             modelBuilder.Entity("FarmBovi.Api.Models.Lote", b =>
                 {
                     b.Property<int>("IdLote")
@@ -323,6 +384,7 @@ namespace FarmBovi.Api.Migrations
                     b.ToTable("Rancho", (string)null);
                 });
 
+<<<<<<< HEAD
             modelBuilder.Entity("FarmBovi.Api.Models.Reproduccion", b =>
                 {
                     b.Property<int>("IdReproduccion")
@@ -354,6 +416,77 @@ namespace FarmBovi.Api.Migrations
                     b.HasKey("IdReproduccion");
 
                     b.ToTable("Reproduccion");
+=======
+            modelBuilder.Entity("FarmBovi.Api.Models.Recordatorio", b =>
+                {
+                    b.Property<int>("IdRecordatorio")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreadoEn")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Descripcion")
+                        .IsRequired()
+                        .HasMaxLength(250)
+                        .HasColumnType("varchar(250)");
+
+                    b.Property<DateTime?>("EliminadoEn")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Estado")
+                        .IsRequired()
+                        .HasMaxLength(25)
+                        .HasColumnType("varchar(25)");
+
+                    b.Property<DateTime?>("FechaCompletado")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("FechaProgramada")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int?>("IdAnimal")
+                        .HasColumnType("int");
+
+                    b.Property<int>("IdAutor")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("IdLote")
+                        .HasColumnType("int");
+
+                    b.Property<int>("IdRancho")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("IdResponsable")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("IdTratamiento")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Tipo")
+                        .IsRequired()
+                        .HasMaxLength(35)
+                        .HasColumnType("varchar(35)");
+
+                    b.Property<long>("VersionRegistro")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("IdRecordatorio");
+
+                    b.HasIndex("FechaProgramada");
+
+                    b.HasIndex("IdAnimal");
+
+                    b.HasIndex("IdLote");
+
+                    b.HasIndex("IdRancho");
+
+                    b.HasIndex("IdResponsable");
+
+                    b.HasIndex("IdTratamiento");
+
+                    b.ToTable("Recordatorio", (string)null);
+>>>>>>> d9999792f4d9a2c9826e13b12a28be41cb0d0676
                 });
 
             modelBuilder.Entity("FarmBovi.Api.Models.Tratamiento", b =>
@@ -362,12 +495,22 @@ namespace FarmBovi.Api.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("int");
 
+<<<<<<< HEAD
                     b.Property<string>("Dosis")
                         .HasColumnType("longtext");
+=======
+                    b.Property<DateTime>("CreadoEn")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<decimal>("Dosis")
+                        .HasPrecision(10, 3)
+                        .HasColumnType("decimal(10,3)");
+>>>>>>> d9999792f4d9a2c9826e13b12a28be41cb0d0676
 
                     b.Property<DateTime?>("EliminadoEn")
                         .HasColumnType("datetime(6)");
 
+<<<<<<< HEAD
                     b.Property<DateTime>("Fecha")
                         .HasColumnType("datetime(6)");
 
@@ -394,6 +537,61 @@ namespace FarmBovi.Api.Migrations
                     b.HasKey("IdTratamiento");
 
                     b.ToTable("Tratamientos");
+=======
+                    b.Property<string>("Estado")
+                        .IsRequired()
+                        .HasMaxLength(25)
+                        .HasColumnType("varchar(25)");
+
+                    b.Property<DateTime?>("FechaFin")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("FechaInicio")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Frecuencia")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("varchar(80)");
+
+                    b.Property<int>("IdAutor")
+                        .HasColumnType("int");
+
+                    b.Property<int>("IdEventoSanitario")
+                        .HasColumnType("int");
+
+                    b.Property<string>("PrescripcionUri")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
+
+                    b.Property<string>("Producto")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("varchar(150)");
+
+                    b.Property<string>("Responsable")
+                        .IsRequired()
+                        .HasMaxLength(180)
+                        .HasColumnType("varchar(180)");
+
+                    b.Property<string>("UnidadDosis")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)");
+
+                    b.Property<long>("VersionRegistro")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("ViaAdministracion")
+                        .HasMaxLength(60)
+                        .HasColumnType("varchar(60)");
+
+                    b.HasKey("IdTratamiento");
+
+                    b.HasIndex("IdEventoSanitario");
+
+                    b.ToTable("Tratamiento", (string)null);
+>>>>>>> d9999792f4d9a2c9826e13b12a28be41cb0d0676
                 });
 
             modelBuilder.Entity("FarmBovi.Api.Models.Usuario", b =>
@@ -483,11 +681,58 @@ namespace FarmBovi.Api.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("FarmBovi.Api.Models.EventoSanitario", b =>
+                {
+                    b.HasOne("FarmBovi.Api.Models.Animal", null)
+                        .WithMany()
+                        .HasForeignKey("IdAnimal")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("FarmBovi.Api.Models.Lote", b =>
                 {
                     b.HasOne("FarmBovi.Api.Models.Rancho", null)
                         .WithMany()
                         .HasForeignKey("IdRancho")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("FarmBovi.Api.Models.Recordatorio", b =>
+                {
+                    b.HasOne("FarmBovi.Api.Models.Animal", null)
+                        .WithMany()
+                        .HasForeignKey("IdAnimal")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("FarmBovi.Api.Models.Lote", null)
+                        .WithMany()
+                        .HasForeignKey("IdLote")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("FarmBovi.Api.Models.Rancho", null)
+                        .WithMany()
+                        .HasForeignKey("IdRancho")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("FarmBovi.Api.Models.Usuario", null)
+                        .WithMany()
+                        .HasForeignKey("IdResponsable")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("FarmBovi.Api.Models.Tratamiento", null)
+                        .WithMany()
+                        .HasForeignKey("IdTratamiento")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("FarmBovi.Api.Models.Tratamiento", b =>
+                {
+                    b.HasOne("FarmBovi.Api.Models.EventoSanitario", null)
+                        .WithMany()
+                        .HasForeignKey("IdEventoSanitario")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });
