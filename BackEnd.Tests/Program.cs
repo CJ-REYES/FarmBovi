@@ -1,5 +1,7 @@
+using System.Text.Json;
 using FarmBovi.Api.Controllers;
 using FarmBovi.Api.Data;
+using FarmBovi.Api.DTOs;
 using FarmBovi.Api.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -172,6 +174,179 @@ await using (var db = CreateDb())
     Check(await recordatorios.Delete(rec.IdRecordatorio, default) is NoContentResult, "Recordatorio DELETE");
     Check(await tratamientos.Delete(tr.IdTratamiento, default) is NoContentResult, "Tratamiento DELETE");
     Check(await eventos.Delete(ev.IdEventoSanitario, default) is NoContentResult, "EventoSanitario DELETE");
+}
+
+await using (var db = CreateDb())
+{
+    var sync = new SincronizacionController(db);
+
+    // 1. Crear registro mediante sincronización (CREATE)
+    var createPayload = JsonSerializer.SerializeToElement(new
+    {
+        idRancho = 1,
+        idLote = 1,
+        arete = "MX-SYNC-01",
+        nombre = "Toro Norte",
+        sexo = "Macho",
+        raza = "Angus",
+        estado = "Activo"
+    });
+
+    var opCreate = await sync.RecibirOperacion(new OperacionSyncRequest
+    {
+        IdOperacion = "op-001-create-animal",
+        IdRancho = 1,
+        IdUsuario = 1,
+        IdDispositivo = "android-dev-01",
+        Entidad = "Animal",
+        Accion = "CREATE",
+        Datos = createPayload
+    }, default);
+
+    var createRes = (OperacionSyncResponse)((CreatedAtActionResult)opCreate).Value!;
+    Check(createRes.Accion == "CREATE", "Sync CREATE aplica operación");
+    Check(createRes.VersionResultante == 1, "Sync CREATE asigna versión 1");
+    Check(!createRes.DuplicadoIgnorado, "Sync CREATE primera vez no es duplicado");
+    Check(await db.RegistrosSyncServidor.CountAsync() == 1, "Sync CREATE guarda RegistroSyncServidor");
+    Check(await db.CambiosServidor.CountAsync() == 1, "Sync CREATE guarda CambioServidor");
+    Check(await db.CambiosAuditoria.CountAsync() == 1, "Sync CREATE guarda CambioAuditoria");
+
+    var animalId = createRes.IdRegistro;
+
+    // 2. Evitar registros duplicados (idempotencia con el mismo IdOperacion)
+    var opDuplicate = await sync.RecibirOperacion(new OperacionSyncRequest
+    {
+        IdOperacion = "op-001-create-animal",
+        IdRancho = 1,
+        IdUsuario = 1,
+        IdDispositivo = "android-dev-01",
+        Entidad = "Animal",
+        Accion = "CREATE",
+        Datos = createPayload
+    }, default);
+
+    var dupRes = (OperacionSyncResponse)((OkObjectResult)opDuplicate).Value!;
+    Check(dupRes.DuplicadoIgnorado, "Sync detecta IdOperacion duplicado y no repite el cambio");
+    Check(dupRes.IdRegistro == animalId, "Sync duplicado devuelve el mismo IdRegistro");
+    Check(await db.Animales.CountAsync() == 1, "Sync duplicado no crea segundo Animal");
+    Check(await db.CambiosAuditoria.CountAsync() == 1, "Sync duplicado no duplica auditoría");
+
+    // 3. Rechazar mismo IdOperacion si los datos cambiaron (hash mismatch)
+    var tamperedPayload = JsonSerializer.SerializeToElement(new
+    {
+        idRancho = 1,
+        idLote = 1,
+        arete = "MX-TAMPERED",
+        sexo = "Macho",
+        raza = "Angus",
+        estado = "Activo"
+    });
+    var opTampered = await sync.RecibirOperacion(new OperacionSyncRequest
+    {
+        IdOperacion = "op-001-create-animal",
+        IdRancho = 1,
+        IdUsuario = 1,
+        IdDispositivo = "android-dev-01",
+        Entidad = "Animal",
+        Accion = "CREATE",
+        Datos = tamperedPayload
+    }, default);
+    Check(opTampered is ConflictObjectResult, "Sync rechaza IdOperacion reutilizado con payload distinto");
+
+    // 4. Actualizar con versión válida (VersionBase = 1 -> VersionResultante = 2)
+    var updatePayloadDispA = JsonSerializer.SerializeToElement(new
+    {
+        idRancho = 1,
+        idLote = 1,
+        arete = "MX-SYNC-01",
+        nombre = "Toro Norte Campeón",
+        sexo = "Macho",
+        raza = "Brangus",
+        estado = "Activo"
+    });
+
+    var opUpdateA = await sync.RecibirOperacion(new OperacionSyncRequest
+    {
+        IdOperacion = "op-002-update-disp-a",
+        IdRancho = 1,
+        IdUsuario = 1,
+        IdDispositivo = "android-dev-01",
+        Entidad = "Animal",
+        IdRegistro = animalId,
+        Accion = "UPDATE",
+        VersionBase = 1,
+        Datos = updatePayloadDispA
+    }, default);
+
+    var updResA = (OperacionSyncResponse)((OkObjectResult)opUpdateA).Value!;
+    Check(updResA.VersionResultante == 2, "Sync UPDATE con VersionBase=1 incrementa versión a 2");
+
+    // 5. Detectar conflicto cuando otro dispositivo intenta modificar con VersionBase desactualizada (1 != 2)
+    var updatePayloadDispB = JsonSerializer.SerializeToElement(new
+    {
+        idRancho = 1,
+        idLote = 1,
+        arete = "MX-SYNC-01",
+        nombre = "Toro Norte",
+        sexo = "Macho",
+        raza = "Hereford",
+        estado = "Vendido"
+    });
+
+    var opConflictB = await sync.RecibirOperacion(new OperacionSyncRequest
+    {
+        IdOperacion = "op-003-conflict-disp-b",
+        IdRancho = 1,
+        IdUsuario = 2,
+        IdDispositivo = "android-dev-02",
+        Entidad = "Animal",
+        IdRegistro = animalId,
+        Accion = "UPDATE",
+        VersionBase = 1,
+        Datos = updatePayloadDispB
+    }, default);
+
+    Check(opConflictB is ConflictObjectResult, "Sync UPDATE con versión antigua responde 409 Conflict");
+    var conflictRes = (ConflictoSyncResponse)((ConflictObjectResult)opConflictB).Value!;
+    Check(conflictRes.TipoConflicto == "VERSION_MISMATCH", "Sync informa tipo de conflicto VERSION_MISMATCH");
+    Check(conflictRes.VersionEnviada == 1 && conflictRes.VersionServidor == 2, "Sync devuelve versión enviada (1) y versión actual del servidor (2)");
+    Check(conflictRes.CamposModificados.Any(c => c.Campo.Equals("raza", StringComparison.OrdinalIgnoreCase)), "Sync informa qué campos cambiaron en el conflicto");
+    Check(conflictRes.EstadoServidor is not null, "Sync devuelve el estado actual del registro en el servidor");
+
+    // 6. Eliminar con versión actual del servidor (VersionBase = 2) y verificar conflicto si otro dispositivo edita después
+    var opDelete = await sync.RecibirOperacion(new OperacionSyncRequest
+    {
+        IdOperacion = "op-004-delete-animal",
+        IdRancho = 1,
+        IdUsuario = 1,
+        IdDispositivo = "android-dev-01",
+        Entidad = "Animal",
+        IdRegistro = animalId,
+        Accion = "DELETE",
+        VersionBase = 2
+    }, default);
+    Check(opDelete is OkObjectResult, "Sync DELETE con VersionBase=2 se aplica correctamente");
+
+    var opAfterDelete = await sync.RecibirOperacion(new OperacionSyncRequest
+    {
+        IdOperacion = "op-005-update-after-delete",
+        IdRancho = 1,
+        IdUsuario = 2,
+        IdDispositivo = "android-dev-02",
+        Entidad = "Animal",
+        IdRegistro = animalId,
+        Accion = "UPDATE",
+        VersionBase = 2,
+        Datos = updatePayloadDispB
+    }, default);
+    var deletedConflict = (ConflictoSyncResponse)((ConflictObjectResult)opAfterDelete).Value!;
+    Check(deletedConflict.TipoConflicto == "DELETED_ON_SERVER", "Sync informa DELETED_ON_SERVER cuando el registro ya fue eliminado");
+
+    // 7. Consultar cambios remotos y bitácora de auditoría
+    var cambiosRes = (List<CambioServidor>)((OkObjectResult)(await sync.ObtenerCambiosRemotos(1, 0, 100, default)).Result!).Value!;
+    var auditoriaRes = (List<CambioAuditoria>)((OkObjectResult)(await sync.ObtenerAuditoria(1, "Animal", 100, default)).Result!).Value!;
+    Check(cambiosRes.Count == 3, "Sync GET cambios remotos devuelve CREATE, UPDATE y DELETE");
+    Check(auditoriaRes.Count == 3, "Sync GET auditoría devuelve historial de cambios");
 }
 
 Console.WriteLine($"Correcto: {checks} comprobaciones CRUD de controladores.");

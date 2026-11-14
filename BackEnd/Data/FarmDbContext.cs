@@ -15,6 +15,9 @@ public sealed class FarmDbContext(DbContextOptions<FarmDbContext> options) : DbC
     public DbSet<EventoSanitario> EventosSanitarios => Set<EventoSanitario>();
     public DbSet<Tratamiento> Tratamientos => Set<Tratamiento>();
     public DbSet<Recordatorio> Recordatorios => Set<Recordatorio>();
+    public DbSet<RegistroSyncServidor> RegistrosSyncServidor => Set<RegistroSyncServidor>();
+    public DbSet<CambioServidor> CambiosServidor => Set<CambioServidor>();
+    public DbSet<CambioAuditoria> CambiosAuditoria => Set<CambioAuditoria>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -116,6 +119,50 @@ public sealed class FarmDbContext(DbContextOptions<FarmDbContext> options) : DbC
             e.HasOne<Lote>().WithMany().HasForeignKey(x => x.IdLote).OnDelete(DeleteBehavior.Restrict);
             e.HasOne<Tratamiento>().WithMany().HasForeignKey(x => x.IdTratamiento).OnDelete(DeleteBehavior.Restrict);
             e.HasOne<Usuario>().WithMany().HasForeignKey(x => x.IdResponsable).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<RegistroSyncServidor>(e =>
+        {
+            e.ToTable("RegistroSyncServidor"); e.HasKey(x => x.IdOperacion);
+            e.Property(x => x.IdOperacion).HasMaxLength(36).IsRequired();
+            e.Property(x => x.IdDispositivo).HasMaxLength(80).IsRequired();
+            e.Property(x => x.HashSolicitud).HasMaxLength(64).IsRequired();
+            e.Property(x => x.Entidad).HasMaxLength(80).IsRequired();
+            e.Property(x => x.IdRegistro).HasMaxLength(36).IsRequired();
+            e.Property(x => x.Resultado).IsRequired();
+            e.HasIndex(x => new { x.IdRancho, x.AplicadoEn });
+            e.HasIndex(x => new { x.Entidad, x.IdRegistro });
+            e.HasOne<Usuario>().WithMany().HasForeignKey(x => x.IdUsuario).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Rancho>().WithMany().HasForeignKey(x => x.IdRancho).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<CambioServidor>(e =>
+        {
+            e.ToTable("CambioServidor"); e.HasKey(x => x.IdCambioRemoto);
+            e.Property(x => x.IdOperacion).HasMaxLength(36);
+            e.Property(x => x.Entidad).HasMaxLength(80).IsRequired();
+            e.Property(x => x.IdRegistro).HasMaxLength(36).IsRequired();
+            e.Property(x => x.Accion).HasMaxLength(20).IsRequired();
+            e.Property(x => x.DatosJson).IsRequired();
+            e.HasIndex(x => new { x.IdRancho, x.IdCambioRemoto });
+            e.HasOne<Rancho>().WithMany().HasForeignKey(x => x.IdRancho).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<RegistroSyncServidor>().WithMany().HasForeignKey(x => x.IdOperacion).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<CambioAuditoria>(e =>
+        {
+            e.ToTable("CambioAuditoria"); e.HasKey(x => x.IdCambio);
+            e.Property(x => x.IdCambio).HasMaxLength(36).IsRequired();
+            e.Property(x => x.IdOperacion).HasMaxLength(36);
+            e.Property(x => x.Entidad).HasMaxLength(80).IsRequired();
+            e.Property(x => x.IdRegistro).HasMaxLength(36).IsRequired();
+            e.Property(x => x.Accion).HasMaxLength(20).IsRequired();
+            e.Property(x => x.Origen).HasMaxLength(25).IsRequired();
+            e.HasIndex(x => new { x.IdRancho, x.Fecha });
+            e.HasIndex(x => new { x.Entidad, x.IdRegistro });
+            e.HasOne<Rancho>().WithMany().HasForeignKey(x => x.IdRancho).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Usuario>().WithMany().HasForeignKey(x => x.IdUsuario).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<RegistroSyncServidor>().WithMany().HasForeignKey(x => x.IdOperacion).OnDelete(DeleteBehavior.Restrict);
         });
     }
 }

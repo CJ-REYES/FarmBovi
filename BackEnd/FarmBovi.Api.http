@@ -83,3 +83,53 @@ Content-Type: application/json
   "estado": "Pendiente",
   "idAutor": 1
 }
+
+### Sincronización: Enviar operación CREATE (Módulo 7: Sincronización y Auditoría)
+POST {{baseUrl}}/api/sync/operaciones
+Content-Type: application/json
+
+{
+  "idOperacion": "op-20261113-0001",
+  "idRancho": 1,
+  "idUsuario": 1,
+  "idDispositivo": "movil-capataz-01",
+  "entidad": "Animal",
+  "accion": "CREATE",
+  "datos": {
+    "idRancho": 1,
+    "idLote": 1,
+    "arete": "MX-SYNC-100",
+    "nombre": "Relámpago",
+    "sexo": "Macho",
+    "raza": "Brahman",
+    "estado": "Activo"
+  }
+}
+
+### Sincronización: Enviar operación UPDATE con validación de versión
+POST {{baseUrl}}/api/sync/operaciones
+Content-Type: application/json
+
+{
+  "idOperacion": "op-20261113-0002",
+  "idRancho": 1,
+  "idUsuario": 1,
+  "idDispositivo": "movil-capataz-01",
+  "entidad": "Animal",
+  "idRegistro": "1",
+  "accion": "UPDATE",
+  "versionBase": 1,
+  "datos": {
+    "idRancho": 1,
+    "idLote": 1,
+    "arete": "MX-SYNC-100",
+    "nombre": "Relámpago II",
+    "sexo": "Macho",
+    "raza": "Brahman Rojo",
+    "estado": "Activo"
+  }
+}
+
+### Sincronización: Consultar cambios remotos y auditoría
+GET {{baseUrl}}/api/sync/cambios?idRancho=1&desdeId=0
+GET {{baseUrl}}/api/sync/auditoria?idRancho=1&entidad=Animal
