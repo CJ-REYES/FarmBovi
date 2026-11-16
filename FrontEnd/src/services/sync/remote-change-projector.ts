@@ -28,7 +28,7 @@ async function localId(entity: string, id: unknown, table: Table<BaseLocalEntity
 }
 
 export const RemoteChangeProjector = {
-  tables: Object.values(destinations),
+  tables: [...new Set(Object.values(destinations))],
 
   async apply(change: LocalServerChange, now: string): Promise<boolean> {
     const table = destinations[change.entidad];

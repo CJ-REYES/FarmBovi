@@ -704,4 +704,3 @@ namespace FarmBovi.Api.Migrations
         }
     }
 }
-
