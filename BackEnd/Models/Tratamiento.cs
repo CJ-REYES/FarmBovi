@@ -2,8 +2,8 @@ namespace FarmBovi.Api.Models;
 
 public sealed class Tratamiento
 {
-    public int IdTratamiento { get; set; }
-    public int IdEventoSanitario { get; set; }
+    public Guid IdTratamiento { get; set; } = Guid.NewGuid();
+    public Guid IdEventoSanitario { get; set; }
     public string Producto { get; set; } = string.Empty;
     public decimal Dosis { get; set; }
     public string UnidadDosis { get; set; } = string.Empty;
@@ -14,8 +14,8 @@ public sealed class Tratamiento
     public string Responsable { get; set; } = string.Empty;
     public string? PrescripcionUri { get; set; }
     public string Estado { get; set; } = string.Empty;
-    public int IdAutor { get; set; }
-    public DateTime CreadoEn { get; set; }
-    public long VersionRegistro { get; set; }
+    public Guid IdAutor { get; set; }
+    public DateTime CreadoEn { get; set; } = DateTime.UtcNow;
+    public long VersionRegistro { get; set; } = 1;
     public DateTime? EliminadoEn { get; set; }
 }

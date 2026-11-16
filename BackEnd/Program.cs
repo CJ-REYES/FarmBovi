@@ -1,5 +1,7 @@
 using FarmBovi.Api.Data;
+using FarmBovi.Api.Services;
 using Microsoft.EntityFrameworkCore;
+
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -7,6 +9,9 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddProblemDetails();
+
+builder.Services.AddScoped<FarmDomainValidationService>();
+
 
 var connectionString = builder.Configuration.GetConnectionString("FarmBovi")
     ?? throw new InvalidOperationException("Configura ConnectionStrings:FarmBovi.");
