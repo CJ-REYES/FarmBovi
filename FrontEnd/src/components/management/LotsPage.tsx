@@ -1,7 +1,10 @@
 import { Plus, Search, MapPin } from 'lucide-react';
 import EmptyState from '../ui/EmptyState';
+import { db } from '../../lib/database/db';
+import { useLocalServerRecords } from '../../hooks/use-local-server-records';
 
 export default function LotsPage() {
+  const lots = useLocalServerRecords(db.lots);
   return (
     <div className="space-y-6 animate-in fade-in duration-300 h-full flex flex-col">
       <header className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 border-b border-border-light pb-4">
@@ -21,8 +24,9 @@ export default function LotsPage() {
         </div>
       </div>
 
-      <div className="flex-1 bg-surface-white border border-border-light rounded-xl shadow-sm flex items-center justify-center p-8 min-h-[400px]">
-        <EmptyState title="Cero Lotes Configurados" message="No se han delimitado potreros ni asignado capacidades de carga animal en este rancho. El backend de lotes está pendiente." icon={MapPin} />
+      <div className="flex-1 bg-surface-white border border-border-light rounded-xl shadow-sm p-5 min-h-[400px]">
+        {lots.length === 0 ? <EmptyState title="Cero Lotes Configurados" message="Los lotes recibidos del servidor aparecerán aquí." icon={MapPin} /> :
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{lots.map(lot => <article key={lot.id} className="rounded-lg border border-border-light p-4"><h2 className="font-bold text-brand-forest">{lot.nombre}</h2><p className="text-sm text-brand-slate">{lot.ubicacion || 'Sin ubicación'}</p><p className="mt-2 text-xs text-brand-slate/70">Capacidad: {lot.capacidad || 'Sin especificar'}</p></article>)}</div>}
       </div>
     </div>
   );

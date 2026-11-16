@@ -226,4 +226,24 @@ export function configureMigrations(db: Dexie): void {
     serverChanges: 'idCambio, entidad, idRegistro, idRancho, operacion, recibidoEn, aplicadoEn',
     syncCheckpoints: 'entidad, cursorOpaco, actualizadoEn'
   });
+
+  // Version 5: discriminate server entities sharing a local table (health records).
+  db.version(5).stores({
+    cattle: 'id, localNumericId, remoteId, remoteEntity, ranchId, areteSiniiga, loteId, syncStatus, updatedAt, createdAt',
+    lots: 'id, localNumericId, remoteId, remoteEntity, ranchId, nombre, syncStatus, updatedAt',
+    healthRecords: 'id, localNumericId, remoteId, remoteEntity, ranchId, cattleId, tipo, fecha, syncStatus, updatedAt',
+    feedingRecords: 'id, localNumericId, remoteId, remoteEntity, ranchId, lotId, fecha, syncStatus, updatedAt',
+    movements: 'id, localNumericId, remoteId, remoteEntity, ranchId, cattleId, fecha, syncStatus, updatedAt',
+    alerts: 'id, localNumericId, remoteId, remoteEntity, ranchId, tipo, prioridad, leida, fecha, syncStatus',
+    weighings: 'id, localNumericId, remoteId, ranchId, cattleId, sourceAnalysisJobId, fecha, syncStatus, updatedAt',
+    reproductionRecords: 'id, localNumericId, remoteId, ranchId, cattleId, evento, fecha, syncStatus, updatedAt',
+    genealogy: 'id, localNumericId, remoteId, ranchId, cattleId, padreId, madreId, syncStatus, updatedAt',
+    media: 'id, remoteId, ranchId, cattleId, idEntidadRelacionada, tipo, estadoArchivo, idOperacionSubida, fechaCaptura, syncStatus, updatedAt',
+    weighingAnalysisJobs: 'idTrabajo, idMedia, idBovino, ranchId, idOperacion, idPesajeConfirmado, estado, proximoIntento, fechaCreacion, actualizadoEn',
+    outbox: 'id, &idOperacion, entidad, idEntidad, tipoOperacion, estado, fechaCreacion, proximoIntento',
+    syncConflicts: 'idConflicto, idOperacion, entidad, idEntidad, tipoConflicto, estadoResolucion, fechaDeteccion',
+    syncCheckpoints: 'entidad, cursorOpaco, actualizadoEn',
+    syncMetadata: 'entityName',
+    serverChanges: 'idCambio, entidad, idRegistro, idRancho, operacion, recibidoEn, aplicadoEn'
+  });
 }

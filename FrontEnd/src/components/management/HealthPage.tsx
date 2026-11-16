@@ -1,7 +1,10 @@
 import { Syringe, ShieldCheck, Calendar, Plus } from 'lucide-react';
 import EmptyState from '../ui/EmptyState';
+import { db } from '../../lib/database/db';
+import { useLocalServerRecords } from '../../hooks/use-local-server-records';
 
 export default function HealthPage() {
+  const records = useLocalServerRecords(db.healthRecords);
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
       <header className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 border-b border-border-light pb-4">
@@ -22,7 +25,7 @@ export default function HealthPage() {
               <ShieldCheck size={18} className="text-status-info" /> Diagnósticos y Tratamientos Activos
             </h2>
           </div>
-          <div className="flex-1 p-6"><EmptyState title="Hato Saludable" message="No hay expedientes clínicos abiertos ni diagnósticos registrados. El módulo de sanidad está en fase de integración." icon={Syringe} /></div>
+          <div className="flex-1 p-6">{records.length === 0 ? <EmptyState title="Hato Saludable" message="Los expedientes sanitarios descargados aparecerán aquí." icon={Syringe} /> : <div className="space-y-3">{records.map(record => <article key={record.id} className="rounded-lg border border-border-light p-4"><div className="flex justify-between gap-3"><strong>{record.tipo}</strong><time className="text-xs text-brand-slate">{new Date(record.fecha).toLocaleDateString()}</time></div><p className="mt-1 text-sm text-brand-slate">{record.descripcion}</p></article>)}</div>}</div>
         </div>
 
         {/* Calendario de Vacunación */}

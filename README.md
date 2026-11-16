@@ -190,9 +190,36 @@ Estas actividades se implementan en tareas pequeñas, cada una en su propia rama
 | --- | --- | --- |
 | 1. Terminar el inicio de sesión | Implementado en `ea5ca98` | Login con contraseña verificada contra su hash, token JWT de 8 horas, rutas protegidas por defecto, formulario web y cierre de sesión. Las altas de usuarios requieren iniciar sesión. |
 | 2. Registrar cambios remotos | Implementado en `26b5e08` | El historial `CambioServidor` guarda altas, ediciones y eliminaciones con entidad, ID, fecha UTC, rancho y datos del registro en la misma transacción. |
-| 3. Endpoint para consultar cambios | Implementado en la rama actual | `GET /api/sync/cambios` consulta cambios autorizados por rancho para el usuario autenticado. |
-| 4. Paginación y cursor | Implementado en la rama actual | El motor descarga las páginas y guarda cada lote en la bandeja IndexedDB junto con el cursor por usuario, en una transacción local. |
-| 5. Enviar borrados | Implementado en la rama actual | El servidor envía eventos `eliminar`; el cliente conserva el tombstone y marca eliminado localmente el registro sincronizado si lo tiene. |
+| 3. Endpoint para consultar cambios | Implementado en la rama actual | `GET /api/sync/cambios` entrega cambios de entidades ganaderas para ranchos activos del usuario. |
+| 4. Paginación y cursor | Implementado en la rama actual | Los lotes y su cursor se guardan juntos en una transacción IndexedDB; la bandeja pendiente se reprocesa al siguiente ciclo. |
+| 5. Aplicación de cambios y borrados | Implementado en la rama actual | Altas, ediciones y tombstones se proyectan a las tablas locales de bovinos, lotes, sanidad, alimentación, movimientos y recordatorios. |
+| 6. Bootstrap atómico | Implementado en la rama actual | Una fila con clave primaria fija permite que solo una instancia cree el primer usuario; la migración `AddAtomicBootstrapRegistration` crea su tabla. |
+
+### Contrato Pull para sincronización
+
+El contrato tiene una sola entidad `CambioServidor` y un solo endpoint de descarga: `GET /api/sync/cambios?limite=100&cursor={cursor}`. La respuesta JSON usa camelCase:
+
+```json
+{
+  "cambios": [{
+    "idCambio": 42,
+    "entidad": "Animal",
+    "idRegistro": "18",
+    "idRancho": 3,
+    "operacion": "actualizar",
+    "ocurrioEn": "2026-11-15T12:00:00Z",
+    "datosJson": "{\"IdAnimal\":18,\"IdRancho\":3}"
+  }],
+  "cursorSiguiente": "cursor-opaco-firmado",
+  "hayMas": false
+}
+```
+
+`datosJson` es una cadena JSON con la instantánea del registro (para borrados contiene los valores anteriores). `operacion` admite `crear`, `actualizar` y `eliminar`. La lista Pull actual incluye `Animal`, `Lote`, `EventoSanitario`, `Tratamiento`, `Recordatorio`, `Alimentacion` y `MovimientoAnimal`; el servidor excluye usuarios, membresías y datos de configuración administrativa. El límite válido es 1–200. El cursor está firmado y vinculado al usuario, y solo avanza sobre cambios visibles en sus ranchos activos.
+
+El cliente confirma de forma atómica la bandeja y el cursor. Si falla la transacción del lote, ambos se revierten y el servidor puede volver a enviarlo. Si una fila no se puede proyectar por conflicto local o falta una entidad padre, queda en `serverChanges` sin `aplicadoEn` para reintentar; los registros locales `pending` y `conflict` no se sobrescriben. Las tablas locales mantienen tombstones (`deletedAt`) para borrados remotos.
+
+**Contrato que debe consumir Push:** usar este mismo `CambioServidor` como representación del cambio (entidad, ID de registro, rancho, operación, fecha UTC y `datosJson`), sin definir otro modelo ni duplicar `GET /api/sync/cambios`. Esta rama no implementa recepción ni aplicación de operaciones Push; eso sigue bajo responsabilidad de Roberto. Coordinen cualquier ajuste del contrato antes de integrar ambas ramas.
 
 ### Configurar autenticación
 
@@ -208,4 +235,4 @@ En una base nueva, genera y configura `Authentication__BootstrapKey` con al meno
 
 La autenticación identifica al usuario y el endpoint de cambios filtra por sus asignaciones activas a ranchos. La autorización granular para las demás rutas CRUD sigue pendiente; no publiques el sistema con datos reales hasta implementarla y verificarla.
 
-El endpoint de cambios filtra mediante las asignaciones activas del usuario a ranchos, recibe el cursor opaco como parámetro `cursor` y acepta `limite` entre 1 y 200. La respuesta contiene `cambios`, `cursorSiguiente` y `hayMas`. Cada dispositivo conserva un cursor por usuario y guarda el lote en su bandeja IndexedDB antes de confirmar localmente el cursor. Los tombstones eliminan de forma lógica las filas locales sincronizadas que ya existen. Las altas y ediciones descargadas quedan en la bandeja `serverChanges` para su proyección a los módulos; esa proyección completa y los permisos por rancho del resto de la API siguen pendientes.
+El endpoint de cambios filtra mediante las asignaciones activas del usuario a ranchos. La proyección Pull a las tablas IndexedDB está activa para las entidades listadas; permisos por rancho del resto de rutas CRUD siguen pendientes.

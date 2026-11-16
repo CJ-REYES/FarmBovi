@@ -22,7 +22,6 @@ public sealed record BootstrapRequest([Required] UsuarioRequest Usuario, [Requir
 [ApiController, Route("api/usuarios")]
 public sealed class UsuarioController(FarmDbContext db) : ControllerBase
 {
-    private static readonly SemaphoreSlim BootstrapLock = new(1, 1);
     private static readonly PasswordHasher<Usuario> Hasher = new();
     private static UsuarioResponse ToResponse(Usuario user) => new(user.Id, user.Nombre, user.Correo, user.Estado);
 
@@ -53,24 +52,21 @@ public sealed class UsuarioController(FarmDbContext db) : ControllerBase
             !CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(expected), Encoding.UTF8.GetBytes(input.CodigoInicial)))
             return Unauthorized(new { mensaje = "Código inicial inválido." });
 
-        await BootstrapLock.WaitAsync(ct);
-        try
+        if (await db.Usuarios.AnyAsync(ct) || await db.RegistrosIniciales.AnyAsync(ct))
+            return Conflict("El registro inicial ya fue utilizado.");
+        var user = input.Usuario;
+        if (string.IsNullOrWhiteSpace(user.Contrasena) || user.Contrasena.Length < 8)
+            return BadRequest("La contraseña debe tener al menos 8 caracteres.");
+        var item = new Usuario
         {
-            if (await db.Usuarios.AnyAsync(ct)) return Conflict("El registro inicial ya fue utilizado.");
-            var user = input.Usuario;
-            if (string.IsNullOrWhiteSpace(user.Contrasena) || user.Contrasena.Length < 8)
-                return BadRequest("La contraseña debe tener al menos 8 caracteres.");
-            var item = new Usuario
-            {
-                Nombre = user.Nombre.Trim(), Correo = user.Correo.Trim().ToLowerInvariant(), Estado = "Activo"
-            };
-            item.Contrasena = Hasher.HashPassword(item, user.Contrasena);
-            db.Usuarios.Add(item);
-            try { await db.SaveChangesAsync(ct); }
-            catch (DbUpdateException) { return Conflict("No se pudo crear el usuario inicial."); }
-            return CreatedAtAction(nameof(Get), new { id = item.Id }, ToResponse(item));
-        }
-        finally { BootstrapLock.Release(); }
+            Nombre = user.Nombre.Trim(), Correo = user.Correo.Trim().ToLowerInvariant(), Estado = "Activo"
+        };
+        item.Contrasena = Hasher.HashPassword(item, user.Contrasena);
+        db.RegistrosIniciales.Add(new RegistroInicial { Id = 1, RegistradoEn = DateTime.UtcNow });
+        db.Usuarios.Add(item);
+        try { await db.SaveChangesAsync(ct); }
+        catch (DbUpdateException) { return Conflict("El registro inicial ya fue utilizado o no se pudo completar."); }
+        return CreatedAtAction(nameof(Get), new { id = item.Id }, ToResponse(item));
     }
 
     [HttpGet] public async Task<ActionResult<List<UsuarioResponse>>> GetAll(CancellationToken ct) => (await db.Usuarios.AsNoTracking().ToListAsync(ct)).Select(ToResponse).ToList();

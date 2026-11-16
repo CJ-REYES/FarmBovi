@@ -1,20 +1,20 @@
 using System.Security.Cryptography;
 using System.Security.Claims;
 using System.Text;
-using System.Text.Json;
 using FarmBovi.Api.Data;
+using FarmBovi.Api.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 namespace FarmBovi.Api.Controllers;
 
-public sealed record CambioDescargable(long IdCambio, string Entidad, string IdRegistro, int IdRancho,
-    string Operacion, DateTime OcurrioEn, JsonElement Datos);
-public sealed record LoteCambios(IReadOnlyList<CambioDescargable> Cambios, string? CursorSiguiente, bool HayMas);
+public sealed record LoteCambios(IReadOnlyList<CambioServidor> Cambios, string? CursorSiguiente, bool HayMas);
 
 [ApiController, Route("api/sync/cambios")]
 public sealed class CambiosController(FarmDbContext db, IConfiguration configuration) : ControllerBase
 {
+    // These are the ranch-scoped records consumed by FarmBovi's local modules.
+    public static readonly string[] EntidadesPull = ["Animal", "Lote", "EventoSanitario", "Tratamiento", "Recordatorio", "Alimentacion", "MovimientoAnimal"];
     [HttpGet]
     public async Task<ActionResult<LoteCambios>> Get([FromQuery] string? cursor, [FromQuery] int limite = 100, CancellationToken ct = default)
     {
@@ -32,15 +32,13 @@ public sealed class CambiosController(FarmDbContext db, IConfiguration configura
         if (ranchIds.Count == 0) return Ok(new LoteCambios([], cursor, false));
 
         var batch = await db.CambiosServidor.AsNoTracking()
-            .Where(x => x.IdCambio > lastId && x.IdRancho != null && ranchIds.Contains(x.IdRancho.Value))
+            .Where(x => x.IdCambio > lastId && x.IdRancho != null && ranchIds.Contains(x.IdRancho.Value) && EntidadesPull.Contains(x.Entidad))
             .OrderBy(x => x.IdCambio)
             .Take(limite + 1)
             .ToListAsync(ct);
         var hayMas = batch.Count > limite;
         if (hayMas) batch.RemoveAt(batch.Count - 1);
-        var changes = batch.Select(x => new CambioDescargable(
-            x.IdCambio, x.Entidad, x.IdRegistro, x.IdRancho!.Value, x.Operacion, x.OcurrioEn,
-            JsonDocument.Parse(x.DatosJson).RootElement.Clone())).ToArray();
+        var changes = batch;
         var nextCursor = batch.Count == 0 ? cursor : CreateCursor(userId, batch[^1].IdCambio);
         return Ok(new LoteCambios(changes, nextCursor, hayMas));
     }
@@ -67,7 +65,8 @@ public sealed class CambiosController(FarmDbContext db, IConfiguration configura
             long.TryParse(values[1], out lastId) && lastId >= 0;
     }
 
-    private byte[] GetKey() => Encoding.UTF8.GetBytes(configuration["Authentication:SigningKey"]!);
+    private byte[] GetKey() => Encoding.UTF8.GetBytes(configuration["Authentication:SigningKey"]
+        ?? throw new InvalidOperationException("Authentication:SigningKey no está configurada."));
     private static string Base64Url(byte[] bytes) => Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
     private static byte[] FromBase64Url(string value)
     {

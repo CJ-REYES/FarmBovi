@@ -55,6 +55,7 @@ export interface BaseLocalEntity {
   id: string;
   localNumericId?: number;
   remoteId?: string | number;
+  remoteEntity?: string;
   ranchId?: string;
   createdAt: string;
   updatedAt: string;
@@ -94,6 +95,7 @@ export interface LocalFeedingRecord extends BaseLocalEntity {
   lotId?: string;
   tipoAlimento: string;
   cantidadKg: number;
+  unidad?: string;
   fecha: string;
 }
 
@@ -226,7 +228,7 @@ export interface LocalServerChange {
   idRancho: number;
   operacion: 'crear' | 'actualizar' | 'eliminar';
   ocurrioEn: string;
-  datos: Record<string, unknown>;
+  datosJson: string;
   recibidoEn: string;
   aplicadoEn: string | null;
 }

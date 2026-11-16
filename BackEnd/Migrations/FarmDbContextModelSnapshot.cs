@@ -191,6 +191,20 @@ namespace FarmBovi.Api.Migrations
                     b.ToTable("CambioServidor", (string)null);
                 });
 
+            modelBuilder.Entity("FarmBovi.Api.Models.RegistroInicial", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedNever()
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("RegistradoEn")
+                        .HasColumnType("datetime(6)");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("RegistroInicial");
+                });
+
             modelBuilder.Entity("FarmBovi.Api.Models.EventoSanitario", b =>
                 {
                     b.Property<int>("IdEventoSanitario")

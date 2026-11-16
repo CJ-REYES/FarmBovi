@@ -1,9 +1,13 @@
 import { useState } from 'react';
 import { Bell, Filter, CheckCircle, AlertTriangle, Info, Clock } from 'lucide-react';
 import EmptyState from '../ui/EmptyState';
+import { db } from '../../lib/database/db';
+import { useLocalServerRecords } from '../../hooks/use-local-server-records';
 
 export default function AlertsPage() {
   const [activeFilter, setActiveFilter] = useState('todas');
+  const alerts = useLocalServerRecords(db.alerts);
+  const visibleAlerts = alerts.filter(alert => activeFilter === 'todas' || (activeFilter === 'sanitarias' && alert.tipo.toLowerCase().includes('san')) || (activeFilter === 'operativas' && !alert.tipo.toLowerCase().includes('san')));
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300 h-full flex flex-col pb-8">
@@ -47,11 +51,11 @@ export default function AlertsPage() {
             </h2>
           </div>
           <div className="flex-1 p-6 flex flex-col justify-center">
-            <EmptyState
+            {visibleAlerts.length === 0 ? <EmptyState
               title="Bandeja Limpia"
-              message="El motor de reglas sanitarias y recordatorios está en proceso de integración. No tienes alertas pendientes."
+              message="Los recordatorios recibidos del servidor aparecerán aquí."
               icon={Info}
-            />
+            /> : <div className="space-y-3">{visibleAlerts.map(alert => <article key={alert.id} className="rounded-lg border border-border-light p-4"><div className="flex items-center justify-between gap-3"><strong>{alert.tipo}</strong><time className="text-xs text-brand-slate">{new Date(alert.fecha).toLocaleDateString()}</time></div><p className="mt-1 text-sm text-brand-slate">{alert.mensaje}</p></article>)}</div>}
           </div>
         </div>
       </div>

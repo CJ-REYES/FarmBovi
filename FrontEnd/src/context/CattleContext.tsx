@@ -51,6 +51,9 @@ export function CattleProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void fetchCattle();
+    const onRemoteChanges = () => { void fetchCattle(); };
+    window.addEventListener('farmbovi:changes-applied', onRemoteChanges);
+    return () => window.removeEventListener('farmbovi:changes-applied', onRemoteChanges);
   }, [fetchCattle]);
 
   const save = async (data: CattleInput, id?: number) => {

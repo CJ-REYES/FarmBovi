@@ -19,12 +19,13 @@ public sealed class FarmDbContext(DbContextOptions<FarmDbContext> options) : DbC
     public DbSet<Tratamiento> Tratamientos => Set<Tratamiento>();
     public DbSet<Recordatorio> Recordatorios => Set<Recordatorio>();
     public DbSet<CambioServidor> CambiosServidor => Set<CambioServidor>();
+    public DbSet<RegistroInicial> RegistrosIniciales => Set<RegistroInicial>();
 
     public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
         ChangeTracker.DetectChanges();
         var candidates = ChangeTracker.Entries()
-            .Where(e => e.Entity is not CambioServidor && e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
+            .Where(e => e.Entity is not CambioServidor and not RegistroInicial && e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
             .Select(e => new PendingChange(e.Entity, e.Metadata, e.State, e.State == EntityState.Deleted ? e.Properties.ToDictionary(p => p.Metadata.Name, p => p.OriginalValue) : null,
                 TryReadInt(e, "IdRancho")))
             .ToArray();
@@ -71,7 +72,9 @@ public sealed class FarmDbContext(DbContextOptions<FarmDbContext> options) : DbC
                     IdRancho = ranchId,
                     Operacion = change.State switch { EntityState.Added => "crear", EntityState.Modified => "actualizar", _ => "eliminar" },
                     OcurrioEn = DateTime.UtcNow,
-                    DatosJson = JsonSerializer.Serialize(change.State == EntityState.Deleted ? change.DeletedValues : change.Entity, change.Metadata.ClrType)
+                    DatosJson = change.State == EntityState.Deleted
+                        ? JsonSerializer.Serialize(change.DeletedValues)
+                        : JsonSerializer.Serialize(change.Entity, change.Metadata.ClrType)
                 });
             }
             saved += await base.SaveChangesAsync(cancellationToken);
@@ -129,6 +132,12 @@ public sealed class FarmDbContext(DbContextOptions<FarmDbContext> options) : DbC
             e.Property(x => x.Operacion).HasMaxLength(20).IsRequired();
             e.Property(x => x.DatosJson).HasColumnType("longtext").IsRequired();
             e.HasIndex(x => new { x.IdRancho, x.IdCambio });
+        });
+        modelBuilder.Entity<RegistroInicial>(e =>
+        {
+            e.ToTable("RegistroInicial"); e.HasKey(x => x.Id);
+            e.Property(x => x.Id).ValueGeneratedNever();
+            e.Property(x => x.RegistradoEn).IsRequired();
         });
         modelBuilder.Entity<Animal>(e =>
         {

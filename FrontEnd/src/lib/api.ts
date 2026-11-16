@@ -86,7 +86,7 @@ export interface ServerChange {
   idRancho: number
   operacion: 'crear' | 'actualizar' | 'eliminar'
   ocurrioEn: string
-  datos: Record<string, unknown>
+  datosJson: string
 }
 
 export interface ServerChangePage {

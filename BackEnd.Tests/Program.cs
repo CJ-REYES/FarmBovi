@@ -2,6 +2,9 @@ using FarmBovi.Api.Controllers;
 using FarmBovi.Api.Data;
 using FarmBovi.Api.Models;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
+using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
 
 var checks = 0;
@@ -174,4 +177,49 @@ await using (var db = CreateDb())
     Check(await eventos.Delete(ev.IdEventoSanitario, default) is NoContentResult, "EventoSanitario DELETE");
 }
 
-Console.WriteLine($"Correcto: {checks} comprobaciones CRUD de controladores.");
+// Pull pagination, signed user cursors, ranch isolation and tombstones.
+await using (var db = CreateDb())
+{
+    db.UsuarioRanchos.AddRange(
+        new UsuarioRancho { IdUsuario = 7, IdRancho = 10, Rol = "Admin", Estado = "Activo" },
+        new UsuarioRancho { IdUsuario = 7, IdRancho = 20, Rol = "Admin", Estado = "Activo" },
+        new UsuarioRancho { IdUsuario = 8, IdRancho = 10, Rol = "Admin", Estado = "Activo" });
+    db.CambiosServidor.AddRange(
+        new CambioServidor { IdCambio=1, Entidad="Animal", IdRegistro="1", IdRancho=10, Operacion="crear", OcurrioEn=DateTime.UtcNow, DatosJson="{}" },
+        new CambioServidor { IdCambio=2, Entidad="Animal", IdRegistro="2", IdRancho=20, Operacion="eliminar", OcurrioEn=DateTime.UtcNow, DatosJson="{}" },
+        new CambioServidor { IdCambio=3, Entidad="Animal", IdRegistro="3", IdRancho=30, Operacion="crear", OcurrioEn=DateTime.UtcNow, DatosJson="{}" },
+        new CambioServidor { IdCambio=4, Entidad="UsuarioRancho", IdRegistro="4", IdRancho=10, Operacion="crear", OcurrioEn=DateTime.UtcNow, DatosJson="{}" });
+    await db.SaveChangesAsync();
+    var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["Authentication:SigningKey"] = "test-signing-key-with-at-least-thirty-two-bytes" }).Build();
+    CambiosController Controller(int user) {
+        var controller = new CambiosController(db, config);
+        controller.ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext { User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.NameIdentifier, user.ToString())], "test")) } };
+        return controller;
+    }
+    var first = (await Controller(7).Get(null, 1)).Result as OkObjectResult;
+    var firstPage = (LoteCambios)first!.Value!;
+    Check(firstPage.Cambios.Count == 1 && firstPage.Cambios[0].IdCambio == 1 && firstPage.HayMas, "Pull pagina por límite y filtra ranchos no asignados y entidades administrativas");
+    var second = (await Controller(7).Get(firstPage.CursorSiguiente, 1)).Result as OkObjectResult;
+    var secondPage = (LoteCambios)second!.Value!;
+    Check(secondPage.Cambios.Count == 1 && secondPage.Cambios[0].IdCambio == 2 && secondPage.Cambios[0].Operacion == "eliminar" && !secondPage.HayMas, "Pull continúa con cursor y entrega tombstones");
+    Check((await Controller(8).Get(firstPage.CursorSiguiente, 1)).Result is BadRequestObjectResult, "Cursor Pull no puede reutilizarse por otro usuario");
+    Check((await Controller(7).Get(firstPage.CursorSiguiente + "x", 1)).Result is BadRequestObjectResult, "Pull rechaza cursor manipulado");
+}
+
+var bootstrapDatabase = Guid.NewGuid().ToString();
+var bootstrapOptions = new DbContextOptionsBuilder<FarmDbContext>().UseInMemoryDatabase(bootstrapDatabase).Options;
+await using (var firstInstance = new FarmDbContext(bootstrapOptions))
+{
+    firstInstance.RegistrosIniciales.Add(new RegistroInicial { Id = 1, RegistradoEn = DateTime.UtcNow });
+    await firstInstance.SaveChangesAsync();
+}
+await using (var secondInstance = new FarmDbContext(bootstrapOptions))
+{
+    secondInstance.RegistrosIniciales.Add(new RegistroInicial { Id = 1, RegistradoEn = DateTime.UtcNow });
+    var duplicateRejected = false;
+    try { await secondInstance.SaveChangesAsync(); }
+    catch (Exception error) when (error is DbUpdateException or ArgumentException) { duplicateRejected = true; }
+    Check(duplicateRejected, "La clave primaria de RegistroInicial bloquea dos registros bootstrap entre instancias de contexto");
+}
+
+Console.WriteLine($"Correcto: {checks} comprobaciones CRUD, Pull y bootstrap.");

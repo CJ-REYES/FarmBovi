@@ -10,3 +10,10 @@ public sealed class CambioServidor
     public DateTime OcurrioEn { get; set; }
     public string DatosJson { get; set; } = string.Empty;
 }
+
+// A single database key arbitrates first-user registration across API instances.
+public sealed class RegistroInicial
+{
+    public int Id { get; set; } = 1;
+    public DateTime RegistradoEn { get; set; }
+}
