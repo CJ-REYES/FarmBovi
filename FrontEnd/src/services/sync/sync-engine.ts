@@ -1,36 +1,32 @@
-import { OutboxService } from './outbox.service';
 import { CheckpointRepository } from '../../lib/database/repositories/checkpoint.repository';
+import { PushSyncEngine, type PushCycleSummary } from './push-sync.engine';
 import { SyncHttpClient } from './sync-http.client';
 import { BoviScaleAnalysisService } from '../boviscale-analysis.service';
 
 export const SyncEngine = {
   isSyncing: false,
 
-  async sync(): Promise<void> {
-    if (this.isSyncing || typeof navigator === 'undefined' || !navigator.onLine) return;
+  async sync(): Promise<PushCycleSummary | null> {
+    if (this.isSyncing || typeof navigator === 'undefined' || !navigator.onLine) {
+      return null;
+    }
 
     try {
       this.isSyncing = true;
-      await this.pushChanges();
+      const pushSummary = await this.pushChanges();
       await this.pullChanges();
       await BoviScaleAnalysisService.processPendingQueue();
+      return pushSummary;
     } catch (err) {
       console.error('Error en el ciclo de sincronización:', err);
+      return null;
     } finally {
       this.isSyncing = false;
     }
   },
 
-  async pushChanges(): Promise<void> {
-    const operations = await OutboxService.getPendingOperations();
-    if (operations.length === 0) return;
-
-    const availability = SyncHttpClient.getEndpointAvailability();
-    if (!availability.pushDisponible) {
-      console.debug(
-        `Outbox con ${operations.length} operación(es) pendiente(s); endpoint de push aún no habilitado en el backend.`
-      );
-    }
+  async pushChanges(): Promise<PushCycleSummary> {
+    return await PushSyncEngine.pushPendingOperations();
   },
 
   async pullChanges(): Promise<void> {
@@ -38,7 +34,7 @@ export const SyncEngine = {
     const availability = SyncHttpClient.getEndpointAvailability();
     if (!availability.pullDisponible) {
       console.debug(
-        'Endpoint de pull incremental aún no habilitado en el backend. Cursor actual:',
+        'Endpoint de pull incremental aún pendiente en el backend. Cursor actual:',
         checkpoint?.cursorOpaco ?? null
       );
     }

@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { SyncEngine } from '../../services/sync/sync-engine';
+import { SyncHttpClient } from '../../services/sync/sync-http.client';
+import { OutboxRepository } from '../../lib/database/repositories/outbox.repository';
 import { db } from '../../lib/database/db';
 import type { LocalOutboxQueue, OutboxOperationState } from '../../lib/database/schema';
 import {
@@ -8,15 +10,17 @@ import {
   Clock,
   AlertTriangle,
   AlertOctagon,
-  CheckCircle2
+  CheckCircle2,
+  RotateCcw,
+  Info
 } from 'lucide-react';
 
 const STATE_LABELS: Record<OutboxOperationState, string> = {
   pendiente: 'Pendiente',
   en_proceso: 'En proceso',
   confirmado: 'Confirmado',
-  fallido: 'Error temporal',
-  conflicto: 'Conflicto'
+  fallido: 'Error / Detenido',
+  conflicto: 'Conflicto versión'
 };
 
 const STATE_BADGE_CLASSES: Record<OutboxOperationState, string> = {
@@ -31,12 +35,14 @@ export default function SyncStatusPanel() {
   const [pendingOps, setPendingOps] = useState<LocalOutboxQueue[]>([]);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [lastSyncTime, setLastSyncTime] = useState<string>('Sin sincronizar');
+  const [retryingOpId, setRetryingOpId] = useState<string | null>(null);
 
-  const loadPending = useCallback(async () => {
+  const availability = SyncHttpClient.getEndpointAvailability();
+
+  const reloadPending = useCallback(async () => {
     try {
       const allOps = await db.outbox.orderBy('fechaCreacion').toArray();
-      const activeOps = allOps.filter((op) => op.estado !== 'confirmado');
-      setPendingOps(activeOps);
+      setPendingOps(allOps.filter((op) => op.estado !== 'confirmado'));
 
       const checkpoint = await db.syncCheckpoints.get('cattle');
       if (checkpoint?.ultimaFechaServidor) {
@@ -53,21 +59,58 @@ export default function SyncStatusPanel() {
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void loadPending();
+    let active = true;
+
+    const syncView = async () => {
+      try {
+        const allOps = await db.outbox.orderBy('fechaCreacion').toArray();
+        if (!active) return;
+        setPendingOps(allOps.filter((op) => op.estado !== 'confirmado'));
+
+        const checkpoint = await db.syncCheckpoints.get('cattle');
+        if (!active) return;
+        if (checkpoint?.ultimaFechaServidor) {
+          setLastSyncTime(new Date(checkpoint.ultimaFechaServidor).toLocaleTimeString());
+        } else {
+          const meta = await db.syncMetadata.get('cattle');
+          if (active && meta?.lastSyncedAt) {
+            setLastSyncTime(new Date(meta.lastSyncedAt).toLocaleTimeString());
+          }
+        }
+      } catch (err) {
+        console.error('Error cargando estado de sincronización:', err);
+      }
+    };
+
+    void syncView();
     const interval = window.setInterval(() => {
-      void loadPending();
+      void syncView();
     }, 5000);
-    return () => window.clearInterval(interval);
-  }, [loadPending]);
+
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, []);
 
   const handleManualSync = async () => {
     setIsSyncing(true);
     try {
       await SyncEngine.sync();
-      await loadPending();
+      await reloadPending();
     } finally {
       setIsSyncing(false);
+    }
+  };
+
+  const handleManualRetryOp = async (idOperacion: string) => {
+    setRetryingOpId(idOperacion);
+    try {
+      await OutboxRepository.resetForManualRetry(idOperacion);
+      await SyncEngine.sync();
+      await reloadPending();
+    } finally {
+      setRetryingOpId(null);
     }
   };
 
@@ -106,6 +149,16 @@ export default function SyncStatusPanel() {
         </button>
       </div>
 
+      {!availability.pushDisponible && (
+        <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-[12px] text-brand-slate">
+          <Info size={16} className="text-amber-600 shrink-0 mt-0.5" />
+          <span>
+            Endpoint Push pendiente de habilitar en el backend. Las operaciones locales se conservan en cola con su{' '}
+            <code className="font-mono text-[11px]">idOperacion</code> hasta que el servidor exponga la ruta de sincronización.
+          </span>
+        </div>
+      )}
+
       <div className="space-y-2">
         <h4 className="text-[12px] font-bold text-brand-slate/70 uppercase tracking-wider">
           Operaciones en Cola ({pendingOps.length})
@@ -115,30 +168,57 @@ export default function SyncStatusPanel() {
             Sin operaciones pendientes en la cola local.
           </div>
         ) : (
-          <div className="max-h-48 overflow-y-auto space-y-2 pr-1">
-            {pendingOps.map((op) => (
-              <div
-                key={op.idOperacion}
-                className="flex items-center justify-between p-2.5 bg-surface-secondary/60 rounded-lg border border-border-light text-[13px]"
-              >
-                <div className="flex items-center gap-2.5">
-                  {renderOperationIcon(op.estado)}
-                  <div>
-                    <p className="font-semibold text-brand-slate uppercase text-[11px]">
-                      {op.tipoOperacion} : {op.entidad}
-                    </p>
-                    <p className="text-[11px] text-brand-slate/60">
-                      Intentos: {op.intentos} {op.ultimoError ? `(${op.ultimoError})` : ''}
-                    </p>
+          <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
+            {pendingOps.map((op) => {
+              const isValidationOrStopped = op.estado === 'fallido' && op.proximoIntento === null;
+              return (
+                <div
+                  key={op.idOperacion}
+                  className="flex items-center justify-between gap-3 p-2.5 bg-surface-secondary/60 rounded-lg border border-border-light text-[13px]"
+                >
+                  <div className="flex items-start gap-2.5 min-w-0">
+                    <div className="mt-0.5">{renderOperationIcon(op.estado)}</div>
+                    <div className="min-w-0">
+                      <p className="font-semibold text-brand-slate uppercase text-[11px]">
+                        {op.tipoOperacion} : {op.entidad}
+                      </p>
+                      <p className="text-[11px] text-brand-slate/65 break-words">
+                        Intentos: {op.intentos}
+                        {op.ultimoError ? ` — ${op.ultimoError}` : ''}
+                      </p>
+                      {op.proximoIntento && op.estado === 'fallido' && (
+                        <p className="text-[10px] text-brand-slate/50">
+                          Próximo reintento: {new Date(op.proximoIntento).toLocaleTimeString()}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    {isValidationOrStopped && (
+                      <button
+                        type="button"
+                        onClick={() => void handleManualRetryOp(op.idOperacion)}
+                        disabled={retryingOpId === op.idOperacion}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded border border-border-light bg-surface-white hover:bg-surface-secondary text-[11px] font-semibold text-brand-slate disabled:opacity-50"
+                        title="Reintentar operación con el mismo idOperacion"
+                      >
+                        <RotateCcw
+                          size={12}
+                          className={retryingOpId === op.idOperacion ? 'animate-spin' : ''}
+                        />
+                        Reintentar
+                      </button>
+                    )}
+                    <span
+                      className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${STATE_BADGE_CLASSES[op.estado]}`}
+                    >
+                      {STATE_LABELS[op.estado]}
+                    </span>
                   </div>
                 </div>
-                <span
-                  className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${STATE_BADGE_CLASSES[op.estado]}`}
-                >
-                  {STATE_LABELS[op.estado]}
-                </span>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
