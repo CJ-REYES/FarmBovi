@@ -30,8 +30,8 @@ namespace FarmBovi.Api.Migrations
                 -- Usuario: Id (int) -> IdUsuario (char(36)) + CreadoEn
                 ALTER TABLE `Usuario`
                     ADD COLUMN `_NewIdUsuario` char(36) NULL,
-                    ADD COLUMN `CreadoEn` datetime(6) NOT NULL DEFAULT UTC_TIMESTAMP(6);
-                UPDATE `Usuario` SET `_NewIdUsuario` = UUID() WHERE `_NewIdUsuario` IS NULL;
+                    ADD COLUMN `CreadoEn` datetime(6) NULL;
+                UPDATE `Usuario` SET `_NewIdUsuario` = UUID(), `CreadoEn` = UTC_TIMESTAMP(6) WHERE `_NewIdUsuario` IS NULL;
 
                 -- Rancho: IdRancho, IdAutor -> char(36)
                 ALTER TABLE `Rancho`
@@ -158,6 +158,7 @@ namespace FarmBovi.Api.Migrations
                     DROP PRIMARY KEY,
                     DROP COLUMN `Id`,
                     CHANGE COLUMN `_NewIdUsuario` `IdUsuario` char(36) NOT NULL,
+                    MODIFY COLUMN `CreadoEn` datetime(6) NOT NULL,
                     MODIFY COLUMN `Estado` varchar(20) NOT NULL,
                     ADD PRIMARY KEY (`IdUsuario`);
 
