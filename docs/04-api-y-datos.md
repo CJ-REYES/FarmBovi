@@ -33,6 +33,16 @@ Todos los recursos tienen `GET` para colección y elemento, `POST`, `PUT` y `DEL
 
 Las respuestas habituales son `200` para consultas, `201` al crear, `204` al actualizar o eliminar, `404` si la clave no existe y `400` si la validación del request falla. Las contraseñas se reciben como `Contrasena`, se guardan con hash y nunca se devuelven en el CRUD de usuarios.
 
+## Inicio de sesión y sincronización Pull
+
+Configura `Jwt__SigningKey` con una clave aleatoria de al menos 32 bytes, además de `Jwt__Issuer` y `Jwt__Audience`. En producción estos valores deben venir del entorno o del almacén de secretos; el archivo `appsettings.Development.json` incluye solo una clave local de desarrollo.
+
+`POST /api/auth/login` recibe `{ "correo": "...", "contrasena": "..." }` y devuelve un JWT y los ranchos activos asignados al usuario. `GET /api/sync/cambios?idRancho={uuid}&cursor={cursor-opaco}&limite={1..500}` requiere `Authorization: Bearer {token}` y solo entrega cambios de ranchos a los que el usuario tiene acceso activo. La respuesta incluye `cambios`, `siguienteCursor` y `hayMas`; el cursor es opaco y debe reenviarse tal como se recibió. El límite predeterminado es 100.
+
+`POST /api/sync/operaciones` recibe altas, actualizaciones y eliminaciones idempotentes. Actualizar o eliminar requiere `versionBase`; un conflicto de versión devuelve `409`. Los endpoints de `api/usuarios` también requieren JWT. Consulta [el contrato completo de sincronización](08-contrato-sincronizacion.md) para las estructuras de Push/Pull y las reglas de migración.
+
+Los ambientes sin `Jwt:SigningKey`, `Jwt:Issuer` o `Jwt:Audience` configurados no inician la API. El modelo persistido `CambioServidor` y su migración están diseñados para entregar los cambios registrados por el mecanismo central de persistencia.
+
 Las relaciones entre animal, lote y rancho, y entre usuario y rancho, tienen claves foráneas. Los aretes y nombres de lote son únicos dentro de cada rancho; el correo y la asignación usuario-rancho también son únicos.
 
 ## Esquema y cambio desde SQLite

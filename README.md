@@ -153,6 +153,7 @@ Abre **http://localhost:4173**, consulta el ganado y espera el aviso de disponib
 | [Arquitectura](docs/02-arquitectura.md) | Responsabilidad de cada carpeta y recorrido de una petición |
 | [Tu primera PWA](docs/03-pwa.md) | Manifest, service worker, instalación, cachés y actualizaciones |
 | [API y base de datos](docs/04-api-y-datos.md) | Endpoints CRUD, MySQL y migraciones |
+| [Entrega de inicio-sesion para Roberto](docs/09-entrega-roberto.md) | Cambios de Angel, variables, migraciones, pruebas y notas de integración |
 | [Publicación](docs/05-publicacion.md) | Build, HTTPS, persistencia, CORS y GitHub |
 | [Solución de problemas](docs/06-problemas.md) | Errores habituales y cómo resolverlos |
 | [Estado de validación](docs/07-validacion.md) | Comprobaciones realizadas y pendientes |
@@ -178,6 +179,6 @@ dotnet build FarmBovi.sln --configuration Release --no-restore
 
 ## Alcance inicial
 
-Esta base tiene un solo registro de ganado. Autenticación, usuarios, varios ranchos, pesajes, vacunas, reproducción, permisos y sincronización de escrituras sin conexión son siguientes módulos, todavía no implementados. Antes de exponer la API con datos reales, incorpora autenticación y autorización.
+El backend ya incluye usuarios, login JWT y endpoints de sincronización para varios ranchos. La interfaz aún no tiene una cola local de escrituras sin conexión; pesajes, reproducción y otros módulos también quedan fuera del alcance actual. Antes de exponer toda la API con datos reales, revisa la autorización de los endpoints CRUD que no pertenecen a Login, usuarios o sincronización.
 
 Repositorio público: [CJ-REYES/FarmBovi](https://github.com/CJ-REYES/FarmBovi).

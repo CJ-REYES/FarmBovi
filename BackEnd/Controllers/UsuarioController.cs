@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using FarmBovi.Api.Data;
 using FarmBovi.Api.Models;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -18,6 +19,7 @@ public sealed record UsuarioResponse(Guid IdUsuario, string Nombre, string Corre
 
 [ApiController]
 [Route("api/usuarios")]
+[Authorize]
 public sealed class UsuarioController(FarmDbContext db) : ControllerBase
 {
     private static readonly PasswordHasher<Usuario> Hasher = new();
