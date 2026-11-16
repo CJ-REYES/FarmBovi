@@ -1,5 +1,6 @@
 import { OutboxService } from './outbox.service';
 import { CheckpointRepository } from '../../lib/database/repositories/checkpoint.repository';
+import { SyncHttpClient } from './sync-http.client';
 import { BoviScaleAnalysisService } from '../boviscale-analysis.service';
 
 export const SyncEngine = {
@@ -24,13 +25,22 @@ export const SyncEngine = {
     const operations = await OutboxService.getPendingOperations();
     if (operations.length === 0) return;
 
-    console.debug(
-      `Outbox con ${operations.length} operación(es) lista(s) para envío cuando el endpoint esté disponible.`
-    );
+    const availability = SyncHttpClient.getEndpointAvailability();
+    if (!availability.pushDisponible) {
+      console.debug(
+        `Outbox con ${operations.length} operación(es) pendiente(s); endpoint de push aún no habilitado en el backend.`
+      );
+    }
   },
 
   async pullChanges(): Promise<void> {
     const checkpoint = await CheckpointRepository.getByEntity('cattle');
-    console.debug('Checkpoint opaco actual (cattle):', checkpoint?.cursorOpaco ?? null);
+    const availability = SyncHttpClient.getEndpointAvailability();
+    if (!availability.pullDisponible) {
+      console.debug(
+        'Endpoint de pull incremental aún no habilitado en el backend. Cursor actual:',
+        checkpoint?.cursorOpaco ?? null
+      );
+    }
   }
 };

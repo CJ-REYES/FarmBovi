@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { ConnectivityService } from '../services/connectivity.service';
 
 export type ConnectionStatus = 'online' | 'offline' | 'checking';
 
@@ -9,48 +10,48 @@ export function useConnectivity(pollIntervalMs = 30000) {
   const [status, setStatus] = useState<ConnectionStatus>('checking');
 
   const checkRealConnectivity = useCallback(async () => {
-    if (!navigator.onLine) {
-      setIsOnline(false);
-      setStatus('offline');
-      return;
-    }
-
-    try {
-      const response = await fetch('/api/cattle', {
-        method: 'HEAD',
-        cache: 'no-store',
-        signal: AbortSignal.timeout(4000)
-      });
-
-      const online = response.ok || response.status === 401 || response.status === 403;
-      setIsOnline(online);
-      setStatus(online ? 'online' : 'offline');
-    } catch {
-      setIsOnline(false);
-      setStatus('offline');
-    }
+    const probe = await ConnectivityService.checkBackendAvailability();
+    setIsOnline(probe.isOnline);
+    setStatus(probe.isOnline ? 'online' : 'offline');
+    return probe.isOnline;
   }, []);
 
   useEffect(() => {
-    const handleOnline = () => void checkRealConnectivity();
+    let active = true;
+
+    const runProbe = async () => {
+      const online = await ConnectivityService.checkBackendAvailability();
+      if (active) {
+        setIsOnline(online.isOnline);
+        setStatus(online.isOnline ? 'online' : 'offline');
+      }
+    };
+
+    const handleOnline = () => {
+      void runProbe();
+    };
     const handleOffline = () => {
-      setIsOnline(false);
-      setStatus('offline');
+      if (active) {
+        setIsOnline(false);
+        setStatus('offline');
+      }
     };
 
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void checkRealConnectivity();
-    const interval = window.setInterval(checkRealConnectivity, pollIntervalMs);
+    void runProbe();
+    const interval = window.setInterval(() => {
+      void runProbe();
+    }, pollIntervalMs);
 
     return () => {
+      active = false;
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
       window.clearInterval(interval);
     };
-  }, [checkRealConnectivity, pollIntervalMs]);
+  }, [pollIntervalMs]);
 
   return { isOnline, status, recheck: checkRealConnectivity };
 }
