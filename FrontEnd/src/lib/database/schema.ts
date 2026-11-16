@@ -209,8 +209,8 @@ export interface LocalSyncConflict {
   fechaDeteccion: string;
   fechaResolucion?: string | null;
   notasResolucion?: string | null;
+  datosResueltos?: Record<string, unknown> | null;
 }
-
 export interface LocalSyncCheckpoint {
   entidad: SyncEntityName;
   cursorOpaco: string | null;

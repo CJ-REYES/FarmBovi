@@ -19,6 +19,7 @@ import {
   Info,
   Database
 } from 'lucide-react';
+import SyncConflictsPanel from './SyncConflictsPanel';
 
 const STATE_LABELS: Record<OutboxOperationState, string> = {
   pendiente: 'Pendiente',
@@ -181,7 +182,6 @@ export default function SyncStatusPanel() {
         </div>
       )}
 
-      {/* Checkpoints de descarga incremental */}
       {checkpoints.length > 0 && (
         <div className="space-y-1.5">
           <h4 className="text-[12px] font-bold text-brand-slate/70 uppercase tracking-wider flex items-center gap-1.5">
@@ -203,7 +203,6 @@ export default function SyncStatusPanel() {
         </div>
       )}
 
-      {/* Cola de operaciones locales pendientes */}
       <div className="space-y-2">
         <h4 className="text-[12px] font-bold text-brand-slate/70 uppercase tracking-wider">
           Operaciones en Cola ({pendingOps.length})
@@ -267,6 +266,8 @@ export default function SyncStatusPanel() {
           </div>
         )}
       </div>
+
+      <SyncConflictsPanel onConflictResolved={reloadPending} />
     </div>
   );
 }
