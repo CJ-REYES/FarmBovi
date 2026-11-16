@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import { SyncEngine } from '../../services/sync/sync-engine';
 import { SyncHttpClient } from '../../services/sync/sync-http.client';
 import { OutboxRepository } from '../../lib/database/repositories/outbox.repository';
 import { db } from '../../lib/database/db';
+import { useSyncStatus } from '../../hooks/useSyncStatus';
 import type {
   LocalOutboxQueue,
   LocalSyncCheckpoint,
@@ -17,7 +17,9 @@ import {
   CheckCircle2,
   RotateCcw,
   Info,
-  Database
+  Database,
+  WifiOff,
+  FileImage
 } from 'lucide-react';
 import SyncConflictsPanel from './SyncConflictsPanel';
 
@@ -38,60 +40,52 @@ const STATE_BADGE_CLASSES: Record<OutboxOperationState, string> = {
 };
 
 export default function SyncStatusPanel() {
+  const {
+    state,
+    stateLabel,
+    statusDetail,
+    isOnline,
+    isSyncing,
+    counts,
+    lastCompletedSyncAt,
+    triggerManualSync,
+    refreshStatus
+  } = useSyncStatus();
+
   const [pendingOps, setPendingOps] = useState<LocalOutboxQueue[]>([]);
   const [checkpoints, setCheckpoints] = useState<LocalSyncCheckpoint[]>([]);
-  const [pendingConflictsCount, setPendingConflictsCount] = useState<number>(0);
-  const [isSyncing, setIsSyncing] = useState<boolean>(false);
-  const [lastSyncTime, setLastSyncTime] = useState<string>('Sin sincronizar');
   const [retryingOpId, setRetryingOpId] = useState<string | null>(null);
 
   const availability = SyncHttpClient.getEndpointAvailability();
 
   const reloadPending = useCallback(async () => {
     try {
-      const [allOps, allCheckpoints, conflictsCount] = await Promise.all([
+      const [allOps, allCheckpoints] = await Promise.all([
         db.outbox.orderBy('fechaCreacion').toArray(),
-        db.syncCheckpoints.toArray(),
-        db.syncConflicts.where('estadoResolucion').equals('pendiente').count()
+        db.syncCheckpoints.toArray()
       ]);
 
       setPendingOps(allOps.filter((op) => op.estado !== 'confirmado'));
       setCheckpoints(allCheckpoints);
-      setPendingConflictsCount(conflictsCount);
-
-      const cattleCp = allCheckpoints.find((cp) => cp.entidad === 'cattle');
-      if (cattleCp?.ultimaFechaServidor) {
-        setLastSyncTime(new Date(cattleCp.ultimaFechaServidor).toLocaleTimeString());
-      } else if (cattleCp?.actualizadoEn) {
-        setLastSyncTime(new Date(cattleCp.actualizadoEn).toLocaleTimeString());
-      }
+      await refreshStatus();
     } catch (err) {
       console.error('Error cargando estado de sincronización:', err);
     }
-  }, []);
+  }, [refreshStatus]);
 
   useEffect(() => {
     let active = true;
 
     const syncView = async () => {
       try {
-        const [allOps, allCheckpoints, conflictsCount] = await Promise.all([
+        const [allOps, allCheckpoints] = await Promise.all([
           db.outbox.orderBy('fechaCreacion').toArray(),
-          db.syncCheckpoints.toArray(),
-          db.syncConflicts.where('estadoResolucion').equals('pendiente').count()
+          db.syncCheckpoints.toArray()
         ]);
 
         if (!active) return;
         setPendingOps(allOps.filter((op) => op.estado !== 'confirmado'));
         setCheckpoints(allCheckpoints);
-        setPendingConflictsCount(conflictsCount);
-
-        const cattleCp = allCheckpoints.find((cp) => cp.entidad === 'cattle');
-        if (cattleCp?.ultimaFechaServidor) {
-          setLastSyncTime(new Date(cattleCp.ultimaFechaServidor).toLocaleTimeString());
-        } else if (cattleCp?.actualizadoEn) {
-          setLastSyncTime(new Date(cattleCp.actualizadoEn).toLocaleTimeString());
-        }
       } catch (err) {
         console.error('Error cargando estado de sincronización:', err);
       }
@@ -100,7 +94,7 @@ export default function SyncStatusPanel() {
     void syncView();
     const interval = window.setInterval(() => {
       void syncView();
-    }, 5000);
+    }, 4000);
 
     return () => {
       active = false;
@@ -109,20 +103,15 @@ export default function SyncStatusPanel() {
   }, []);
 
   const handleManualSync = async () => {
-    setIsSyncing(true);
-    try {
-      await SyncEngine.sync();
-      await reloadPending();
-    } finally {
-      setIsSyncing(false);
-    }
+    await triggerManualSync();
+    await reloadPending();
   };
 
   const handleManualRetryOp = async (idOperacion: string) => {
     setRetryingOpId(idOperacion);
     try {
       await OutboxRepository.resetForManualRetry(idOperacion);
-      await SyncEngine.sync();
+      await triggerManualSync();
       await reloadPending();
     } finally {
       setRetryingOpId(null);
@@ -145,26 +134,90 @@ export default function SyncStatusPanel() {
     }
   };
 
+  const formattedLastSync = lastCompletedSyncAt
+    ? new Date(lastCompletedSyncAt).toLocaleTimeString()
+    : 'Aún sin ciclo completo confirmado';
+
   return (
     <div className="bg-surface-white border border-border-light rounded-xl p-5 shadow-sm space-y-4">
-      <div className="flex items-center justify-between border-b border-border-light pb-3">
-        <div>
-          <h3 className="font-bold text-[15px] text-brand-slate flex items-center gap-2">
-            <CloudCheck size={18} className="text-brand-primary" /> Centro de Sincronización
-          </h3>
-          <p className="text-[12px] text-brand-slate/60">
-            Última actualización confirmada: {lastSyncTime}
-            {pendingConflictsCount > 0 ? ` • Conflictos pendientes: ${pendingConflictsCount}` : ''}
+      {/* Encabezado con estado global real */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border-light pb-3">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h3 className="font-bold text-[15px] text-brand-slate flex items-center gap-2">
+              {isOnline ? (
+                <CloudCheck size={18} className="text-brand-primary" />
+              ) : (
+                <WifiOff size={18} className="text-brand-slate/70" />
+              )}
+              Centro de Sincronización
+            </h3>
+            <span
+              className={`text-[11px] font-bold uppercase px-2.5 py-0.5 rounded-full ${
+                state === 'synced'
+                  ? 'bg-status-success/15 text-status-success'
+                  : state === 'conflict'
+                    ? 'bg-purple-500/15 text-purple-700'
+                    : state === 'error'
+                      ? 'bg-status-error/15 text-status-error'
+                      : state === 'syncing'
+                        ? 'bg-brand-primary/15 text-brand-primary'
+                        : state === 'offline'
+                          ? 'bg-brand-slate/15 text-brand-slate'
+                          : 'bg-status-warning/15 text-amber-800'
+              }`}
+            >
+              {stateLabel}
+            </span>
+          </div>
+          <p className="text-[12px] text-brand-slate/75">{statusDetail}</p>
+          <p className="text-[11px] text-brand-slate/55">
+            Última sincronización completa (Push + Pull): {formattedLastSync}
           </p>
         </div>
+
         <button
-          onClick={handleManualSync}
-          disabled={isSyncing}
-          className="flex items-center gap-1.5 bg-brand-primary hover:bg-brand-dark text-white px-3 py-1.5 rounded-md text-[12px] font-semibold transition-colors disabled:opacity-50"
+          type="button"
+          onClick={() => void handleManualSync()}
+          disabled={isSyncing || !isOnline}
+          className="inline-flex items-center justify-center gap-1.5 bg-brand-primary hover:bg-brand-dark text-white px-3.5 py-2 rounded-lg text-[12px] font-semibold transition-colors disabled:opacity-50 shrink-0"
         >
           <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
           {isSyncing ? 'Sincronizando...' : 'Sincronizar Ahora'}
         </button>
+      </div>
+
+      {/* Métricas de operaciones pendientes y archivos pendientes */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+        <div className="p-3 rounded-lg bg-surface-secondary/50 border border-border-light">
+          <p className="text-[11px] text-brand-slate/65 font-medium">Operaciones pendientes</p>
+          <p className="text-[18px] font-bold text-brand-slate mt-0.5">
+            {counts.pendingOperationsCount}
+          </p>
+        </div>
+
+        <div className="p-3 rounded-lg bg-surface-secondary/50 border border-border-light">
+          <p className="text-[11px] text-brand-slate/65 font-medium flex items-center gap-1">
+            <FileImage size={12} /> Archivos pendientes
+          </p>
+          <p className="text-[18px] font-bold text-brand-slate mt-0.5">
+            {counts.pendingFilesCount}
+          </p>
+        </div>
+
+        <div className="p-3 rounded-lg bg-surface-secondary/50 border border-border-light">
+          <p className="text-[11px] text-brand-slate/65 font-medium">Conflictos activos</p>
+          <p className="text-[18px] font-bold text-purple-700 mt-0.5">
+            {counts.pendingConflictsCount}
+          </p>
+        </div>
+
+        <div className="p-3 rounded-lg bg-surface-secondary/50 border border-border-light">
+          <p className="text-[11px] text-brand-slate/65 font-medium">Con error / detenidos</p>
+          <p className="text-[18px] font-bold text-status-error mt-0.5">
+            {counts.failedOperationsCount + counts.failedFilesCount}
+          </p>
+        </div>
       </div>
 
       {(!availability.pushDisponible || !availability.pullDisponible) && (
@@ -177,7 +230,7 @@ export default function SyncStatusPanel() {
               : !availability.pushDisponible
                 ? 'Push'
                 : 'Pull'}
-            ). Los cambios locales y cursores opacos se conservan de forma segura en IndexedDB.
+            ). Los cambios locales y archivos multimedia se conservan de forma segura en IndexedDB sin marcarse como sincronizados hasta recibir confirmación real.
           </span>
         </div>
       )}

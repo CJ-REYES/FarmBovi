@@ -20,12 +20,19 @@ export function useConnectivity(pollIntervalMs = 30000) {
     let active = true;
 
     const runProbe = async () => {
-      const online = await ConnectivityService.checkBackendAvailability();
+      const probe = await ConnectivityService.checkBackendAvailability();
       if (active) {
-        setIsOnline(online.isOnline);
-        setStatus(online.isOnline ? 'online' : 'offline');
+        setIsOnline(probe.isOnline);
+        setStatus(probe.isOnline ? 'online' : 'offline');
       }
     };
+
+    const unsubscribe = ConnectivityService.subscribe((probe) => {
+      if (active) {
+        setIsOnline(probe.isOnline);
+        setStatus(probe.isOnline ? 'online' : 'offline');
+      }
+    });
 
     const handleOnline = () => {
       void runProbe();
@@ -47,6 +54,7 @@ export function useConnectivity(pollIntervalMs = 30000) {
 
     return () => {
       active = false;
+      unsubscribe();
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
       window.clearInterval(interval);

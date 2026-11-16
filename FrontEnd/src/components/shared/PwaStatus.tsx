@@ -1,5 +1,15 @@
 import { useState, useEffect } from 'react';
-import { WifiOff, Download, RefreshCw, X, CheckCircle, AlertCircle } from 'lucide-react';
+import {
+  WifiOff,
+  Download,
+  RefreshCw,
+  X,
+  CheckCircle,
+  AlertCircle,
+  AlertOctagon,
+  CloudUpload
+} from 'lucide-react';
+import { useSyncStatus } from '../../hooks/useSyncStatus';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -7,26 +17,19 @@ interface BeforeInstallPromptEvent extends Event {
 }
 
 export default function PwaStatus() {
-  const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
+  const { isOnline, state, counts } = useSyncStatus();
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
 
-  // Inicializamos el estado directamente para evitar renders en cascada y errores de ESLint
-  const [isInstalled, setIsInstalled] = useState<boolean>(() =>
-    typeof window !== 'undefined' && window.matchMedia('(display-mode: standalone)').matches
+  const [isInstalled, setIsInstalled] = useState<boolean>(
+    () =>
+      typeof window !== 'undefined' &&
+      window.matchMedia('(display-mode: standalone)').matches
   );
 
   const [needRefresh, setNeedRefresh] = useState<boolean>(false);
   const [showInstallBanner, setShowInstallBanner] = useState<boolean>(true);
 
   useEffect(() => {
-    // 1. Detección de Estado de Red
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-
-    // 2. Captura de Evento de Instalación PWA
     const handleBeforeInstall = (e: Event) => {
       e.preventDefault();
       setInstallPrompt(e as BeforeInstallPromptEvent);
@@ -34,7 +37,6 @@ export default function PwaStatus() {
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstall);
 
-    // 3. Listener para Actualización de Service Worker
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.ready.then((registration) => {
         registration.addEventListener('updatefound', () => {
@@ -51,8 +53,6 @@ export default function PwaStatus() {
     }
 
     return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
       window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
     };
   }, []);
@@ -68,7 +68,6 @@ export default function PwaStatus() {
   };
 
   const handleUpdateApp = () => {
-    // Previene recargas si hay inputs con datos no guardados
     const activeInputs = document.querySelectorAll('input:not([value=""]), textarea:not(:empty)');
     if (activeInputs.length > 0) {
       const confirmUpdate = window.confirm(
@@ -89,7 +88,6 @@ export default function PwaStatus() {
 
   return (
     <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-md w-full px-4 pointer-events-none">
-
       {/* Aviso de Modo Offline */}
       {!isOnline && (
         <div className="pointer-events-auto bg-brand-dark text-white p-3.5 rounded-xl shadow-lg border border-border-dark/30 flex items-center justify-between gap-3 animate-in slide-in-from-bottom-4">
@@ -97,10 +95,36 @@ export default function PwaStatus() {
             <WifiOff size={18} className="text-brand-yellow shrink-0" />
             <div>
               <p className="text-[13px] font-bold leading-tight">Modo Offline Activo</p>
-              <p className="text-[11px] text-white/70 mt-0.5">Acceso limitado al Padrón Ganadero almacenado en caché local.</p>
+              <p className="text-[11px] text-white/70 mt-0.5">
+                Los cambios se guardan localmente en este dispositivo.
+              </p>
             </div>
           </div>
-          <span className="text-[10px] bg-brand-yellow/20 text-brand-yellow px-2 py-0.5 rounded font-bold uppercase shrink-0">Caché</span>
+          <span className="text-[10px] bg-brand-yellow/20 text-brand-yellow px-2 py-0.5 rounded font-bold uppercase shrink-0">
+            {counts.pendingOperationsCount > 0 || counts.pendingFilesCount > 0
+              ? `${counts.pendingOperationsCount} op. • ${counts.pendingFilesCount} arch.`
+              : 'Caché'}
+          </span>
+        </div>
+      )}
+
+      {/* Aviso de Conflictos Pendientes */}
+      {isOnline && state === 'conflict' && (
+        <div className="pointer-events-auto bg-purple-700 text-white p-3.5 rounded-xl shadow-lg flex items-center gap-2.5 animate-in slide-in-from-bottom-4">
+          <AlertOctagon size={18} className="shrink-0" />
+          <p className="text-[12px] font-semibold">
+            Tienes {counts.pendingConflictsCount} conflicto(s) de sincronización pendientes de revisar.
+          </p>
+        </div>
+      )}
+
+      {/* Aviso de Sincronización en Curso */}
+      {isOnline && state === 'syncing' && (
+        <div className="pointer-events-auto bg-brand-primary text-white p-3.5 rounded-xl shadow-lg flex items-center gap-2.5 animate-in slide-in-from-bottom-4">
+          <CloudUpload size={18} className="animate-pulse shrink-0" />
+          <p className="text-[12px] font-semibold">
+            Sincronizando {counts.pendingOperationsCount} operación(es) y {counts.pendingFilesCount} archivo(s)…
+          </p>
         </div>
       )}
 
@@ -111,7 +135,9 @@ export default function PwaStatus() {
             <AlertCircle size={18} className="text-brand-primary shrink-0" />
             <div>
               <p className="text-[13px] font-bold">Nueva versión disponible</p>
-              <p className="text-[11px] text-brand-slate/60">Actualiza la aplicación para cargar las últimas mejoras.</p>
+              <p className="text-[11px] text-brand-slate/60">
+                Actualiza la aplicación para cargar las últimas mejoras.
+              </p>
             </div>
           </div>
           <button
@@ -132,7 +158,9 @@ export default function PwaStatus() {
             </div>
             <div>
               <p className="text-[13px] font-bold">Instalar FarmBovi App</p>
-              <p className="text-[11px] text-brand-slate/60">Accede rápidamente desde tu pantalla de inicio.</p>
+              <p className="text-[11px] text-brand-slate/60">
+                Accede rápidamente desde tu pantalla de inicio.
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
