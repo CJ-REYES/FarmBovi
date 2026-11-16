@@ -22,7 +22,8 @@ namespace FarmBovi.Api.Migrations
             modelBuilder.Entity("FarmBovi.Api.Models.Alimentacion", b =>
                 {
                     b.Property<string>("IdAlimentacion")
-                        .HasColumnType("varchar(255)");
+                        .HasMaxLength(36)
+                        .HasColumnType("varchar(36)");
 
                     b.Property<string>("Alimento")
                         .IsRequired()
@@ -312,7 +313,8 @@ namespace FarmBovi.Api.Migrations
             modelBuilder.Entity("FarmBovi.Api.Models.MovimientoAnimal", b =>
                 {
                     b.Property<string>("IdMovimiento")
-                        .HasColumnType("varchar(255)");
+                        .HasMaxLength(36)
+                        .HasColumnType("varchar(36)");
 
                     b.Property<DateTime>("CreadoEn")
                         .HasColumnType("datetime(6)");

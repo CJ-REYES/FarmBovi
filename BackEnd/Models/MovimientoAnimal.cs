@@ -8,6 +8,7 @@ namespace FarmBovi.Api.Models
     public class MovimientoAnimal
     {
         [Key]
+        [MaxLength(36)]
         public string IdMovimiento { get; set; } = Guid.NewGuid().ToString();
 
         [Required]

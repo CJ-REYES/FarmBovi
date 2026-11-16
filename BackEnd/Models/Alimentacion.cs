@@ -8,6 +8,7 @@ namespace FarmBovi.Api.Models
     public class Alimentacion
     {
         [Key]
+        [MaxLength(36)]
         public string IdAlimentacion { get; set; } = Guid.NewGuid().ToString();
 
         [Required]

@@ -15,21 +15,21 @@ namespace FarmBovi.Api.Migrations
                 name: "Alimentacion",
                 columns: table => new
                 {
-                    IdAlimentacion = table.Column<string>(type: "TEXT", nullable: false),
-                    IdAnimal = table.Column<string>(type: "TEXT", nullable: false),
-                    IdLote = table.Column<string>(type: "TEXT", nullable: true),
-                    Alimento = table.Column<string>(type: "TEXT", maxLength: 150, nullable: false),
-                    Racion = table.Column<string>(type: "TEXT", maxLength: 150, nullable: false),
+                    IdAlimentacion = table.Column<string>(type: "varchar(36)", maxLength: 36, nullable: false),
+                    IdAnimal = table.Column<string>(type: "longtext", nullable: false),
+                    IdLote = table.Column<string>(type: "longtext", nullable: true),
+                    Alimento = table.Column<string>(type: "varchar(150)", maxLength: 150, nullable: false),
+                    Racion = table.Column<string>(type: "varchar(150)", maxLength: 150, nullable: false),
                     Cantidad = table.Column<decimal>(type: "decimal(10,3)", nullable: false),
-                    Unidad = table.Column<string>(type: "TEXT", maxLength: 20, nullable: false),
-                    Frecuencia = table.Column<string>(type: "TEXT", maxLength: 80, nullable: false),
-                    Inicio = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    Fin = table.Column<DateTime>(type: "TEXT", nullable: true),
-                    CambioDieta = table.Column<string>(type: "TEXT", nullable: true),
-                    IdAutor = table.Column<string>(type: "TEXT", nullable: false),
-                    CreadoEn = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    VersionRegistro = table.Column<long>(type: "INTEGER", nullable: false),
-                    EliminadoEn = table.Column<DateTime>(type: "TEXT", nullable: true)
+                    Unidad = table.Column<string>(type: "varchar(20)", maxLength: 20, nullable: false),
+                    Frecuencia = table.Column<string>(type: "varchar(80)", maxLength: 80, nullable: false),
+                    Inicio = table.Column<DateTime>(type: "datetime(6)", nullable: false),
+                    Fin = table.Column<DateTime>(type: "datetime(6)", nullable: true),
+                    CambioDieta = table.Column<string>(type: "longtext", nullable: true),
+                    IdAutor = table.Column<string>(type: "longtext", nullable: false),
+                    CreadoEn = table.Column<DateTime>(type: "datetime(6)", nullable: false),
+                    VersionRegistro = table.Column<long>(type: "bigint", nullable: false),
+                    EliminadoEn = table.Column<DateTime>(type: "datetime(6)", nullable: true)
                 },
                 constraints: table =>
                 {
@@ -40,19 +40,19 @@ namespace FarmBovi.Api.Migrations
                 name: "MovimientoAnimal",
                 columns: table => new
                 {
-                    IdMovimiento = table.Column<string>(type: "TEXT", nullable: false),
-                    IdAnimal = table.Column<string>(type: "TEXT", nullable: false),
-                    IdLoteOrigen = table.Column<string>(type: "TEXT", nullable: true),
-                    IdLoteDestino = table.Column<string>(type: "TEXT", nullable: true),
-                    Tipo = table.Column<string>(type: "TEXT", maxLength: 30, nullable: false),
-                    Fecha = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    OrigenExterno = table.Column<string>(type: "TEXT", maxLength: 250, nullable: true),
-                    DestinoExterno = table.Column<string>(type: "TEXT", maxLength: 250, nullable: true),
-                    Motivo = table.Column<string>(type: "TEXT", nullable: true),
-                    IdAutor = table.Column<string>(type: "TEXT", nullable: false),
-                    CreadoEn = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    VersionRegistro = table.Column<long>(type: "INTEGER", nullable: false),
-                    EliminadoEn = table.Column<DateTime>(type: "TEXT", nullable: true)
+                    IdMovimiento = table.Column<string>(type: "varchar(36)", maxLength: 36, nullable: false),
+                    IdAnimal = table.Column<string>(type: "longtext", nullable: false),
+                    IdLoteOrigen = table.Column<string>(type: "longtext", nullable: true),
+                    IdLoteDestino = table.Column<string>(type: "longtext", nullable: true),
+                    Tipo = table.Column<string>(type: "varchar(30)", maxLength: 30, nullable: false),
+                    Fecha = table.Column<DateTime>(type: "datetime(6)", nullable: false),
+                    OrigenExterno = table.Column<string>(type: "varchar(250)", maxLength: 250, nullable: true),
+                    DestinoExterno = table.Column<string>(type: "varchar(250)", maxLength: 250, nullable: true),
+                    Motivo = table.Column<string>(type: "longtext", nullable: true),
+                    IdAutor = table.Column<string>(type: "longtext", nullable: false),
+                    CreadoEn = table.Column<DateTime>(type: "datetime(6)", nullable: false),
+                    VersionRegistro = table.Column<long>(type: "bigint", nullable: false),
+                    EliminadoEn = table.Column<DateTime>(type: "datetime(6)", nullable: true)
                 },
                 constraints: table =>
                 {
