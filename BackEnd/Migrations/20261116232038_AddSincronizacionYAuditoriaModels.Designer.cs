@@ -11,7 +11,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace FarmBovi.Api.Migrations
 {
     [DbContext(typeof(FarmDbContext))]
-    [Migration("20261116193213_AddSincronizacionYAuditoriaModels")]
+    [Migration("20261116232038_AddSincronizacionYAuditoriaModels")]
     partial class AddSincronizacionYAuditoriaModels
     {
         /// <inheritdoc />

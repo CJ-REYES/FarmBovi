@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Globalization;
 using System.IdentityModel.Tokens.Jwt;
 using System.Reflection;
@@ -6,6 +5,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using FarmBovi.Api.Data;
 using FarmBovi.Api.DTOs;
 using FarmBovi.Api.Models;
@@ -18,7 +18,7 @@ namespace FarmBovi.Api.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/sync")]
-public sealed class SincronizacionController(FarmDbContext db) : ControllerBase
+public sealed partial class SincronizacionController(FarmDbContext db) : ControllerBase
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -26,8 +26,8 @@ public sealed class SincronizacionController(FarmDbContext db) : ControllerBase
         PropertyNameCaseInsensitive = true
     };
 
-    private static readonly ConcurrentDictionary<Guid, SemaphoreSlim> OperationLocks = new();
-    private static readonly ConcurrentDictionary<string, SemaphoreSlim> EntityConcurrencyLocks = new();
+    [GeneratedRegex(@"^[A-Za-z0-9._:@\-]{3,120}$")]
+    private static partial Regex DeviceIdFormatRegex();
 
     /// <summary>
     /// Lista blanca explícita de propiedades editables por entidad en ApplyPartialUpdate (Punto 5).
@@ -131,10 +131,8 @@ public sealed class SincronizacionController(FarmDbContext db) : ControllerBase
         if (request.IdOperacion == Guid.Empty)
             return BadRequest("El identificador de operación (idOperacion) es obligatorio.");
 
-        if (string.IsNullOrWhiteSpace(request.IdDispositivo) || request.IdDispositivo.Trim().Length > 120)
-            return BadRequest("El identificador del dispositivo (idDispositivo) es obligatorio y debe tener máximo 120 caracteres.");
-
-        var idDispositivo = request.IdDispositivo.Trim();
+        var (idDispositivo, deviceError) = ValidateDeviceIdentity(request.IdDispositivo);
+        if (deviceError is not null) return deviceError;
 
         var ranchError = await ValidateRanchMembershipAsync(idUsuarioJwt, request.IdRancho, ct);
         if (ranchError is not null) return ranchError;
@@ -158,32 +156,18 @@ public sealed class SincronizacionController(FarmDbContext db) : ControllerBase
             request.VersionBase,
             payload);
 
-        var opLock = OperationLocks.GetOrAdd(request.IdOperacion, _ => new SemaphoreSlim(1, 1));
-        await opLock.WaitAsync(ct);
-        try
+        // Idempotencia multi-instancia respaldada por PK única en RegistroSyncServidor y transacción BD
+        var existente = await db.RegistrosSyncServidor.AsNoTracking()
+            .SingleOrDefaultAsync(r => r.IdOperacion == request.IdOperacion, ct);
+
+        if (existente is not null)
         {
-            var existente = await db.RegistrosSyncServidor.AsNoTracking()
-                .SingleOrDefaultAsync(r => r.IdOperacion == request.IdOperacion, ct);
+            return await BuildIdempotentResultAsync(existente, idUsuarioJwt, request.IdRancho, hashSolicitud, operacionEstandar, ct);
+        }
 
-            if (existente is not null)
-            {
-                return await BuildIdempotentResultAsync(existente, idUsuarioJwt, request.IdRancho, hashSolicitud, operacionEstandar, ct);
-            }
-
-            if (operacionEstandar == "Crear")
-            {
-                return await ProcesarCreacionAsync(
-                    request,
-                    idUsuarioJwt,
-                    idDispositivo,
-                    entidadNormalizada,
-                    operacionEstandar,
-                    hashSolicitud,
-                    payload,
-                    ct);
-            }
-
-            return await ProcesarModificacionOEliminacionAsync(
+        if (operacionEstandar == "Crear")
+        {
+            return await ProcesarCreacionAsync(
                 request,
                 idUsuarioJwt,
                 idDispositivo,
@@ -193,10 +177,16 @@ public sealed class SincronizacionController(FarmDbContext db) : ControllerBase
                 payload,
                 ct);
         }
-        finally
-        {
-            opLock.Release();
-        }
+
+        return await ProcesarModificacionOEliminacionAsync(
+            request,
+            idUsuarioJwt,
+            idDispositivo,
+            entidadNormalizada,
+            operacionEstandar,
+            hashSolicitud,
+            payload,
+            ct);
     }
 
     [HttpGet("operaciones/{idOperacion:guid}")]
@@ -250,6 +240,44 @@ public sealed class SincronizacionController(FarmDbContext db) : ControllerBase
             .ToListAsync(ct);
 
         return Ok(items);
+    }
+
+    /// <summary>
+    /// Valida el identificador de dispositivo declarado por el cliente.
+    /// Nota de alcance: mientras no exista una tabla formal de dispositivos registrados,
+    /// IdDispositivo es un identificador de correlación/auditoría (no autenticación criptográfica de hardware).
+    /// Si el JWT incluye claim 'device_id'/'idDispositivo' o la cabecera 'X-Device-Id', exige coincidencia.
+    /// </summary>
+    private (string DeviceId, IActionResult? ErrorResult) ValidateDeviceIdentity(string? rawDeviceId)
+    {
+        if (string.IsNullOrWhiteSpace(rawDeviceId))
+            return (string.Empty, BadRequest("El identificador del dispositivo (idDispositivo) es obligatorio."));
+
+        var normalized = rawDeviceId.Trim();
+        if (!DeviceIdFormatRegex().IsMatch(normalized))
+        {
+            return (string.Empty, BadRequest(
+                "El identificador del dispositivo (idDispositivo) debe tener entre 3 y 120 caracteres válidos (letras, números, . _ : @ -)."));
+        }
+
+        var jwtDeviceClaim = User?.FindFirstValue("device_id") ?? User?.FindFirstValue("idDispositivo");
+        if (!string.IsNullOrWhiteSpace(jwtDeviceClaim) &&
+            !string.Equals(jwtDeviceClaim.Trim(), normalized, StringComparison.Ordinal))
+        {
+            return (string.Empty, StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                mensaje = "El dispositivo enviado no coincide con el dispositivo autorizado en el token JWT."
+            }));
+        }
+
+        var headerDevice = HttpContext?.Request.Headers["X-Device-Id"].FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(headerDevice) &&
+            !string.Equals(headerDevice.Trim(), normalized, StringComparison.Ordinal))
+        {
+            return (string.Empty, BadRequest("La cabecera X-Device-Id no coincide con idDispositivo del cuerpo."));
+        }
+
+        return (normalized, null);
     }
 
     private async Task<IActionResult> BuildIdempotentResultAsync(
@@ -390,6 +418,15 @@ public sealed class SincronizacionController(FarmDbContext db) : ControllerBase
             ? await db.Database.BeginTransactionAsync(ct)
             : null;
 
+        // Reverificación transaccional entre instancias
+        var yaRegistrada = await db.RegistrosSyncServidor.AsNoTracking()
+            .SingleOrDefaultAsync(r => r.IdOperacion == request.IdOperacion, ct);
+        if (yaRegistrada is not null)
+        {
+            if (tx is not null) await tx.RollbackAsync(ct);
+            return await BuildIdempotentResultAsync(yaRegistrada, idUsuarioJwt, request.IdRancho, hashSolicitud, operacionEstandar, ct);
+        }
+
         db.Add(entidadNueva);
 
         RegistrarTrazabilidadSync(
@@ -467,176 +504,204 @@ public sealed class SincronizacionController(FarmDbContext db) : ControllerBase
             return BadRequest("Debe enviar la versión del registro (versionBase >= 1) para validar concurrencia.");
 
         var idRegistro = request.IdRegistro.Value;
-        var entityLockKey = $"{entidadNormalizada}:{idRegistro:D}";
-        var entityLock = EntityConcurrencyLocks.GetOrAdd(entityLockKey, _ => new SemaphoreSlim(1, 1));
 
-        await entityLock.WaitAsync(ct);
+        await using var tx = db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(ct)
+            : null;
+
+        // Reverificación transaccional entre instancias antes de evaluar versión
+        var yaRegistrada = await db.RegistrosSyncServidor.AsNoTracking()
+            .SingleOrDefaultAsync(r => r.IdOperacion == request.IdOperacion, ct);
+        if (yaRegistrada is not null)
+        {
+            if (tx is not null) await tx.RollbackAsync(ct);
+            return await BuildIdempotentResultAsync(yaRegistrada, idUsuarioJwt, request.IdRancho, hashSolicitud, operacionEstandar, ct);
+        }
+
+        var existente = await FindEntityByIdAsync(entidadNormalizada, idRegistro, ct);
+        if (existente is null)
+        {
+            if (tx is not null) await tx.RollbackAsync(ct);
+            return NotFound($"No se encontró el registro '{idRegistro}' en la entidad '{entidadNormalizada}'.");
+        }
+
+        var isolationError = await ValidateEntityBelongsToRanchAsync(existente, request.IdRancho, isCreate: false, ct);
+        if (isolationError is not null)
+        {
+            if (tx is not null) await tx.RollbackAsync(ct);
+            return isolationError;
+        }
+
+        var versionServidor = GetEntityVersion(existente);
+        var eliminadoEnServidor = GetEntityDeletedAt(existente);
+        var antesJson = JsonSerializer.Serialize(existente, existente.GetType(), JsonOptions);
+        using var docServidor = JsonDocument.Parse(antesJson);
+
+        if (eliminadoEnServidor.HasValue)
+        {
+            var camposEliminado = await CalcularCamposConflictoDesdeHistorialAsync(
+                request.IdRancho, entidadNormalizada, idRegistro,
+                request.VersionBase.Value, versionServidor, docServidor.RootElement, payload, ct);
+
+            if (tx is not null) await tx.RollbackAsync(ct);
+            return Conflict(new ConflictoSyncResponse(
+                TipoConflicto: "DELETED_ON_SERVER",
+                Mensaje: "El registro ya fue eliminado previamente en el servidor por otro dispositivo.",
+                IdOperacion: request.IdOperacion,
+                Entidad: entidadNormalizada,
+                IdRegistro: idRegistro,
+                VersionEnviada: request.VersionBase,
+                VersionServidor: versionServidor,
+                CamposModificados: camposEliminado,
+                EstadoServidor: docServidor.RootElement.Clone()));
+        }
+
+        if (request.VersionBase.Value != versionServidor)
+        {
+            var camposModificados = await CalcularCamposConflictoDesdeHistorialAsync(
+                request.IdRancho, entidadNormalizada, idRegistro,
+                request.VersionBase.Value, versionServidor, docServidor.RootElement, payload, ct);
+
+            if (tx is not null) await tx.RollbackAsync(ct);
+            return Conflict(new ConflictoSyncResponse(
+                TipoConflicto: "VERSION_MISMATCH",
+                Mensaje: $"Conflicto de versión: el dispositivo envió la versión {request.VersionBase.Value}, pero la versión actual en el servidor es {versionServidor}.",
+                IdOperacion: request.IdOperacion,
+                Entidad: entidadNormalizada,
+                IdRegistro: idRegistro,
+                VersionEnviada: request.VersionBase,
+                VersionServidor: versionServidor,
+                CamposModificados: camposModificados,
+                EstadoServidor: docServidor.RootElement.Clone()));
+        }
+
+        var ahora = DateTime.UtcNow;
+        if (operacionEstandar == "Actualizar")
+        {
+            if (payload.ValueKind != JsonValueKind.Object)
+            {
+                if (tx is not null) await tx.RollbackAsync(ct);
+                return BadRequest("El payload/datos debe ser un objeto JSON válido para Actualizar.");
+            }
+
+            ApplyPartialUpdate(existente, payload);
+
+            var postUpdateIsolation = await ValidateEntityBelongsToRanchAsync(existente, request.IdRancho, isCreate: false, ct);
+            if (postUpdateIsolation is not null)
+            {
+                if (tx is not null) await tx.RollbackAsync(ct);
+                db.ChangeTracker.Clear();
+                return postUpdateIsolation;
+            }
+        }
+        else
+        {
+            SetEntityDeletedAt(existente, ahora);
+        }
+
+        db.Entry(existente).Property("VersionRegistro").OriginalValue = request.VersionBase.Value;
+        var versionResultante = versionServidor + 1;
+        SetEntityVersion(existente, versionResultante);
+
+        var despuesJson = JsonSerializer.Serialize(existente, existente.GetType(), JsonOptions);
+        var datosPullJson = operacionEstandar == "Eliminar" ? null : despuesJson;
+        var idCambio = Guid.NewGuid();
+
+        RegistrarTrazabilidadSync(
+            idCambio,
+            request.IdOperacion,
+            idUsuarioJwt,
+            request.IdRancho,
+            idDispositivo,
+            entidadNormalizada,
+            idRegistro,
+            operacionEstandar,
+            hashSolicitud,
+            versionResultante,
+            antesJson: antesJson,
+            despuesJson: despuesJson,
+            datosPullJson: datosPullJson,
+            ahora: ahora);
+
         try
         {
-            var existente = await FindEntityByIdAsync(entidadNormalizada, idRegistro, ct);
-            if (existente is null)
-                return NotFound($"No se encontró el registro '{idRegistro}' en la entidad '{entidadNormalizada}'.");
-
-            var isolationError = await ValidateEntityBelongsToRanchAsync(existente, request.IdRancho, isCreate: false, ct);
-            if (isolationError is not null) return isolationError;
-
-            var versionServidor = GetEntityVersion(existente);
-            var eliminadoEnServidor = GetEntityDeletedAt(existente);
-            var antesJson = JsonSerializer.Serialize(existente, existente.GetType(), JsonOptions);
-            using var docServidor = JsonDocument.Parse(antesJson);
-
-            if (eliminadoEnServidor.HasValue)
-            {
-                var camposEliminado = CalcularCamposModificados(docServidor.RootElement, payload);
-                return Conflict(new ConflictoSyncResponse(
-                    TipoConflicto: "DELETED_ON_SERVER",
-                    Mensaje: "El registro ya fue eliminado previamente en el servidor por otro dispositivo.",
-                    IdOperacion: request.IdOperacion,
-                    Entidad: entidadNormalizada,
-                    IdRegistro: idRegistro,
-                    VersionEnviada: request.VersionBase,
-                    VersionServidor: versionServidor,
-                    CamposModificados: camposEliminado,
-                    EstadoServidor: docServidor.RootElement.Clone()));
-            }
-
-            if (request.VersionBase.Value != versionServidor)
-            {
-                var camposModificados = CalcularCamposModificados(docServidor.RootElement, payload);
-                return Conflict(new ConflictoSyncResponse(
-                    TipoConflicto: "VERSION_MISMATCH",
-                    Mensaje: $"Conflicto de versión: el dispositivo envió la versión {request.VersionBase.Value}, pero la versión actual en el servidor es {versionServidor}.",
-                    IdOperacion: request.IdOperacion,
-                    Entidad: entidadNormalizada,
-                    IdRegistro: idRegistro,
-                    VersionEnviada: request.VersionBase,
-                    VersionServidor: versionServidor,
-                    CamposModificados: camposModificados,
-                    EstadoServidor: docServidor.RootElement.Clone()));
-            }
-
-            var ahora = DateTime.UtcNow;
-            if (operacionEstandar == "Actualizar")
-            {
-                if (payload.ValueKind != JsonValueKind.Object)
-                    return BadRequest("El payload/datos debe ser un objeto JSON válido para Actualizar.");
-
-                ApplyPartialUpdate(existente, payload);
-
-                var postUpdateIsolation = await ValidateEntityBelongsToRanchAsync(existente, request.IdRancho, isCreate: false, ct);
-                if (postUpdateIsolation is not null)
-                {
-                    db.ChangeTracker.Clear();
-                    return postUpdateIsolation;
-                }
-            }
-            else // Eliminar lógico
-            {
-                SetEntityDeletedAt(existente, ahora);
-            }
-
-            db.Entry(existente).Property("VersionRegistro").OriginalValue = request.VersionBase.Value;
-            var versionResultante = versionServidor + 1;
-            SetEntityVersion(existente, versionResultante);
-
-            var despuesJson = JsonSerializer.Serialize(existente, existente.GetType(), JsonOptions);
-            var datosPullJson = operacionEstandar == "Eliminar" ? null : despuesJson;
-            var idCambio = Guid.NewGuid();
-
-            await using var tx = db.Database.IsRelational()
-                ? await db.Database.BeginTransactionAsync(ct)
-                : null;
-
-            RegistrarTrazabilidadSync(
-                idCambio,
-                request.IdOperacion,
-                idUsuarioJwt,
-                request.IdRancho,
-                idDispositivo,
-                entidadNormalizada,
-                idRegistro,
-                operacionEstandar,
-                hashSolicitud,
-                versionResultante,
-                antesJson: antesJson,
-                despuesJson: despuesJson,
-                datosPullJson: datosPullJson,
-                ahora: ahora);
-
-            try
-            {
-                await db.SaveChangesAsync(ct);
-                if (tx is not null) await tx.CommitAsync(ct);
-            }
-            catch (DbUpdateConcurrencyException)
-            {
-                db.ClearPendingPushMetadata();
-                if (tx is not null) await tx.RollbackAsync(ct);
-                db.ChangeTracker.Clear();
-
-                var actualEnServidor = await FindEntityByIdAsNoTrackingAsync(entidadNormalizada, idRegistro, ct);
-                if (actualEnServidor is null)
-                    return NotFound($"El registro '{idRegistro}' ya no existe en el servidor.");
-
-                var versionActual = GetEntityVersion(actualEnServidor);
-                var estadoActualJson = JsonSerializer.Serialize(actualEnServidor, actualEnServidor.GetType(), JsonOptions);
-                using var docActual = JsonDocument.Parse(estadoActualJson);
-                var camposConflicto = CalcularCamposModificados(docActual.RootElement, payload);
-
-                return Conflict(new ConflictoSyncResponse(
-                    TipoConflicto: "VERSION_MISMATCH",
-                    Mensaje: $"Colisión de concurrencia optimista: otro dispositivo modificó el registro simultáneamente (versión actual: {versionActual}).",
-                    IdOperacion: request.IdOperacion,
-                    Entidad: entidadNormalizada,
-                    IdRegistro: idRegistro,
-                    VersionEnviada: request.VersionBase,
-                    VersionServidor: versionActual,
-                    CamposModificados: camposConflicto,
-                    EstadoServidor: docActual.RootElement.Clone()));
-            }
-            catch (DbUpdateException)
-            {
-                db.ClearPendingPushMetadata();
-                if (tx is not null) await tx.RollbackAsync(ct);
-                db.ChangeTracker.Clear();
-
-                var concurrentOp = await db.RegistrosSyncServidor.AsNoTracking()
-                    .SingleOrDefaultAsync(r => r.IdOperacion == request.IdOperacion, ct);
-                if (concurrentOp is not null)
-                {
-                    return await BuildIdempotentResultAsync(concurrentOp, idUsuarioJwt, request.IdRancho, hashSolicitud, operacionEstandar, ct);
-                }
-
-                return Conflict(new
-                {
-                    tipoConflicto = "CONSTRAINT_VIOLATION",
-                    mensaje = "No se pudo aplicar el cambio por una restricción de integridad en la base de datos.",
-                    idOperacion = request.IdOperacion
-                });
-            }
-
-            JsonElement? datosRespuesta = null;
-            if (operacionEstandar != "Eliminar")
-            {
-                using var docDespues = JsonDocument.Parse(despuesJson);
-                datosRespuesta = docDespues.RootElement.Clone();
-            }
-
-            return Ok(new OperacionSyncResponse(
-                request.IdOperacion,
-                entidadNormalizada,
-                idRegistro,
-                operacionEstandar,
-                versionResultante,
-                idCambio,
-                ahora,
-                DuplicadoIgnorado: false,
-                datosRespuesta));
+            await db.SaveChangesAsync(ct);
+            if (tx is not null) await tx.CommitAsync(ct);
         }
-        finally
+        catch (DbUpdateConcurrencyException)
         {
-            entityLock.Release();
+            db.ClearPendingPushMetadata();
+            if (tx is not null) await tx.RollbackAsync(ct);
+            db.ChangeTracker.Clear();
+
+            // Punto 1: si otra instancia ya procesó este mismo IdOperacion, devolver recibo idempotente (nunca VERSION_MISMATCH)
+            var concurrentOp = await db.RegistrosSyncServidor.AsNoTracking()
+                .SingleOrDefaultAsync(r => r.IdOperacion == request.IdOperacion, ct);
+            if (concurrentOp is not null)
+            {
+                return await BuildIdempotentResultAsync(concurrentOp, idUsuarioJwt, request.IdRancho, hashSolicitud, operacionEstandar, ct);
+            }
+
+            var actualEnServidor = await FindEntityByIdAsNoTrackingAsync(entidadNormalizada, idRegistro, ct);
+            if (actualEnServidor is null)
+                return NotFound($"El registro '{idRegistro}' ya no existe en el servidor.");
+
+            var versionActual = GetEntityVersion(actualEnServidor);
+            var estadoActualJson = JsonSerializer.Serialize(actualEnServidor, actualEnServidor.GetType(), JsonOptions);
+            using var docActual = JsonDocument.Parse(estadoActualJson);
+            var camposConflicto = await CalcularCamposConflictoDesdeHistorialAsync(
+                request.IdRancho, entidadNormalizada, idRegistro,
+                request.VersionBase.Value, versionActual, docActual.RootElement, payload, ct);
+
+            return Conflict(new ConflictoSyncResponse(
+                TipoConflicto: "VERSION_MISMATCH",
+                Mensaje: $"Colisión de concurrencia optimista: otro dispositivo modificó el registro simultáneamente (versión actual: {versionActual}).",
+                IdOperacion: request.IdOperacion,
+                Entidad: entidadNormalizada,
+                IdRegistro: idRegistro,
+                VersionEnviada: request.VersionBase,
+                VersionServidor: versionActual,
+                CamposModificados: camposConflicto,
+                EstadoServidor: docActual.RootElement.Clone()));
         }
+        catch (DbUpdateException)
+        {
+            db.ClearPendingPushMetadata();
+            if (tx is not null) await tx.RollbackAsync(ct);
+            db.ChangeTracker.Clear();
+
+            var concurrentOp = await db.RegistrosSyncServidor.AsNoTracking()
+                .SingleOrDefaultAsync(r => r.IdOperacion == request.IdOperacion, ct);
+            if (concurrentOp is not null)
+            {
+                return await BuildIdempotentResultAsync(concurrentOp, idUsuarioJwt, request.IdRancho, hashSolicitud, operacionEstandar, ct);
+            }
+
+            return Conflict(new
+            {
+                tipoConflicto = "CONSTRAINT_VIOLATION",
+                mensaje = "No se pudo aplicar el cambio por una restricción de integridad en la base de datos.",
+                idOperacion = request.IdOperacion
+            });
+        }
+
+        JsonElement? datosRespuesta = null;
+        if (operacionEstandar != "Eliminar")
+        {
+            using var docDespues = JsonDocument.Parse(despuesJson);
+            datosRespuesta = docDespues.RootElement.Clone();
+        }
+
+        return Ok(new OperacionSyncResponse(
+            request.IdOperacion,
+            entidadNormalizada,
+            idRegistro,
+            operacionEstandar,
+            versionResultante,
+            idCambio,
+            ahora,
+            DuplicadoIgnorado: false,
+            datosRespuesta));
     }
 
     private void RegistrarTrazabilidadSync(
@@ -682,6 +747,93 @@ public sealed class SincronizacionController(FarmDbContext db) : ControllerBase
             DespuesJson: despuesJson,
             DatosPullJson: datosPullJson,
             OcurrioEn: ahora));
+    }
+
+    /// <summary>
+    /// Calcula los campos modificados usando el historial de CambioServidor desde VersionBase
+    /// hasta la versión actual del servidor, evitando falsos positivos en actualizaciones parciales (Punto 2).
+    /// </summary>
+    private async Task<IReadOnlyList<CampoConflictoDto>> CalcularCamposConflictoDesdeHistorialAsync(
+        Guid idRancho,
+        string entidad,
+        Guid idRegistro,
+        long versionBase,
+        long versionServidor,
+        JsonElement estadoServidor,
+        JsonElement datosCliente,
+        CancellationToken ct)
+    {
+        var cambiosDesdeBase = await db.CambiosServidor.AsNoTracking()
+            .Where(c => c.IdRancho == idRancho
+                     && c.Entidad == entidad
+                     && c.IdRegistro == idRegistro
+                     && c.Version > versionBase
+                     && c.Version <= versionServidor)
+            .OrderBy(c => c.Version)
+            .ToListAsync(ct);
+
+        var primerCambioConAntes = cambiosDesdeBase.FirstOrDefault(c => !string.IsNullOrWhiteSpace(c.Antes));
+        if (primerCambioConAntes is null)
+        {
+            return CalcularCamposModificados(estadoServidor, datosCliente);
+        }
+
+        try
+        {
+            using var docBase = JsonDocument.Parse(primerCambioConAntes.Antes!);
+            var diffsPorHistorial = CalcularCamposModificados(estadoServidor, docBase.RootElement);
+            var diffsCliente = CalcularCamposModificados(estadoServidor, datosCliente);
+
+            var porCampo = new Dictionary<string, CampoConflictoDto>(StringComparer.OrdinalIgnoreCase);
+
+            // Primero agregamos cada campo que cambió en el servidor desde VersionBase
+            foreach (var d in diffsPorHistorial)
+            {
+                var valorCliente = TryGetNestedJsonValue(datosCliente, d.Campo, out var valCli)
+                    ? valCli.Clone()
+                    : d.ValorCliente;
+                porCampo[d.Campo] = new CampoConflictoDto(d.Campo, d.ValorServidor, valorCliente);
+            }
+
+            // Completamos con diferencias explícitas enviadas por el cliente
+            foreach (var d in diffsCliente)
+            {
+                if (!porCampo.ContainsKey(d.Campo))
+                {
+                    porCampo[d.Campo] = d;
+                }
+            }
+
+            return porCampo.Values.ToList();
+        }
+        catch (JsonException)
+        {
+            return CalcularCamposModificados(estadoServidor, datosCliente);
+        }
+    }
+
+    private static bool TryGetNestedJsonValue(JsonElement root, string dottedPath, out JsonElement value)
+    {
+        value = root;
+        if (root.ValueKind != JsonValueKind.Object) return false;
+
+        foreach (var segment in dottedPath.Split('.'))
+        {
+            if (value.ValueKind != JsonValueKind.Object) return false;
+            var found = false;
+            foreach (var prop in value.EnumerateObject())
+            {
+                if (prop.Name.Equals(segment, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = prop.Value;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return false;
+        }
+
+        return true;
     }
 
     public static IReadOnlyList<CampoConflictoDto> CalcularCamposModificados(
@@ -1160,7 +1312,7 @@ public sealed class SincronizacionController(FarmDbContext db) : ControllerBase
             case Lote l: l.EliminadoEn = deletedAt; break;
             case Rancho r: r.EliminadoEn = deletedAt; break;
             case EventoSanitario e: e.EliminadoEn = deletedAt; break;
-            case Tratamiento t: t.VersionRegistro = t.VersionRegistro; t.EliminadoEn = deletedAt; break;
+            case Tratamiento t: t.EliminadoEn = deletedAt; break;
             case Recordatorio rec: rec.EliminadoEn = deletedAt; break;
             case Alimentacion al: al.EliminadoEn = deletedAt; break;
             case MovimientoAnimal mov: mov.EliminadoEn = deletedAt; break;
