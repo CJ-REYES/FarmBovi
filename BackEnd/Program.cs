@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi.Models;
+using Swashbuckle.AspNetCore.SwaggerGen;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -31,7 +33,27 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJw
 builder.Services.AddAuthorization(options => options.FallbackPolicy = new AuthorizationPolicyBuilder()
     .RequireAuthenticatedUser().Build());
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "FarmBovi API",
+        Version = "v1",
+        Description = "API para administrar FarmBovi y probar sus endpoints."
+    });
+
+    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Name = "Authorization",
+        Description = "Pega solo el token JWT obtenido en POST /api/usuarios/login.",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT"
+    });
+
+    options.OperationFilter<SwaggerBearerOperationFilter>();
+});
 builder.Services.AddProblemDetails();
 
 var connectionString = builder.Configuration.GetConnectionString("FarmBovi")
@@ -91,3 +113,25 @@ app.MapControllers();
 app.MapHealthChecks("/health");
 
 app.Run();
+
+public sealed class SwaggerBearerOperationFilter : IOperationFilter
+{
+    public void Apply(OpenApiOperation operation, OperationFilterContext context)
+    {
+        var allowsAnonymous = context.ApiDescription.ActionDescriptor.EndpointMetadata?
+            .OfType<IAllowAnonymous>().Any() == true;
+        if (allowsAnonymous) return;
+
+        operation.Security.Add(new OpenApiSecurityRequirement
+        {
+            [new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference
+                {
+                    Type = ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            }] = Array.Empty<string>()
+        });
+    }
+}
