@@ -1,22 +1,26 @@
-import { CheckpointRepository } from '../../lib/database/repositories/checkpoint.repository';
-import { PushSyncEngine, type PushCycleSummary } from './push-sync.engine';
-import { SyncHttpClient } from './sync-http.client';
+import { PushSyncEngine } from './push-sync.engine';
+import { SyncPullEngine, type PullEntitySummary } from './sync-pull.engine';
 import { BoviScaleAnalysisService } from '../boviscale-analysis.service';
+
+export interface FullSyncCycleResult {
+  push: Awaited<ReturnType<typeof PushSyncEngine.pushPendingOperations>>;
+  pull: PullEntitySummary[];
+}
 
 export const SyncEngine = {
   isSyncing: false,
 
-  async sync(): Promise<PushCycleSummary | null> {
+  async sync(): Promise<FullSyncCycleResult | null> {
     if (this.isSyncing || typeof navigator === 'undefined' || !navigator.onLine) {
       return null;
     }
 
     try {
       this.isSyncing = true;
-      const pushSummary = await this.pushChanges();
-      await this.pullChanges();
+      const push = await this.pushChanges();
+      const pull = await this.pullChanges();
       await BoviScaleAnalysisService.processPendingQueue();
-      return pushSummary;
+      return { push, pull };
     } catch (err) {
       console.error('Error en el ciclo de sincronización:', err);
       return null;
@@ -25,18 +29,11 @@ export const SyncEngine = {
     }
   },
 
-  async pushChanges(): Promise<PushCycleSummary> {
+  async pushChanges() {
     return await PushSyncEngine.pushPendingOperations();
   },
 
-  async pullChanges(): Promise<void> {
-    const checkpoint = await CheckpointRepository.getByEntity('cattle');
-    const availability = SyncHttpClient.getEndpointAvailability();
-    if (!availability.pullDisponible) {
-      console.debug(
-        'Endpoint de pull incremental aún pendiente en el backend. Cursor actual:',
-        checkpoint?.cursorOpaco ?? null
-      );
-    }
+  async pullChanges(): Promise<PullEntitySummary[]> {
+    return await SyncPullEngine.pullAllEntities();
   }
 };

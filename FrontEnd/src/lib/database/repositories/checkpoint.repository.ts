@@ -10,22 +10,36 @@ export const CheckpointRepository = {
     return await db.syncCheckpoints.toArray();
   },
 
+  async getCursor(entidad: SyncEntityName): Promise<string | null> {
+    const checkpoint = await db.syncCheckpoints.get(entidad);
+    return checkpoint?.cursorOpaco ?? null;
+  },
+
   /**
-   * Almacena el cursor opaco devuelto explícitamente por el servidor.
-   * No debe invocarse sin una respuesta real del backend.
+   * Construye el objeto LocalSyncCheckpoint siguiente manteniendo el cursor opaco
+   * emitido por el servidor. Nunca sustituye el cursor por una fecha local.
    */
-  async saveServerCursor(
-    entidad: SyncEntityName,
-    cursorOpaco: string | null,
-    ultimaFechaServidor?: string | null
-  ): Promise<LocalSyncCheckpoint> {
-    const checkpoint: LocalSyncCheckpoint = {
-      entidad,
-      cursorOpaco,
-      ultimaFechaServidor: ultimaFechaServidor ?? null,
+  buildNextCheckpoint(params: {
+    entidad: SyncEntityName;
+    currentCheckpoint?: LocalSyncCheckpoint;
+    siguienteCursorOpaco: string | null;
+    fechaServidor?: string;
+  }): LocalSyncCheckpoint {
+    const resolvedCursor =
+      params.siguienteCursorOpaco !== null
+        ? params.siguienteCursorOpaco
+        : (params.currentCheckpoint?.cursorOpaco ?? null);
+
+    const resolvedServerDate =
+      params.fechaServidor !== undefined
+        ? params.fechaServidor
+        : (params.currentCheckpoint?.ultimaFechaServidor ?? null);
+
+    return {
+      entidad: params.entidad,
+      cursorOpaco: resolvedCursor,
+      ultimaFechaServidor: resolvedServerDate,
       actualizadoEn: new Date().toISOString()
     };
-    await db.syncCheckpoints.put(checkpoint);
-    return checkpoint;
   }
 };
