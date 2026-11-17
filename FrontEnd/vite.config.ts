@@ -14,32 +14,15 @@ export default defineConfig(({ mode }) => {
       react(),
       tailwindcss(),
       VitePWA({
-        registerType: 'prompt',
+        strategies: 'injectManifest',
+        srcDir: 'src/pwa',
+        filename: 'sw.ts',
+        manifest: false,
+        injectRegister: false,
         includeAssets: ['favicon.svg', 'apple-touch-icon.png', 'icons/*.png'],
-        manifest: {
-          id: '/',
-          name: 'FarmBovi · Gestión ganadera',
-          short_name: 'FarmBovi',
-          description: 'Registro y consulta de tu ganado, también en el campo.',
-          lang: 'es-MX',
-          start_url: '/',
-          scope: '/',
-          display: 'standalone',
-          theme_color: '#245c45',
-          background_color: '#f3f6f7',
-          icons: [
-            { src: '/icons/pwa-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
-            { src: '/icons/pwa-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
-            { src: '/icons/pwa-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
-          ],
-        },
-        workbox: {
+        injectManifest: {
           globPatterns: ['**/*.{js,css,html,svg,png,woff2,webmanifest}'],
-          cleanupOutdatedCaches: true,
-          navigateFallback: 'index.html',
-          navigateFallbackDenylist: [/^\/api(?:\/|$)/, /^\/health(?:\/|$)/, /^\/swagger(?:\/|$)/],
-          // API data is saved explicitly by the app; the worker caches only assets.
-          runtimeCaching: [],
+          maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
         },
         // Inspect the real PWA with build + preview, without development caches.
         devOptions: { enabled: false },

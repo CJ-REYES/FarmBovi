@@ -1,128 +1,79 @@
 # FarmBovi
 
-Base del proyecto ganadero con **React + TypeScript + Tailwind CSS**, una **PWA** instalable y una **Web API de ASP.NET Core en .NET 10 LTS**. Frontend y backend viven en carpetas separadas.
+Plataforma ganadera **offline-first** concebida como una **Progressive Web App (PWA) instalable**. La documentación base describe React 19, TypeScript, Vite 8, Tailwind CSS 4, Dexie 4/IndexedDB, ASP.NET Core .NET 10, Entity Framework Core 10 y MySQL.
 
-Incluye una API CRUD para animales, lotes, ranchos, usuarios y asignaciones de usuarios a ranchos. Los datos se guardan en MySQL; contraseñas de usuario se almacenan con hash.
+> **Alcance y precisión:** estos documentos se redactaron a partir del README adjunto y de la bitácora técnica compartida. No constituyen una auditoría independiente del repositorio en esta sesión. Las funciones descritas deben contrastarse con el código y las pruebas de la rama antes de considerarlas verificadas.
 
-## Estructura
+## Objetivo
+
+Permitir registrar hato, trazabilidad, pesajes y actividades ganaderas en campo sin conexión y en oficina, conservando cambios localmente y sincronizándolos con el servidor cuando vuelva la conectividad.
+
+## Tecnologías declaradas
+
+| Área | Tecnología |
+|---|---|
+| Frontend | React 19, TypeScript, Vite 8, Tailwind CSS 4, React Router 7 |
+| PWA | vite-plugin-pwa 2, Workbox 7, `injectManifest` |
+| Persistencia local | Dexie 4 sobre IndexedDB |
+| Backend | ASP.NET Core / .NET 10 |
+| ORM | Entity Framework Core 10 |
+| Base de datos | MySQL 8.0+ |
+
+## Arquitectura
+
+```mermaid
+flowchart LR
+ U[Usuario] --> UI[React]
+ UI --> R[Repositorios Dexie]
+ R <--> IDB[(IndexedDB)]
+ IDB --> O[Outbox y medios]
+ S[SyncScheduler] --> E[Push / Pull / Conflictos]
+ E --> API[ASP.NET Core]
+ API --> EF[EF Core]
+ EF --> DB[(MySQL)]
+ SW[Service Worker] -. App Shell y assets .-> UI
+```
+
+## Estructura conceptual
 
 ```text
 FarmBovi/
 ├── FrontEnd/
-│   ├── public/                  # Iconos de la PWA
-│   ├── src/
-│   │   ├── components/          # Formulario y avisos PWA
-│   │   ├── hooks/               # Datos, conexión e instalación
-│   │   ├── lib/                 # Cliente HTTP y copia local
-│   │   ├── types/               # Contratos TypeScript
-│   │   ├── App.tsx
-│   │   └── main.tsx
-│   └── vite.config.ts           # Tailwind, proxy, manifest y service worker
+│   ├── public/manifest.webmanifest
+│   ├── src/pwa/
+│   ├── src/lib/database/
+│   ├── src/services/
+│   ├── src/hooks/
+│   ├── src/components/
+│   ├── src/App.tsx
+│   └── vite.config.ts
 ├── BackEnd/
-│   ├── Controllers/             # Endpoints HTTP
-│   ├── Data/                    # DbContext y comprobación de base de datos
-│   ├── DTOs/                    # Entrada, validación y respuesta
-│   ├── Models/                  # Entidades
-│   ├── Migrations/              # Evolución versionada del esquema
-│   ├── Properties/              # Perfiles de ejecución
-│   ├── Program.cs
-│   └── FarmBovi.Api.csproj
-├── docs/                       # Guías en español
-├── scripts/                    # Generación de iconos y publicación
-├── .config/dotnet-tools.json    # Herramienta EF Core local
-├── .github/workflows/           # Compilación automática
-├── .gitignore
-├── global.json                 # Selección del SDK .NET 10
-└── FarmBovi.sln
+│   ├── Controllers/
+│   ├── Data/
+│   ├── DTOs/
+│   ├── Models/
+│   └── Migrations/
+├── BackEnd.Tests/
+└── docs/
 ```
 
-El código React se guarda en `src`, la abreviatura habitual de *source*.
+La estructura es orientativa y debe cotejarse con el árbol real de la rama.
 
-## Requisitos
+## Requisitos y ejecución
 
-- **Node.js 24 LTS** y npm. `.nvmrc` fija la rama 24; Vite necesita al menos Node 22.12 en esta configuración.
-- **SDK .NET 10**, actualizado a un parche compatible. `global.json` mantiene la selección dentro de la rama 10 mediante `rollForward: latestFeature`.
-- Git. No necesitas instalar un servidor de base de datos para comenzar.
+Requisitos declarados: Node.js 24 LTS, npm, SDK .NET 10 y MySQL 8.0+.
 
-
-## Backend .NET 10 LTS
-
-FarmBovi usa **.NET 10 LTS** para la API y Entity Framework Core:
-
-| Componente | Configuración del repositorio |
-| --- | --- |
-| Target framework | `net10.0` |
-| Banda base del SDK | `10.0.100` en `global.json` |
-| Política del SDK | `rollForward: latestFeature` |
-| Entity Framework Core y proveedor MySQL | `10.0.12` |
-| Herramienta local `dotnet-ef` | `10.0.14` |
-| Base de datos | MySQL |
-
-.NET 10 es una versión LTS. La política oficial de Microsoft indica soporte hasta el **14 de noviembre de 2028**. Mantén .NET 10 y sus parches al día.
-
-### Instalar o actualizar el SDK en Windows
-
-Abre PowerShell o Windows Terminal. Con WinGet:
-
-```powershell
-winget install --id Microsoft.DotNet.SDK.10 --exact
-```
-
-Para actualizar una instalación existente:
-
-```powershell
-winget upgrade --id Microsoft.DotNet.SDK.10 --exact
-```
-
-El SDK incluye el runtime de .NET y ASP.NET Core correspondiente; no instales otro runtime por separado para compilar y ejecutar FarmBovi. Si no tienes WinGet, utiliza el instalador del SDK en [Descargar .NET 10](https://dotnet.microsoft.com/download/dotnet/10.0).
-
-Cierra y vuelve a abrir la terminal después de instalar. No necesitas desinstalar .NET 8: varias versiones pueden convivir lado a lado.
-
-### Instalar o actualizar el SDK en Linux
-
-**Arch Linux y derivados (CachyOS y otros sistemas que usan los repositorios de Arch):**
+Backend, desde la raíz:
 
 ```bash
-sudo pacman -Syu dotnet-sdk-10.0
-```
-
-El paquete del SDK instala los componentes de ejecución y targeting que necesita mediante sus dependencias. Los paquetes de .NET 10 de Arch están versionados con el sufijo `-10.0`; consulta [los paquetes actuales de dotnet-core-10.0](https://archlinux.org/packages/extra/x86_64/dotnet-core-10.0/). Si `pacman` reporta conflictos con paquetes antiguos sin sufijo o requiere intervención manual, lee el aviso de [migración de paquetes .NET de Arch](https://archlinux.org/news/net-packages-may-require-manual-intervention/) y resuelve los conflictos indicados; no fuerces la instalación con `--overwrite`.
-
-**Otras distribuciones Linux:** utiliza el gestor de paquetes de la distribución o sigue las instrucciones oficiales específicas para ella en [Instalar .NET en Linux](https://learn.microsoft.com/dotnet/core/install/linux). Evita mezclar paquetes de Microsoft con paquetes de la distribución para la misma versión.
-
-### Verificar el SDK y preparar FarmBovi (Windows y Linux)
-
-Desde la raíz del repositorio, ejecuta:
-
-```bash
-dotnet --list-sdks
-dotnet --list-runtimes
-dotnet --version
 dotnet restore FarmBovi.sln --locked-mode
-dotnet tool restore
-dotnet ef --version
-dotnet build FarmBovi.sln --configuration Release --no-restore
-```
-
-La versión seleccionada por `dotnet --version` debe ser **10.0.x**. El valor `10.0.100` de `global.json` es la banda base, no una exigencia de instalar exactamente ese parche: `latestFeature` permite usar una banda de características posterior dentro de .NET 10. La propiedad `TargetFramework` de `BackEnd/FarmBovi.Api.csproj` define `net10.0`; `global.json` selecciona el SDK utilizado para compilar.
-
-Si aparece el error de que no se encuentra un SDK compatible, confirma que el SDK 10 está instalado, abre una terminal nueva y ejecuta de nuevo `dotnet --list-sdks` desde la raíz de FarmBovi. No basta con instalar únicamente el runtime.
-
-**No desinstales .NET 8 de forma global** si tienes otros proyectos que todavía lo necesitan. La instalación lado a lado es compatible; el `global.json` de cada repositorio determina qué SDK selecciona.
-
-## Arranque rápido
-
-Abre una terminal en la raíz del repositorio:
-
-```bash
-dotnet restore FarmBovi.sln
 dotnet tool restore
 dotnet run --project BackEnd --launch-profile http
 ```
 
-La API escucha en **http://localhost:5080**. En desarrollo aplica las migraciones MySQL al iniciar. Crea primero la base de datos `farmbovi` y configura `ConnectionStrings:FarmBovi` con las credenciales del servidor. Swagger está en **http://localhost:5080/swagger**.
+La fuente indica API en `http://localhost:5080` y Swagger en `http://localhost:5080/swagger`.
 
-En otra terminal:
+Frontend, desde otra terminal:
 
 ```bash
 cd FrontEnd
@@ -130,37 +81,42 @@ npm ci
 npm run dev
 ```
 
-Abre **http://localhost:5173**. Vite envía las peticiones `/api` al backend. La configuración predeterminada funciona sin crear un archivo `.env`; `FrontEnd/.env.example` explica cómo cambiarla.
+URL indicada: `http://localhost:5173/dashboard`.
 
-## Abrir la PWA
-
-El service worker se genera al compilar; está deshabilitado durante `npm run dev` para evitar cachés de desarrollo. Con la API todavía encendida, ejecuta desde `FrontEnd`:
+Build y preview:
 
 ```bash
+cd FrontEnd
 npm run build
 npm run preview
 ```
 
-Abre **http://localhost:4173**, consulta el ganado y espera el aviso de disponibilidad sin conexión. Puedes instalar la app cuando el navegador lo permita. En un teléfono necesitas una dirección **HTTPS**; `http://IP-de-tu-computadora` no cumple el requisito.
+URL indicada: `http://localhost:4173`.
 
-**Sin conexión:** la app puede abrirse después de una primera carga completa y mostrar el último listado guardado en ese navegador. Indica la fecha de la copia y deshabilita las modificaciones. Esta primera versión no guarda altas, ediciones o eliminaciones pendientes de sincronizar.
+## Estado y limitaciones declaradas
 
-## Documentación
+Esta rama incluye Login JWT, endpoints de sincronización Push/Pull y persistencia de cambios en el backend. En el frontend, la cola local y los motores de sincronización requieren completar y validar la integración con el contrato real. BoviScale conserva su proxy de IA como pendiente.
 
-| Guía | Qué explica |
-| --- | --- |
-| [Inicio y configuración](docs/01-inicio.md) | Instalación, terminales, puertos, variables y comandos |
-| [Arquitectura](docs/02-arquitectura.md) | Responsabilidad de cada carpeta y recorrido de una petición |
-| [Tu primera PWA](docs/03-pwa.md) | Manifest, service worker, instalación, cachés y actualizaciones |
-| [API y base de datos](docs/04-api-y-datos.md) | Endpoints CRUD, MySQL y migraciones |
-| [Entrega de inicio-sesion para Roberto](docs/09-entrega-roberto.md) | Cambios de Angel, variables, migraciones, pruebas y notas de integración |
-| [Publicación](docs/05-publicacion.md) | Build, HTTPS, persistencia, CORS y GitHub |
-| [Solución de problemas](docs/06-problemas.md) | Errores habituales y cómo resolverlos |
-| [Estado de validación](docs/07-validacion.md) | Comprobaciones realizadas y pendientes |
+Para el contrato de sincronización y el reparto de trabajo, consulta [08-contrato-sincronizacion.md](docs/08-contrato-sincronizacion.md) y [09-entrega-roberto.md](docs/09-entrega-roberto.md).
 
-## Comandos de mantenimiento
+## Índice
 
-Desde `FrontEnd`:
+- [01. Inicio y configuración](docs/01-inicio.md)
+- [02. Arquitectura](docs/02-arquitectura.md)
+- [03. Frontend](docs/03-frontend.md)
+- [04. Backend](docs/04-backend.md)
+- [05. Base de datos](docs/05-base-de-datos.md)
+- [06. PWA](docs/06-pwa.md)
+- [07. Offline-First](docs/07-offline-first.md)
+- [08. Sincronización](docs/08-sincronizacion.md)
+- [09. BoviScale](docs/09-boviscale.md)
+- [10. Permisos y dispositivos](docs/10-permisos-y-dispositivos.md)
+- [11. Seguridad](docs/11-seguridad.md)
+- [12. Problemas y soluciones](docs/12-problemas-y-soluciones.md)
+- [13. Validación y pruebas](docs/13-validacion-y-pruebas.md)
+- [14. Historial de desarrollo](docs/14-historial-desarrollo.md)
+- [15. Inventario de cambios](docs/15-inventario-cambios.md)
+- [16. Decisiones técnicas](docs/16-decisiones-tecnicas.md)
 
 ```bash
 npm run lint
@@ -177,8 +133,8 @@ dotnet build FarmBovi.sln --configuration Release --no-restore
 
 `package-lock.json`, `packages.lock.json` y el manifiesto de herramientas fijan las dependencias. GitHub Actions ejecuta la compilación y las comprobaciones del frontend en cada push o pull request.
 
-## Alcance inicial
+## Alcance actual
 
-El backend ya incluye usuarios, login JWT y endpoints de sincronización para varios ranchos. La interfaz aún no tiene una cola local de escrituras sin conexión; pesajes, reproducción y otros módulos también quedan fuera del alcance actual. Antes de exponer toda la API con datos reales, revisa la autorización de los endpoints CRUD que no pertenecen a Login, usuarios o sincronización.
+El backend incluye usuarios, login JWT y endpoints de sincronización para varios ranchos. La interfaz incluye motores offline; revisa las guías de sincronización y validación para conocer los límites de la integración actual. Antes de exponer toda la API con datos reales, revisa la autorización de los endpoints CRUD que no pertenecen a Login, usuarios o sincronización.
 
 Repositorio público: [CJ-REYES/FarmBovi](https://github.com/CJ-REYES/FarmBovi).
