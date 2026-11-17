@@ -1,20 +1,63 @@
-using System;
 using System.ComponentModel.DataAnnotations;
 
-namespace FarmBovi.Api.DTOs
+namespace FarmBovi.Api.DTOs;
+
+public sealed class AlimentacionCreateDto
 {
-    public class AlimentacionCreateDto
-    {
-        [Required] public string IdAnimal { get; set; } = string.Empty;
-        public string? IdLote { get; set; }
-        [Required] public string Alimento { get; set; } = string.Empty;
-        [Required] public string Racion { get; set; } = string.Empty;
-        [Required] public decimal Cantidad { get; set; }
-        [Required] public string Unidad { get; set; } = string.Empty;
-        [Required] public string Frecuencia { get; set; } = string.Empty;
-        [Required] public DateTime Inicio { get; set; }
-        public DateTime? Fin { get; set; }
-        public string? CambioDieta { get; set; }
-        [Required] public string IdAutor { get; set; } = string.Empty;
-    }
+    public Guid? IdAlimentacion { get; set; }
+    public Guid? IdAnimal { get; set; }
+    public Guid? IdLote { get; set; }
+
+    [Required, MaxLength(150)]
+    public string Alimento { get; set; } = string.Empty;
+
+    [Required, MaxLength(150)]
+    public string Racion { get; set; } = string.Empty;
+
+    [Required]
+    public decimal Cantidad { get; set; }
+
+    [Required, MaxLength(20)]
+    public string Unidad { get; set; } = string.Empty;
+
+    [Required, MaxLength(80)]
+    public string Frecuencia { get; set; } = string.Empty;
+
+    [Required]
+    public DateTime Inicio { get; set; }
+
+    public DateTime? Fin { get; set; }
+    public string? CambioDieta { get; set; }
+
+    public Guid IdAutor { get; set; }
+}
+
+public sealed class AlimentacionUpdateDto
+{
+    public Guid? IdAnimal { get; set; }
+    public Guid? IdLote { get; set; }
+
+    [Required, MaxLength(150)]
+    public string Alimento { get; set; } = string.Empty;
+
+    [Required, MaxLength(150)]
+    public string Racion { get; set; } = string.Empty;
+
+    [Required]
+    public decimal Cantidad { get; set; }
+
+    [Required, MaxLength(20)]
+    public string Unidad { get; set; } = string.Empty;
+
+    [Required, MaxLength(80)]
+    public string Frecuencia { get; set; } = string.Empty;
+
+    [Required]
+    public DateTime Inicio { get; set; }
+
+    public DateTime? Fin { get; set; }
+    public string? CambioDieta { get; set; }
+
+    public Guid IdAutor { get; set; }
+    public DateTime? EliminadoEn { get; set; }
 }

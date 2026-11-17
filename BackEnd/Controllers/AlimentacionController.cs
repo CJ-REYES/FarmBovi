@@ -1,6 +1,7 @@
 using FarmBovi.Api.Data;
 using FarmBovi.Api.DTOs;
 using FarmBovi.Api.Models;
+using FarmBovi.Api.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -8,115 +9,129 @@ namespace FarmBovi.Api.Controllers;
 
 [ApiController]
 [Route("api/alimentacion")]
-[Route("api/feeding")]
-public sealed class AlimentacionController(FarmDbContext db) : ControllerBase
+public sealed class AlimentacionController(FarmDbContext db, FarmDomainValidationService validator) : ControllerBase
 {
     [HttpGet]
-    public async Task<ActionResult<List<Alimentacion>>> GetAll([FromQuery] int? idRancho, CancellationToken ct)
+    public Task<List<Alimentacion>> GetAll([FromQuery] bool incluirEliminados = false, CancellationToken ct = default)
     {
-        var query = db.Alimentaciones
-            .AsNoTracking()
-            .Where(a => a.EliminadoEn == null);
+        var query = db.Alimentaciones.AsNoTracking();
+        if (!incluirEliminados)
+            query = query.Where(a => a.EliminadoEn == null);
 
-        if (idRancho.HasValue)
-        {
-            int r = idRancho.Value;
-            
-            // Solución definitiva: filtramos usando los IDs convertidos/mapeados de forma segura
-            query = query.Where(a => 
-                (!string.IsNullOrEmpty(a.IdLote) && db.Lotes.Any(lote => lote.IdLote.ToString() == a.IdLote && lote.IdRancho == r)) ||
-                (!string.IsNullOrEmpty(a.IdAnimal) && db.Animales.Any(animal => animal.IdAnimal.ToString() == a.IdAnimal && animal.IdRancho == r))
-            );
-        }
-
-        var lista = await query.ToListAsync(ct);
-        return Ok(lista);
+        return query.ToListAsync(ct);
     }
 
-    [HttpGet("{id:int}")]
-    public async Task<ActionResult<Alimentacion>> Get(int id, CancellationToken ct)
-    {
-        var item = await db.Alimentaciones.FindAsync([id], ct);
-        return item is not null ? Ok(item) : NotFound();
-    }
+    [HttpGet("{id:guid}")]
+    public async Task<ActionResult<Alimentacion>> Get(Guid id, CancellationToken ct) =>
+        await db.Alimentaciones.AsNoTracking().FirstOrDefaultAsync(a => a.IdAlimentacion == id, ct) is { } item
+            ? Ok(item)
+            : NotFound();
 
     [HttpPost]
     public async Task<ActionResult<Alimentacion>> Create(AlimentacionCreateDto dto, CancellationToken ct)
     {
+        var id = dto.IdAlimentacion is { } clientId && clientId != Guid.Empty
+            ? clientId
+            : Guid.NewGuid();
+
+        var existing = await db.Alimentaciones.AsNoTracking().FirstOrDefaultAsync(a => a.IdAlimentacion == id, ct);
+        if (existing is not null)
+            return Ok(existing);
+
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor, ct);
+        if (authorError is not null) return BadRequest(authorError);
+
+        var inicio = dto.Inicio == default ? DateTime.UtcNow : dto.Inicio;
+        var validationError = await validator.ValidateAlimentacionAsync(dto.IdAnimal, dto.IdLote, dto.Cantidad, inicio, dto.Fin, ct);
+        if (validationError is not null) return BadRequest(validationError);
+
         var alimentacion = new Alimentacion
         {
+            IdAlimentacion = id,
             IdAnimal = dto.IdAnimal,
             IdLote = dto.IdLote,
-            Alimento = dto.Alimento,
-            Racion = dto.Racion,
+            Alimento = dto.Alimento.Trim(),
+            Racion = dto.Racion.Trim(),
             Cantidad = dto.Cantidad,
-            Unidad = dto.Unidad,
-            Frecuencia = dto.Frecuencia,
-            Inicio = dto.Inicio,
+            Unidad = dto.Unidad.Trim(),
+            Frecuencia = dto.Frecuencia.Trim(),
+            Inicio = inicio,
             Fin = dto.Fin,
             CambioDieta = dto.CambioDieta,
-            IdAutor = dto.IdAutor
+            IdAutor = authorId,
+            CreadoEn = DateTime.UtcNow,
+            VersionRegistro = 1
         };
 
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
         db.Alimentaciones.Add(alimentacion);
-
-        try 
-        { 
-            await db.SaveChangesAsync(ct); 
-        } 
-        catch (DbUpdateException) 
-        { 
-            return Conflict("No se pudo registrar la alimentación, verifique las referencias."); 
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            await tx.RollbackAsync(ct);
+            return Conflict("No se pudo registrar la alimentación; verifica las referencias.");
         }
 
         return CreatedAtAction(nameof(Get), new { id = alimentacion.IdAlimentacion }, alimentacion);
     }
 
-    [HttpPut("{id:int}")]
-    public async Task<IActionResult> Update(int id, AlimentacionCreateDto input, CancellationToken ct)
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Update(Guid id, AlimentacionUpdateDto dto, CancellationToken ct)
     {
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
         var item = await db.Alimentaciones.FindAsync([id], ct);
         if (item is null) return NotFound();
 
-        item.IdAnimal = input.IdAnimal;
-        item.IdLote = input.IdLote;
-        item.Alimento = input.Alimento;
-        item.Racion = input.Racion;
-        item.Cantidad = input.Cantidad;
-        item.Unidad = input.Unidad;
-        item.Frecuencia = input.Frecuencia;
-        item.Inicio = input.Inicio;
-        item.Fin = input.Fin;
-        item.CambioDieta = input.CambioDieta;
-        item.IdAutor = input.IdAutor;
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor, ct);
+        if (authorError is not null) return BadRequest(authorError);
 
-        try 
-        { 
-            await db.SaveChangesAsync(ct); 
-        } 
-        catch (DbUpdateException) 
-        { 
-            return Conflict("No se pudo actualizar el registro de alimentación."); 
+        var validationError = await validator.ValidateAlimentacionAsync(dto.IdAnimal, dto.IdLote, dto.Cantidad, dto.Inicio, dto.Fin, ct);
+        if (validationError is not null) return BadRequest(validationError);
+
+        item.IdAnimal = dto.IdAnimal;
+        item.IdLote = dto.IdLote;
+        item.Alimento = dto.Alimento.Trim();
+        item.Racion = dto.Racion.Trim();
+        item.Cantidad = dto.Cantidad;
+        item.Unidad = dto.Unidad.Trim();
+        item.Frecuencia = dto.Frecuencia.Trim();
+        item.Inicio = dto.Inicio;
+        item.Fin = dto.Fin;
+        item.CambioDieta = dto.CambioDieta;
+        item.IdAutor = authorId;
+        item.EliminadoEn = dto.EliminadoEn;
+        item.VersionRegistro++;
+
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            await tx.RollbackAsync(ct);
+            return Conflict("No se pudo actualizar la alimentación; verifica las referencias.");
         }
 
         return NoContent();
     }
 
-    [HttpDelete("{id:int}")]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         var item = await db.Alimentaciones.FindAsync([id], ct);
         if (item is null) return NotFound();
 
-        db.Alimentaciones.Remove(item);
-
-        try 
-        { 
-            await db.SaveChangesAsync(ct); 
-        } 
-        catch (DbUpdateException) 
-        { 
-            return Conflict("No se pudo eliminar el registro debido a restricciones de datos."); 
+        if (item.EliminadoEn is null)
+        {
+            item.EliminadoEn = DateTime.UtcNow;
+            item.VersionRegistro++;
+            await db.SaveChangesAsync(ct);
         }
 
         return NoContent();

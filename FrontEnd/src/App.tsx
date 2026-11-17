@@ -2,6 +2,8 @@ import { createBrowserRouter, RouterProvider, Navigate } from 'react-router-dom'
 import { CattleProvider } from './context/CattleContext';
 import AppShell from './components/layout/AppShell';
 import { DashboardPage } from './components/dashboard/DashboardPage';
+import { useEffect } from 'react';
+import { SyncScheduler } from './services/sync/sync-scheduler';
 
 // Módulo Bovinos
 import CattleListPage from './components/cattle/CattleListPage';
@@ -58,6 +60,12 @@ const router = createBrowserRouter([
 ]);
 
 export function App() {
+useEffect(() => {
+    SyncScheduler.start();
+    return () => {
+      SyncScheduler.stop();
+    };
+  }, []);
   return (
     <CattleProvider>
       <RouterProvider router={router} />

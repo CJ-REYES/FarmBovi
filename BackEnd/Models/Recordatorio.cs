@@ -1,23 +1,44 @@
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+
 namespace FarmBovi.Api.Models;
 
-using System.ComponentModel.DataAnnotations;
-
+[Table("Recordatorios")]
 public sealed class Recordatorio
 {
     [Key]
-    public int IdRecordatorio { get; set; }
-    public int IdRancho { get; set; }
-    public int? IdAnimal { get; set; }
-    public int? IdLote { get; set; }
-    public int? IdTratamiento { get; set; }
-    public int? IdResponsable { get; set; }
+    public Guid IdRecordatorio { get; set; } = Guid.NewGuid();
+
+    [Required]
+    public Guid IdRancho { get; set; }
+
+    public Guid? IdAnimal { get; set; }
+    public Guid? IdLote { get; set; }
+    public Guid? IdTratamiento { get; set; }
+    public Guid? IdResponsable { get; set; }
+
+    [Required, MaxLength(50)]
     public string Tipo { get; set; } = string.Empty;
+
+    [Required, MaxLength(500)]
     public string Descripcion { get; set; } = string.Empty;
+
+    [Required]
     public DateTime FechaProgramada { get; set; }
+
+    [Required, MaxLength(30)]
     public string Estado { get; set; } = string.Empty;
+
     public DateTime? FechaCompletado { get; set; }
-    public int IdAutor { get; set; }
-    public DateTime CreadoEn { get; set; }
-    public long VersionRegistro { get; set; }
+
+    [Required]
+    public Guid IdAutor { get; set; }
+
+    [Required]
+    public DateTime CreadoEn { get; set; } = DateTime.UtcNow;
+
+    [Required]
+    public long VersionRegistro { get; set; } = 1;
+
     public DateTime? EliminadoEn { get; set; }
 }

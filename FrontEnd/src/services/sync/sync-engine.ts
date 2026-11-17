@@ -1,109 +1,76 @@
-import { db } from '../../lib/database/db';
-// Importación desactivada temporalmente hasta que el backend integre idempotencia
-// import { cattleApi } from '../../lib/api';
-import { OutboxService } from './outbox.service';
-import { ConflictResolver } from './conflict-resolver';
-import type { LocalOutboxQueue, LocalCattle } from '../../lib/database/schema';
+import { PushSyncEngine } from './push-sync.engine';
+import { SyncPullEngine, type PullEntitySummary } from './sync-pull.engine';
+import { BoviScaleAnalysisService } from '../boviscale-analysis.service';
 
-// Definición estricta para evitar aserciones "any"
-interface ConflictApiError {
-  status?: number;
-  data?: {
-    serverState?: Partial<LocalCattle>;
-  };
+export type PushEngineResult = Awaited<
+  ReturnType<typeof PushSyncEngine.pushPendingOperations>
+>;
+
+export interface FullSyncCycleResult {
+  push: PushEngineResult;
+  pull: PullEntitySummary[];
+  pushCompleted: boolean;
+  pullCompleted: boolean;
+  allTasksCompleted: boolean;
+  finishedAt: string;
 }
 
+let activeEngineCycle: Promise<FullSyncCycleResult | null> | null = null;
+
 export const SyncEngine = {
-  isSyncing: false,
-
-  async sync(): Promise<void> {
-    if (this.isSyncing || typeof navigator === 'undefined' || !navigator.onLine) return;
-
-    try {
-      this.isSyncing = true;
-      await this.pushChanges();
-      await this.pullChanges();
-    } catch (err) {
-      console.error('Error crítico en el ciclo de sincronización:', err);
-    } finally {
-      this.isSyncing = false;
-    }
+  get isSyncing(): boolean {
+    return activeEngineCycle !== null;
   },
 
-  async pushChanges(): Promise<void> {
-    const operations = await OutboxService.getPendingOperations();
+  async sync(): Promise<FullSyncCycleResult | null> {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      return null;
+    }
 
-    for (const op of operations) {
-      if (op.attempts > 10) continue;
+    // Evita dos ejecuciones simultáneas devolviendo la promesa activa
+    if (activeEngineCycle) {
+      return await activeEngineCycle;
+    }
 
+    activeEngineCycle = (async () => {
       try {
-        await OutboxService.markAsSyncing(op.id);
+        const push = await this.pushChanges();
+        const pull = await this.pullChanges();
+        await BoviScaleAnalysisService.processPendingQueue();
 
-        await this.executeOperation(op);
+        const pushCompleted =
+          push.status === 'completed' &&
+          push.transientErrorCount === 0 &&
+          push.validationErrorCount === 0 &&
+          push.conflictCount === 0;
 
-        await OutboxService.markAsSynced(op.id);
-        await db.cattle.update(op.entityId, { syncStatus: 'synced' });
+        const pullCompleted =
+          pull.length > 0 && pull.every((item) => item.status === 'completed');
 
-      } catch (err: unknown) {
-        // Validación estricta sin usar "any"
-        const conflictErr = err as ConflictApiError;
-        if (conflictErr && typeof conflictErr === 'object' && conflictErr.status === 409) {
-          const localRecord = await db.cattle.get(op.entityId);
-          const serverState = conflictErr.data?.serverState;
-
-          if (localRecord && serverState) {
-            await ConflictResolver.registerConflict(op.entityId, localRecord, serverState);
-            await OutboxService.markAsSynced(op.id);
-          }
-        } else {
-          const errorMsg = err instanceof Error ? err.message : 'Network/Server Error';
-          await OutboxService.markAsFailed(op.id, errorMsg);
-
-          await new Promise(res => setTimeout(res, OutboxService.calculateBackoff(op.attempts)));
-        }
+        return {
+          push,
+          pull,
+          pushCompleted,
+          pullCompleted,
+          allTasksCompleted: pushCompleted && pullCompleted,
+          finishedAt: new Date().toISOString()
+        };
+      } catch (err) {
+        console.error('Error en el ciclo de sincronización:', err);
+        return null;
+      } finally {
+        activeEngineCycle = null;
       }
-    }
+    })();
+
+    return await activeEngineCycle;
   },
 
-  async executeOperation(op: LocalOutboxQueue): Promise<void> {
-    // const payload = op.payload as CattleInput;
-
-    switch (op.operation) {
-      case 'CREATE': { // Se usan corchetes para aislar el alcance de las variables (lexical declaration)
-        // REQUIERE: cattleApi.createWithIdempotency(payload, op.id);
-        console.debug('Simulando CREATE saliente idempotente', op.id);
-        break;
-      }
-      case 'UPDATE': {
-        const record = await db.cattle.get(op.entityId);
-        if (record?.remoteId) {
-          // REQUIERE: cattleApi.updateWithVersion(Number(record.remoteId), payload, record.serverVersion);
-          console.debug('Simulando UPDATE saliente concurrente', record.remoteId);
-        }
-        break;
-      }
-      case 'DELETE': {
-        const toDelete = await db.cattle.get(op.entityId);
-        if (toDelete?.remoteId) {
-           // REQUIERE: cattleApi.removeLogically(Number(toDelete.remoteId));
-           console.debug('Simulando DELETE saliente lógico', toDelete.remoteId);
-        }
-        break;
-      }
-    }
+  async pushChanges(): Promise<PushEngineResult> {
+    return await PushSyncEngine.pushPendingOperations();
   },
 
-  async pullChanges(): Promise<void> {
-    const meta = await db.syncMetadata.get('cattle');
-
-    // Preparado para el cursor vectorial:
-    // const lastSync = meta?.lastSyncedAt || new Date(0).toISOString();
-    // const deltas = await cattleApi.getSyncDelta(lastSync);
-    console.debug('Cursor local de sincronización:', meta?.lastSyncedAt);
-
-    await db.syncMetadata.put({
-      entityName: 'cattle',
-      lastSyncedAt: new Date().toISOString()
-    });
+  async pullChanges(): Promise<PullEntitySummary[]> {
+    return await SyncPullEngine.pullAllEntities();
   }
 };

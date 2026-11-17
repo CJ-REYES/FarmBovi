@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import type { Cattle, CattleInput } from '../types/cattle';
 import { CattleService } from '../services/cattle.service';
 import { MigrationService } from '../lib/database/migration-service';
@@ -20,24 +20,22 @@ export function CattleProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState<boolean>(true);
   const [source, setSource] = useState<'cache' | 'server' | 'unavailable'>('cache');
   const [error, setError] = useState<string | null>(null);
+  const mutationLockRef = useRef<boolean>(false);
 
- const fetchCattle = useCallback(async () => {
+  const fetchCattle = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       await MigrationService.migrateLegacyCacheIfNeeded();
       const result = await CattleService.getAll();
 
-      const normalizedCattle: Cattle[] = result.data.map((item) => {
-        return {
-          ...item,
-          // Conservamos el id exacto proveniente de toCattle (remoto o negativo)
-          earTag: item.earTag || item.tagNumber || item.areteSiniiga || '',
-          name: item.name || item.nombre || '',
-          breed: item.breed || item.raza || '',
-          sex: item.sex || 'Hembra'
-        } as Cattle; // Casting seguro
-      });
+      const normalizedCattle: Cattle[] = result.data.map((item) => ({
+        ...item,
+        earTag: item.earTag || item.tagNumber || item.areteSiniiga || '',
+        name: item.name || item.nombre || '',
+        breed: item.breed || item.raza || '',
+        sex: item.sex || 'Hembra'
+      } as Cattle));
 
       setCattle(normalizedCattle);
       setSource(result.source);
@@ -56,6 +54,8 @@ export function CattleProvider({ children }: { children: ReactNode }) {
   }, [fetchCattle]);
 
   const save = async (data: CattleInput, id?: number) => {
+    if (mutationLockRef.current) return;
+    mutationLockRef.current = true;
     setLoading(true);
     try {
       await CattleService.save(data, id);
@@ -64,11 +64,14 @@ export function CattleProvider({ children }: { children: ReactNode }) {
       console.error('Error al guardar bovino:', err);
       throw err;
     } finally {
+      mutationLockRef.current = false;
       setLoading(false);
     }
   };
 
   const remove = async (id: number) => {
+    if (mutationLockRef.current) return;
+    mutationLockRef.current = true;
     setLoading(true);
     try {
       await CattleService.delete(id);
@@ -77,6 +80,7 @@ export function CattleProvider({ children }: { children: ReactNode }) {
       console.error('Error al eliminar bovino:', err);
       throw err;
     } finally {
+      mutationLockRef.current = false;
       setLoading(false);
     }
   };

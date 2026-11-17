@@ -10,7 +10,10 @@ import type {
   LocalGenealogy,
   LocalAlert,
   LocalMedia,
+  LocalWeighingAnalysisJob,
   LocalOutboxQueue,
+  LocalSyncConflict,
+  LocalSyncCheckpoint,
   LocalSyncMetadata
 } from './schema';
 import { configureMigrations } from './migrations';
@@ -26,7 +29,10 @@ export class FarmBoviLocalDB extends Dexie {
   genealogy!: Table<LocalGenealogy, string>;
   alerts!: Table<LocalAlert, string>;
   media!: Table<LocalMedia, string>;
+  weighingAnalysisJobs!: Table<LocalWeighingAnalysisJob, string>;
   outbox!: Table<LocalOutboxQueue, string>;
+  syncConflicts!: Table<LocalSyncConflict, string>;
+  syncCheckpoints!: Table<LocalSyncCheckpoint, string>;
   syncMetadata!: Table<LocalSyncMetadata, string>;
 
   constructor() {
@@ -35,12 +41,8 @@ export class FarmBoviLocalDB extends Dexie {
   }
 }
 
-// Instancia única exportada para toda la aplicación
 export const db = new FarmBoviLocalDB();
 
-/**
- * Servicio de control de almacenamiento del navegador (Storage Manager)
- */
 export const StorageManager = {
   async getStorageEstimate(): Promise<{ usage?: number; quota?: number; percentage?: number }> {
     if (typeof navigator !== 'undefined' && navigator.storage && navigator.storage.estimate) {
@@ -60,8 +62,7 @@ export const StorageManager = {
   async requestPersistentStorage(): Promise<boolean> {
     if (typeof navigator !== 'undefined' && navigator.storage && navigator.storage.persist) {
       try {
-        const isPersisted = await navigator.storage.persist();
-        return isPersisted;
+        return await navigator.storage.persist();
       } catch (error) {
         console.warn('No se pudo conceder almacenamiento persistente:', error);
       }
