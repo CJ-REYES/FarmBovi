@@ -82,3 +82,9 @@ Para hacer obligatoria la ejecución contra MySQL/MariaDB real (como en CI):
 FARMBOVI_REQUIRE_REAL_DB=true dotnet test FarmBovi.sln --configuration Release
 ```
 *(Si no se define `FARMBOVI_REQUIRE_REAL_DB=true` y no hay servidor MySQL/MariaDB accesible, los tests de integración MySQL se reportan explícitamente como `Skipped`.)*
+
+## Estrategia de migración y reversión (`Down()`)
+
+- La migración `20261116232038_AddSincronizacionYAuditoriaModels` es incremental sobre `20261116071310_InitialMySqlModels`: convierte las tablas existentes de claves `int` a `char(36)` (`Guid`) conservando filas y relaciones, y crea `RegistroSyncServidor` y `CambioServidor`.
+- **Irreversibilidad explícita:** El método `Down()` lanza `NotSupportedException` de forma intencional. La conversión `int -> Guid` descarta los identificadores enteros originales (y los registros sincronizados offline nacen directamente con `Guid`), por lo que una reversión automática destruiría identidades o dejaría el esquema inconsistente.
+- **Procedimiento de rollback:** Antes de aplicar esta migración en un entorno con datos, generar un respaldo completo (`mysqldump` / snapshot). En caso de requerir reversión, restaurar dicho respaldo en lugar de ejecutar `dotnet ef database update 20261116071310_InitialMySqlModels`.

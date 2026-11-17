@@ -412,11 +412,20 @@ namespace FarmBovi.Api.Migrations
             migrationBuilder.AddForeignKey(name: "FK_MovimientoAnimal_Usuario_IdAutor", table: "MovimientoAnimal", column: "IdAutor", principalTable: "Usuario", principalColumn: "IdUsuario", onDelete: ReferentialAction.Restrict);
         }
 
-        /// <inheritdoc />
+        /// <summary>
+        /// Migración irreversible: <see cref="Up"/> convierte claves primarias y foráneas de <c>int</c>
+        /// a <c>char(36)</c> (<see cref="Guid"/>) descartando los identificadores enteros originales.
+        /// Revertir parcialmente eliminando solo <c>CambioServidor</c> y <c>RegistroSyncServidor</c>
+        /// dejaría el esquema inconsistente respecto a la migración inicial; para revertir en producción
+        /// se debe restaurar el respaldo previo de la base de datos.
+        /// </summary>
+        /// <exception cref="NotSupportedException">Siempre lanzada porque la conversión <c>int</c> a <c>Guid</c> no es reversible sin pérdida de identidad.</exception>
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.DropTable(name: "CambioServidor");
-            migrationBuilder.DropTable(name: "RegistroSyncServidor");
+            throw new NotSupportedException(
+                "La migración 20261116232038_AddSincronizacionYAuditoriaModels es irreversible: " +
+                "la conversión de claves primarias y foráneas de int a char(36) (Guid) descarta los IDs enteros originales. " +
+                "Para revertir este cambio, restaure un respaldo previo de la base de datos.");
         }
     }
 }
