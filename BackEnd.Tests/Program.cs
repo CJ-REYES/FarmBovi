@@ -131,10 +131,21 @@ try
         $"api/sync/cambios?idRancho={allowedRanchId}&limite=1");
     Check(firstPage is not null && firstPage.Cambios.Count == 1 && firstPage.HayMas &&
           firstPage.Cambios[0].Datos is not null, "Pull entrega primera página y datos");
+    var firstPageJson = await client.GetStringAsync(
+        $"api/sync/cambios?idRancho={allowedRanchId}&limite=1");
+    using (var pullContract = System.Text.Json.JsonDocument.Parse(firstPageJson))
+    {
+        var root = pullContract.RootElement;
+        Check(root.TryGetProperty("cursorSiguiente", out _) && root.TryGetProperty("hayMas", out _) &&
+              !root.TryGetProperty("siguienteCursor", out _) &&
+              root.GetProperty("cambios")[0].TryGetProperty("idRegistro", out _) &&
+              root.GetProperty("cambios")[0].TryGetProperty("ocurrioEn", out _),
+            "Pull publica los nombres acordados del contrato");
+    }
     var secondPage = await client.GetFromJsonAsync<CambiosResponse>(
-        $"api/sync/cambios?idRancho={allowedRanchId}&limite=1&cursor={Uri.EscapeDataString(firstPage!.SiguienteCursor!)}");
+        $"api/sync/cambios?idRancho={allowedRanchId}&limite=1&cursor={Uri.EscapeDataString(firstPage!.CursorSiguiente!)}");
     Check(secondPage is not null && secondPage.Cambios.Count == 1 && !secondPage.HayMas &&
-          secondPage.Cambios[0].Operacion == "Eliminar" && secondPage.Cambios[0].Datos is null,
+          secondPage.Cambios[0].Operacion == "ELIMINAR" && secondPage.Cambios[0].Datos is null,
         "Pull pagina sin perder eliminaciones");
 
     var pushId = Guid.NewGuid();
@@ -215,7 +226,7 @@ try
     var pullAfterPush = await client.GetFromJsonAsync<CambiosResponse>(
         $"api/sync/cambios?idRancho={allowedRanchId}&limite=100");
     Check(pullAfterPush is not null && pullAfterPush.Cambios.Any(c => c.IdCambio == pushCreated!.IdCambio) &&
-          pullAfterPush.Cambios.Any(c => c.IdRegistro == animalId && c.Operacion == "Eliminar"),
+          pullAfterPush.Cambios.Any(c => c.IdRegistro == animalId && c.Operacion == "ELIMINAR"),
         "Pull entrega cambios de Push y la eliminación registrada");
 
     client.DefaultRequestHeaders.Authorization = null;

@@ -12,7 +12,7 @@ namespace FarmBovi.Api.Controllers;
 public sealed record CambioResponse(Guid IdCambio, Guid IdRancho, string Entidad, Guid IdRegistro,
     string Operacion, long Version, DateTime OcurrioEn, Guid? IdUsuario, JsonElement? Datos);
 
-public sealed record CambiosResponse(IReadOnlyList<CambioResponse> Cambios, string? SiguienteCursor, bool HayMas);
+public sealed record CambiosResponse(IReadOnlyList<CambioResponse> Cambios, string? CursorSiguiente, bool HayMas);
 
 [ApiController]
 [Route("api/sync/cambios")]
@@ -56,7 +56,7 @@ public sealed class SyncController(FarmDbContext db) : ControllerBase
         if (hasMore) page.RemoveAt(limite);
 
         var changes = page.Select(c => new CambioResponse(c.IdCambio, c.IdRancho, c.Entidad,
-            c.IdRegistro, c.Operacion, c.Version, DateTime.SpecifyKind(c.OcurrioEn, DateTimeKind.Utc),
+            c.IdRegistro, c.Operacion.ToUpperInvariant(), c.Version, DateTime.SpecifyKind(c.OcurrioEn, DateTimeKind.Utc),
             c.IdUsuario, ParseData(c.Datos))).ToList();
         var next = page.Count == 0 ? null : EncodeCursor(page[^1].OcurrioEn, page[^1].IdCambio);
         return Ok(new CambiosResponse(changes, next, hasMore));
