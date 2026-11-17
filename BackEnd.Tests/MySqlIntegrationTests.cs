@@ -1,0 +1,375 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text.Json;
+using FarmBovi.Api.Controllers;
+using FarmBovi.Api.Data;
+using FarmBovi.Api.DTOs;
+using FarmBovi.Api.Models;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
+using MySql.Data.MySqlClient;
+using Xunit;
+
+namespace FarmBovi.Tests;
+
+public sealed class MySqlIntegrationFactAttribute : FactAttribute
+{
+    public MySqlIntegrationFactAttribute()
+    {
+        var requireRealDb = string.Equals(
+            Environment.GetEnvironmentVariable("FARMBOVI_REQUIRE_REAL_DB"),
+            "true",
+            StringComparison.OrdinalIgnoreCase);
+
+        if (requireRealDb)
+            return;
+
+        if (!MySqlTestHelper.CanConnectServer())
+        {
+            Skip = "Servidor MySQL/MariaDB no disponible en este entorno. Define FARMBOVI_REQUIRE_REAL_DB=true para hacerlo obligatorio.";
+        }
+    }
+}
+
+internal static class MySqlTestHelper
+{
+    public static string GetBaseConnectionString() =>
+        Environment.GetEnvironmentVariable("FARMBOVI_TEST_CONNECTION")
+        ?? "Server=localhost;Port=3306;Database=farmbovi;User ID=farmbovi;Password=change_me;";
+
+    public static bool CanConnectServer()
+    {
+        try
+        {
+            var builder = new MySqlConnectionStringBuilder(GetBaseConnectionString())
+            {
+                ConnectionTimeout = 3
+            };
+            using var conn = new MySqlConnection(builder.ConnectionString);
+            conn.Open();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static FarmDbContext CreateContext(string connectionString) => new(
+        new DbContextOptionsBuilder<FarmDbContext>()
+            .UseMySQL(connectionString)
+            .ReplaceService<IHistoryRepository, MariaDbCompatibleHistoryRepository>()
+            .Options);
+
+    /// <summary>
+    /// Prepara una base de datos limpia. Si el usuario tiene permisos para CREATE DATABASE,
+    /// usa una base temporal aislada; de lo contrario, limpia las tablas de la base configurada.
+    /// </summary>
+    public static async Task<(string ConnectionString, bool IsIsolatedDatabase, string IsolatedDbName)> PrepareCleanDatabaseAsync(string prefix)
+    {
+        var baseConn = GetBaseConnectionString();
+        var baseBuilder = new MySqlConnectionStringBuilder(baseConn);
+        var isolatedName = $"{prefix}_{Guid.NewGuid():N}"[..32];
+
+        try
+        {
+            var rootBuilder = new MySqlConnectionStringBuilder(baseConn) { Database = string.Empty };
+            await using var conn = new MySqlConnection(rootBuilder.ConnectionString);
+            await conn.OpenAsync();
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"DROP DATABASE IF EXISTS `{isolatedName}`; CREATE DATABASE `{isolatedName}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;";
+            await cmd.ExecuteNonQueryAsync();
+
+            var isolatedBuilder = new MySqlConnectionStringBuilder(baseConn) { Database = isolatedName };
+            return (isolatedBuilder.ConnectionString, true, isolatedName);
+        }
+        catch (MySqlException ex) when (ex.Number is 1044 or 1045)
+        {
+            await DropAllTablesInDatabaseAsync(baseConn);
+            return (baseConn, false, baseBuilder.Database);
+        }
+    }
+
+    public static async Task CleanupDatabaseAsync(string connectionString, bool isIsolatedDatabase, string databaseName)
+    {
+        if (isIsolatedDatabase)
+        {
+            var rootBuilder = new MySqlConnectionStringBuilder(connectionString) { Database = string.Empty };
+            await using var conn = new MySqlConnection(rootBuilder.ConnectionString);
+            await conn.OpenAsync();
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"DROP DATABASE IF EXISTS `{databaseName}`;";
+            await cmd.ExecuteNonQueryAsync();
+            return;
+        }
+
+        // Restaurar la base local limpia con todas las migraciones aplicadas
+        await DropAllTablesInDatabaseAsync(connectionString);
+        await using var db = CreateContext(connectionString);
+        await db.Database.MigrateAsync();
+    }
+
+    private static async Task DropAllTablesInDatabaseAsync(string connectionString)
+    {
+        await using var conn = new MySqlConnection(connectionString);
+        await conn.OpenAsync();
+
+        var tables = new List<string>();
+        await using (var listCmd = conn.CreateCommand())
+        {
+            listCmd.CommandText = "SHOW TABLES;";
+            await using var reader = await listCmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                tables.Add(reader.GetString(0));
+            }
+        }
+
+        if (tables.Count == 0) return;
+
+        await using var dropCmd = conn.CreateCommand();
+        var escaped = string.Join(", ", tables.Select(t => $"`{t.Replace("`", "``")}`"));
+        dropCmd.CommandText = $"SET FOREIGN_KEY_CHECKS = 0; DROP TABLE IF EXISTS {escaped}; SET FOREIGN_KEY_CHECKS = 1;";
+        await dropCmd.ExecuteNonQueryAsync();
+    }
+}
+
+[CollectionDefinition("MySqlIntegration", DisableParallelization = true)]
+public sealed class MySqlIntegrationCollectionDefinition { }
+
+[Collection("MySqlIntegration")]
+public sealed class MySqlIntegrationTests
+{
+    private static void AttachJwtUser(ControllerBase controller, Guid userId)
+    {
+        var identity = new ClaimsIdentity(
+        [
+            new Claim(JwtRegisteredClaimNames.Sub, userId.ToString("D")),
+            new Claim(ClaimTypes.NameIdentifier, userId.ToString("D"))
+        ], "Bearer");
+        controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { User = new ClaimsPrincipal(identity) }
+        };
+    }
+
+    [MySqlIntegrationFact]
+    public async Task MigracionIncremental_BaseNuevaVacia_AplicaLimpiaYEjecutaPushConcurrenteYConcurrenciaOptimista()
+    {
+        var (connStr, isIsolated, dbName) = await MySqlTestHelper.PrepareCleanDatabaseAsync("fb_fresh");
+
+        try
+        {
+            await using (var db = MySqlTestHelper.CreateContext(connStr))
+            {
+                await db.Database.MigrateAsync();
+                Assert.False(db.Database.HasPendingModelChanges());
+            }
+
+            var userId = Guid.NewGuid();
+            var ranchoId = Guid.NewGuid();
+            var loteId = Guid.NewGuid();
+
+            await using (var seedDb = MySqlTestHelper.CreateContext(connStr))
+            {
+                seedDb.Usuarios.Add(new Usuario
+                {
+                    IdUsuario = userId,
+                    Nombre = "Roberto",
+                    Correo = "roberto.mysql@farmbovi.local",
+                    Contrasena = "hash",
+                    Estado = "Activo"
+                });
+                seedDb.Ranchos.Add(new Rancho
+                {
+                    IdRancho = ranchoId,
+                    Nombre = "Rancho MySQL",
+                    UbicacionGeneral = "Norte",
+                    Estado = "Activo",
+                    IdAutor = userId
+                });
+                seedDb.UsuarioRanchos.Add(new UsuarioRancho
+                {
+                    IdUsuarioRancho = Guid.NewGuid(),
+                    IdUsuario = userId,
+                    IdRancho = ranchoId,
+                    Rol = "Admin",
+                    Estado = "Activo"
+                });
+                seedDb.Lotes.Add(new Lote
+                {
+                    IdLote = loteId,
+                    IdRancho = ranchoId,
+                    Nombre = "Lote MySQL",
+                    Estado = "Activo",
+                    IdAutor = userId
+                });
+                await seedDb.SaveChangesAsync();
+                seedDb.CambiosServidor.RemoveRange(seedDb.CambiosServidor);
+                await seedDb.SaveChangesAsync();
+            }
+
+            // Idempotencia concurrente entre dos instancias independientes contra MySQL/MariaDB real
+            var opId = Guid.NewGuid();
+            var animalId = Guid.NewGuid();
+            var payloadA = JsonDocument.Parse($$"""{"idAnimal":"{{animalId}}","idLote":"{{loteId}}","arete":"MYSQL-001","raza":"Brangus","sexo":"Macho","procedencia":"Propio","estado":"Activo"}""").RootElement;
+            var payloadB = JsonDocument.Parse($$"""{"estado":"Activo","procedencia":"Propio","sexo":"Macho","raza":"Brangus","arete":"MYSQL-001","idLote":"{{loteId}}","idAnimal":"{{animalId}}"}""").RootElement;
+
+            var dupResults = await Task.WhenAll(
+                Task.Run(async () =>
+                {
+                    await using var db1 = MySqlTestHelper.CreateContext(connStr);
+                    var c1 = new SincronizacionController(db1);
+                    AttachJwtUser(c1, userId);
+                    return await c1.RecibirOperacion(new OperacionSyncRequest
+                    {
+                        IdOperacion = opId,
+                        IdRancho = ranchoId,
+                        IdDispositivo = "instancia-a",
+                        Entidad = "Animal",
+                        IdRegistro = animalId,
+                        Operacion = "Crear",
+                        Payload = payloadA
+                    }, default);
+                }),
+                Task.Run(async () =>
+                {
+                    await using var db2 = MySqlTestHelper.CreateContext(connStr);
+                    var c2 = new SincronizacionController(db2);
+                    AttachJwtUser(c2, userId);
+                    return await c2.RecibirOperacion(new OperacionSyncRequest
+                    {
+                        IdOperacion = opId,
+                        IdRancho = ranchoId,
+                        IdDispositivo = "instancia-a",
+                        Entidad = "Animal",
+                        IdRegistro = animalId,
+                        Operacion = "Crear",
+                        Payload = payloadB
+                    }, default);
+                }));
+
+            Assert.All(dupResults, r => Assert.True(r is CreatedAtActionResult or OkObjectResult));
+            Assert.Equal(1, dupResults.Count(r => r is OkObjectResult ok && ((OperacionSyncResponse)ok.Value!).DuplicadoIgnorado));
+
+            // Concurrencia optimista real en MySQL/MariaDB con dos instancias simultáneas
+            var concResults = await Task.WhenAll(
+                Task.Run(async () =>
+                {
+                    await using var db1 = MySqlTestHelper.CreateContext(connStr);
+                    var c1 = new SincronizacionController(db1);
+                    AttachJwtUser(c1, userId);
+                    return await c1.RecibirOperacion(new OperacionSyncRequest
+                    {
+                        IdOperacion = Guid.NewGuid(),
+                        IdRancho = ranchoId,
+                        IdDispositivo = "disp-1",
+                        Entidad = "Animal",
+                        IdRegistro = animalId,
+                        Operacion = "Actualizar",
+                        VersionBase = 1,
+                        Payload = JsonSerializer.SerializeToElement(new { raza = "Nelore" })
+                    }, default);
+                }),
+                Task.Run(async () =>
+                {
+                    await using var db2 = MySqlTestHelper.CreateContext(connStr);
+                    var c2 = new SincronizacionController(db2);
+                    AttachJwtUser(c2, userId);
+                    return await c2.RecibirOperacion(new OperacionSyncRequest
+                    {
+                        IdOperacion = Guid.NewGuid(),
+                        IdRancho = ranchoId,
+                        IdDispositivo = "disp-2",
+                        Entidad = "Animal",
+                        IdRegistro = animalId,
+                        Operacion = "Actualizar",
+                        VersionBase = 1,
+                        Payload = JsonSerializer.SerializeToElement(new { raza = "Charolais" })
+                    }, default);
+                }));
+
+            Assert.Equal(1, concResults.Count(r => r is OkObjectResult));
+            Assert.Equal(1, concResults.Count(r => r is ConflictObjectResult));
+
+            await using var verifyDb = MySqlTestHelper.CreateContext(connStr);
+            Assert.Equal(2, await verifyDb.CambiosServidor.CountAsync());
+        }
+        finally
+        {
+            await MySqlTestHelper.CleanupDatabaseAsync(connStr, isIsolated, dbName);
+        }
+    }
+
+    [MySqlIntegrationFact]
+    public async Task MigracionIncremental_BaseConDatosPrevios_ConservaDatosYRelaciones()
+    {
+        var (connStr, isIsolated, dbName) = await MySqlTestHelper.PrepareCleanDatabaseAsync("fb_legacy");
+
+        try
+        {
+            // 1. Aplicar únicamente la migración inicial anterior (int IDs)
+            await using (var db = MySqlTestHelper.CreateContext(connStr))
+            {
+                var migrator = db.GetService<IMigrator>();
+                await migrator.MigrateAsync("20261116071310_InitialMySqlModels");
+            }
+
+            // 2. Insertar datos reales previos con IDs enteros
+            await using (var conn = new MySqlConnection(connStr))
+            {
+                await conn.OpenAsync();
+                await using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    INSERT INTO `Usuario` (`Id`, `Nombre`, `Correo`, `Contrasena`, `Estado`)
+                    VALUES (1, 'Roberto Legacy', 'legacy@farmbovi.local', 'hash_legacy', 'Activo');
+
+                    INSERT INTO `Rancho` (`IdRancho`, `Nombre`, `UbicacionGeneral`, `Estado`, `IdAutor`, `CreadoEn`, `VersionRegistro`)
+                    VALUES (10, 'Rancho Legacy', 'Campeche', 'Activo', 1, UTC_TIMESTAMP(6), 1);
+
+                    INSERT INTO `UsuarioRancho` (`IdUsuarioRancho`, `IdUsuario`, `IdRancho`, `Rol`, `Estado`, `FechaAlta`)
+                    VALUES (100, 1, 10, 'Admin', 'Activo', UTC_TIMESTAMP(6));
+
+                    INSERT INTO `Lote` (`IdLote`, `IdRancho`, `Nombre`, `Ubicacion`, `Estado`, `IdAutor`, `FechaCreacion`, `VersionRegistro`)
+                    VALUES (20, 10, 'Lote Legacy', 'Zona 1', 'Activo', 1, UTC_TIMESTAMP(6), 1);
+
+                    INSERT INTO `Animal` (`IdAnimal`, `IdRancho`, `IdLote`, `Arete`, `Raza`, `Sexo`, `FechaIngreso`, `Procedencia`, `Estado`, `IdAutor`, `FechaCreacion`, `VersionRegistro`)
+                    VALUES (30, 10, 20, 'LEG-001', 'Brahman', 'Hembra', UTC_TIMESTAMP(6), 'Propio', 'Activo', 1, UTC_TIMESTAMP(6), 1);
+                    """;
+                await cmd.ExecuteNonQueryAsync();
+            }
+
+            // 3. Aplicar la migración incremental hacia el esquema actual (char(36) + Sync)
+            await using (var db = MySqlTestHelper.CreateContext(connStr))
+            {
+                await db.Database.MigrateAsync();
+            }
+
+            // 4. Verificar que todos los registros y relaciones sobrevivieron con UUID válidos
+            await using (var verifyDb = MySqlTestHelper.CreateContext(connStr))
+            {
+                var user = await verifyDb.Usuarios.SingleAsync(u => u.Correo == "legacy@farmbovi.local");
+                var rancho = await verifyDb.Ranchos.SingleAsync(r => r.Nombre == "Rancho Legacy");
+                var ur = await verifyDb.UsuarioRanchos.SingleAsync();
+                var lote = await verifyDb.Lotes.SingleAsync(l => l.Nombre == "Lote Legacy");
+                var animal = await verifyDb.Animales.SingleAsync(a => a.Arete == "LEG-001");
+
+                Assert.NotEqual(Guid.Empty, user.IdUsuario);
+                Assert.Equal(user.IdUsuario, rancho.IdAutor);
+                Assert.Equal(user.IdUsuario, ur.IdUsuario);
+                Assert.Equal(rancho.IdRancho, ur.IdRancho);
+                Assert.Equal(rancho.IdRancho, lote.IdRancho);
+                Assert.Equal(rancho.IdRancho, animal.IdRancho);
+                Assert.Equal(lote.IdLote, animal.IdLote);
+                Assert.Equal(user.IdUsuario, animal.IdAutor);
+            }
+        }
+        finally
+        {
+            await MySqlTestHelper.CleanupDatabaseAsync(connStr, isIsolated, dbName);
+        }
+    }
+}
