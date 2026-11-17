@@ -8,6 +8,7 @@ namespace FarmBovi.Api.Controllers;
 
 [ApiController]
 [Route("api/movimientos-animales")]
+[Route("api/animal-movements")]
 public sealed class MovimientoAnimalController(FarmDbContext db) : ControllerBase
 {
     [HttpGet]

@@ -7,6 +7,7 @@ namespace FarmBovi.Api.Controllers;
 
 [ApiController]
 [Route("api/recordatorios")]
+[Route("api/reminders")]
 public sealed class RecordatoriosController(FarmDbContext db) : ControllerBase
 {
     [HttpGet]

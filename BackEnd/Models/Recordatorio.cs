@@ -1,7 +1,10 @@
 namespace FarmBovi.Api.Models;
 
+using System.ComponentModel.DataAnnotations;
+
 public sealed class Recordatorio
 {
+    [Key]
     public int IdRecordatorio { get; set; }
     public int IdRancho { get; set; }
     public int? IdAnimal { get; set; }

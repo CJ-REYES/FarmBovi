@@ -7,6 +7,7 @@ namespace FarmBovi.Api.Controllers;
 
 [ApiController]
 [Route("api/pesajes")]
+[Route("api/weights")]
 public sealed class PesajesController(FarmDbContext db) : ControllerBase
 {
     [HttpGet]

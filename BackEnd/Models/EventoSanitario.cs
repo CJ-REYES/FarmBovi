@@ -1,7 +1,11 @@
 namespace FarmBovi.Api.Models;
 
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+
 public sealed class EventoSanitario
 {
+    [Key]
     public int IdEventoSanitario { get; set; }
     public int IdAnimal { get; set; }
     public string Tipo { get; set; } = string.Empty;

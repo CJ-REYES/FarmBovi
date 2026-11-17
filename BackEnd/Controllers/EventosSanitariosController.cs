@@ -7,6 +7,7 @@ namespace FarmBovi.Api.Controllers;
 
 [ApiController]
 [Route("api/eventos-sanitarios")]
+[Route("api/health-events")]
 public sealed class EventosSanitariosController(FarmDbContext db) : ControllerBase
 {
     [HttpGet]

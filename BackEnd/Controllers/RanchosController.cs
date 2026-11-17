@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 namespace FarmBovi.Api.Controllers;
 
 [ApiController, Route("api/ranchos")]
+[Route("api/ranches")]
 public sealed class RanchosController(FarmDbContext db) : ControllerBase
 {
     [HttpGet] public Task<List<Rancho>> GetAll(CancellationToken ct) => db.Ranchos.AsNoTracking().ToListAsync(ct);

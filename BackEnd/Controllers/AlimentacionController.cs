@@ -8,6 +8,7 @@ namespace FarmBovi.Api.Controllers;
 
 [ApiController]
 [Route("api/alimentacion")]
+[Route("api/feeding")]
 public sealed class AlimentacionController(FarmDbContext db) : ControllerBase
 {
     [HttpGet]

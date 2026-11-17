@@ -7,6 +7,7 @@ namespace FarmBovi.Api.Controllers;
 
 [ApiController]
 [Route("api/tratamientos")]
+[Route("api/treatments")]
 public sealed class TratamientosController(FarmDbContext db) : ControllerBase
 {
     [HttpGet]

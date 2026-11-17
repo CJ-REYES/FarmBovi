@@ -17,6 +17,7 @@ public sealed class FarmDbContext(DbContextOptions<FarmDbContext> options) : DbC
     public DbSet<Reproduccion> Reproduccion => Set<Reproduccion>();
     public DbSet<Recordatorio> Recordatorios => Set<Recordatorio>();
     public DbSet<EventoSanitario> EventosSanitarios => Set<EventoSanitario>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Animal>(e =>
@@ -86,8 +87,14 @@ public sealed class FarmDbContext(DbContextOptions<FarmDbContext> options) : DbC
         modelBuilder.Entity<MovimientoAnimal>(e =>
         {
             e.ToTable("MovimientoAnimal");
-            e.HasKey(x => x.IdMovimiento); // Ajusta si tu propiedad de ID se llama diferente
+            e.HasKey(x => x.IdMovimiento);
             e.Property(x => x.Tipo).HasMaxLength(50).IsRequired();
+        });
+
+        modelBuilder.Entity<Tratamiento>(e =>
+        {
+            e.ToTable("Tratamientos"); // Mapeo exacto a la tabla pluralizada existente
+            e.HasKey(x => x.IdTratamiento);
         });
     }
 }

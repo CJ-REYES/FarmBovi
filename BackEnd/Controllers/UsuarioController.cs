@@ -11,6 +11,7 @@ public sealed record UsuarioRequest([Required, StringLength(120)] string Nombre,
 public sealed record UsuarioResponse(int Id, string Nombre, string Correo, string Estado);
 
 [ApiController, Route("api/usuarios")]
+[Route("api/users")]
 public sealed class UsuarioController(FarmDbContext db) : ControllerBase
 {
     private static readonly PasswordHasher<Usuario> Hasher = new();

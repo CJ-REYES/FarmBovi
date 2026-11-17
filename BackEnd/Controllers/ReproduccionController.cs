@@ -7,6 +7,7 @@ namespace FarmBovi.Api.Controllers;
 
 [ApiController]
 [Route("api/reproduccion")]
+[Route("api/reproduction")]
 public sealed class ReproduccionController(FarmDbContext db) : ControllerBase
 {
     [HttpGet]

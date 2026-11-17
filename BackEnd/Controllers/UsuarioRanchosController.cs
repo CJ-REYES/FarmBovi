@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 namespace FarmBovi.Api.Controllers;
 
 [ApiController, Route("api/usuario-ranchos")]
+[Route("api/user-ranches")]
 public sealed class UsuarioRanchosController(FarmDbContext db) : ControllerBase
 {
     [HttpGet]

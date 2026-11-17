@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 namespace FarmBovi.Api.Controllers;
 
 [ApiController, Route("api/lotes")]
+[Route("api/groups")]
 public sealed class LotesController(FarmDbContext db) : ControllerBase
 {
     [HttpGet]
