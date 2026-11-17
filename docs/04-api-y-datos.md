@@ -41,7 +41,7 @@ Configura `Jwt__SigningKey` con una clave aleatoria de al menos 32 bytes, ademá
 
 `POST /api/sync/operaciones` recibe altas, actualizaciones y eliminaciones idempotentes. Actualizar o eliminar requiere `versionBase`; un conflicto de versión devuelve `409`. Los endpoints de `api/usuarios` también requieren JWT. Consulta [el contrato completo de sincronización](08-contrato-sincronizacion.md) para las estructuras de Push/Pull y las reglas de migración.
 
-Los ambientes sin `Jwt:SigningKey`, `Jwt:Issuer` o `Jwt:Audience` configurados no inician la API. El modelo persistido `CambioServidor` y su migración están diseñados para entregar los cambios registrados por el mecanismo central de persistencia.
+Los ambientes sin `Jwt:SigningKey`, `Jwt:Issuer` o `Jwt:Audience` configurados no inician la API. `CambioServidor` mantiene el historial compartido entre Pull, Push y auditoría.
 
 Las relaciones entre animal, lote y rancho, y entre usuario y rancho, tienen claves foráneas. Los aretes y nombres de lote son únicos dentro de cada rancho; el correo y la asignación usuario-rancho también son únicos.
 
@@ -59,10 +59,10 @@ Revisa la migración y aplícala con `dotnet ef database update --project BackEn
 
 ## Pruebas
 
-Ejecuta las pruebas de los cinco controladores con:
+Ejecuta las pruebas automatizadas con:
 
 ```powershell
-dotnet run --project BackEnd.Tests
+dotnet test FarmBovi.sln
 ```
 
 El verificador usa EF Core InMemory y comprueba las acciones CRUD; no sustituye una prueba de integración contra una instancia MySQL.

@@ -1,14 +1,34 @@
-using FarmBovi.Api.Models;
-using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
 using System.Text.Json;
+using FarmBovi.Api.Models;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 
 namespace FarmBovi.Api.Data;
+
+public sealed record PushTraceMetadata(
+    Guid IdCambio,
+    Guid IdOperacion,
+    Guid IdUsuario,
+    Guid IdRancho,
+    string Entidad,
+    Guid IdRegistro,
+    string Operacion,
+    long Version,
+    string? AntesJson,
+    string? DespuesJson,
+    string? DatosPullJson,
+    DateTime OcurrioEn);
 
 public sealed class FarmDbContext(
     DbContextOptions<FarmDbContext> options,
     IHttpContextAccessor? httpContextAccessor = null) : DbContext(options)
 {
+    private static readonly JsonSerializerOptions TraceJsonOptions = new(JsonSerializerDefaults.Web);
+
+    private PushTraceMetadata? _pendingPushMetadata;
+    private bool _preparingServerChanges;
+
     public DbSet<Animal> Animales => Set<Animal>();
     public DbSet<Lote> Lotes => Set<Lote>();
     public DbSet<Rancho> Ranchos => Set<Rancho>();
@@ -19,44 +39,345 @@ public sealed class FarmDbContext(
     public DbSet<EventoSanitario> EventosSanitarios => Set<EventoSanitario>();
     public DbSet<Tratamiento> Tratamientos => Set<Tratamiento>();
     public DbSet<Recordatorio> Recordatorios => Set<Recordatorio>();
+    public DbSet<RegistroSyncServidor> RegistrosSyncServidor => Set<RegistroSyncServidor>();
     public DbSet<CambioServidor> CambiosServidor => Set<CambioServidor>();
-    public DbSet<RegistroOperacionSync> RegistrosOperacionSync => Set<RegistroOperacionSync>();
-    private bool _preparingServerChanges;
-    private static readonly JsonSerializerOptions SyncJsonOptions = new(JsonSerializerDefaults.Web);
+
+    public void SetPendingPushMetadata(PushTraceMetadata metadata) =>
+        _pendingPushMetadata = metadata;
+
+    public void ClearPendingPushMetadata() =>
+        _pendingPushMetadata = null;
+
+    public override int SaveChanges() =>
+        SaveChanges(acceptAllChangesOnSuccess: true);
+
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        if (_preparingServerChanges)
+            return base.SaveChanges(acceptAllChangesOnSuccess);
+
+        _preparingServerChanges = true;
+        try
+        {
+            PrepareChangesSync();
+            return base.SaveChanges(acceptAllChangesOnSuccess);
+        }
+        finally
+        {
+            _preparingServerChanges = false;
+        }
+    }
+
+    public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) =>
+        await SaveChangesAsync(acceptAllChangesOnSuccess: true, cancellationToken);
+
+    public override async Task<int> SaveChangesAsync(
+        bool acceptAllChangesOnSuccess,
+        CancellationToken cancellationToken = default)
+    {
+        if (_preparingServerChanges)
+            return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+
+        _preparingServerChanges = true;
+        try
+        {
+            await PrepareChangesAsync(cancellationToken);
+            return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+        }
+        finally
+        {
+            _preparingServerChanges = false;
+        }
+    }
+
+    private void PrepareChangesSync()
+    {
+        ChangeTracker.DetectChanges();
+
+        if (TryEnqueuePendingPushMetadata())
+            return;
+
+        var apiEntries = GetSynchronizableEntries();
+        if (apiEntries.Count == 0) return;
+
+        var ahora = DateTime.UtcNow;
+        foreach (var entry in apiEntries)
+        {
+            var idRancho = ResolveEntityRanchoIdSync(entry);
+            EnqueueApiChangeRecord(entry, idRancho, ahora);
+        }
+    }
+
+    private async Task PrepareChangesAsync(CancellationToken ct)
+    {
+        ChangeTracker.DetectChanges();
+
+        if (TryEnqueuePendingPushMetadata())
+            return;
+
+        var apiEntries = GetSynchronizableEntries();
+        if (apiEntries.Count == 0) return;
+
+        var ahora = DateTime.UtcNow;
+        foreach (var entry in apiEntries)
+        {
+            var idRancho = await ResolveEntityRanchoIdAsync(entry, ct);
+            EnqueueApiChangeRecord(entry, idRancho, ahora);
+        }
+    }
+
+    private bool TryEnqueuePendingPushMetadata()
+    {
+        if (_pendingPushMetadata is not { } pushMeta)
+            return false;
+
+        _pendingPushMetadata = null;
+        CambiosServidor.Add(new CambioServidor
+        {
+            IdCambio = pushMeta.IdCambio,
+            IdRancho = pushMeta.IdRancho,
+            Entidad = pushMeta.Entidad,
+            IdRegistro = pushMeta.IdRegistro,
+            Operacion = pushMeta.Operacion,
+            Version = pushMeta.Version,
+            OcurrioEn = pushMeta.OcurrioEn,
+            IdUsuario = pushMeta.IdUsuario,
+            IdOperacion = pushMeta.IdOperacion,
+            Origen = "PUSH",
+            Antes = pushMeta.AntesJson,
+            Despues = pushMeta.DespuesJson,
+            Datos = pushMeta.DatosPullJson
+        });
+
+        return true;
+    }
+
+    private List<EntityEntry> GetSynchronizableEntries() =>
+        ChangeTracker.Entries()
+            .Where(e => IsSynchronizableEntity(e.Entity)
+                     && e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
+            .ToList();
+
+    private void EnqueueApiChangeRecord(EntityEntry entry, Guid idRancho, DateTime ahora)
+    {
+        var cambio = BuildApiChangeRecord(entry, idRancho, ahora);
+        if (cambio is null) return;
+
+        var alreadyTracked = ChangeTracker.Entries<CambioServidor>().Any(e =>
+            e.Entity.IdRancho == cambio.IdRancho &&
+            e.Entity.Entidad == cambio.Entidad &&
+            e.Entity.IdRegistro == cambio.IdRegistro &&
+            e.Entity.Version == cambio.Version);
+
+        if (!alreadyTracked)
+        {
+            CambiosServidor.Add(cambio);
+        }
+    }
+
+    private static bool IsSynchronizableEntity(object entity) =>
+        entity is Animal or Lote or Rancho or Alimentacion or MovimientoAnimal
+            or EventoSanitario or Tratamiento or Recordatorio;
+
+    private CambioServidor? BuildApiChangeRecord(EntityEntry entry, Guid idRancho, DateTime ahora)
+    {
+        if (idRancho == Guid.Empty) return null;
+
+        var primaryKey = entry.Metadata.FindPrimaryKey();
+        if (primaryKey is null) return null;
+
+        var keyProp = primaryKey.Properties[0].Name;
+        var keyVal = entry.State == EntityState.Deleted
+            ? entry.Property(keyProp).OriginalValue
+            : entry.Property(keyProp).CurrentValue;
+
+        if (keyVal is not Guid idRegistro || idRegistro == Guid.Empty) return null;
+
+        var userIdText = httpContextAccessor?.HttpContext?.User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? httpContextAccessor?.HttpContext?.User.FindFirstValue("sub");
+        Guid? idUsuario = Guid.TryParse(userIdText, out var parsedUser) && parsedUser != Guid.Empty
+            ? parsedUser
+            : TryGetGuidProperty(entry, "IdAutor") is var autor && autor != Guid.Empty ? autor : null;
+
+        var version = TryGetLongProperty(entry, "VersionRegistro") ?? 1L;
+        var wasSoftDeleted = entry.State == EntityState.Modified
+            && entry.Properties.Any(p => p.Metadata.Name == "EliminadoEn")
+            && entry.Property("EliminadoEn").OriginalValue is null
+            && entry.Property("EliminadoEn").CurrentValue is not null;
+
+        var operacion = entry.State switch
+        {
+            EntityState.Added => "Crear",
+            EntityState.Deleted => "Eliminar",
+            _ when wasSoftDeleted => "Eliminar",
+            _ => "Actualizar"
+        };
+
+        string? antesJson = null;
+        if (entry.State is EntityState.Modified or EntityState.Deleted)
+        {
+            var originalDict = entry.Properties.ToDictionary(
+                p => JsonNamingPolicy.CamelCase.ConvertName(p.Metadata.Name),
+                p => p.OriginalValue);
+            antesJson = JsonSerializer.Serialize(originalDict, TraceJsonOptions);
+        }
+
+        var despuesJson = entry.State == EntityState.Deleted
+            ? null
+            : JsonSerializer.Serialize(entry.Entity, entry.Metadata.ClrType, TraceJsonOptions);
+
+        return new CambioServidor
+        {
+            IdCambio = Guid.NewGuid(),
+            IdRancho = idRancho,
+            Entidad = entry.Metadata.ClrType.Name,
+            IdRegistro = idRegistro,
+            Operacion = operacion,
+            Version = version,
+            OcurrioEn = ahora,
+            IdUsuario = idUsuario,
+            IdOperacion = null,
+            Origen = "API",
+            Antes = antesJson,
+            Despues = despuesJson,
+            Datos = operacion == "Eliminar" ? null : despuesJson
+        };
+    }
+
+    private static Guid TryGetGuidProperty(EntityEntry entry, string propName)
+    {
+        var prop = entry.Metadata.FindProperty(propName);
+        if (prop is null) return Guid.Empty;
+        var val = entry.State == EntityState.Deleted
+            ? entry.Property(propName).OriginalValue
+            : entry.Property(propName).CurrentValue;
+        return val is Guid g ? g : Guid.Empty;
+    }
+
+    private static long? TryGetLongProperty(EntityEntry entry, string propName)
+    {
+        var prop = entry.Metadata.FindProperty(propName);
+        if (prop is null) return null;
+        var val = entry.Property(propName).CurrentValue;
+        return val is long l ? l : null;
+    }
+
+    private Guid ResolveEntityRanchoIdSync(EntityEntry entry)
+    {
+        if (entry.Entity is Rancho r) return r.IdRancho;
+
+        var directRancho = TryGetGuidProperty(entry, "IdRancho");
+        if (directRancho != Guid.Empty) return directRancho;
+
+        var idAnimal = TryGetGuidProperty(entry, "IdAnimal");
+        if (idAnimal != Guid.Empty)
+        {
+            var localAnimal = Animales.Local.FirstOrDefault(a => a.IdAnimal == idAnimal);
+            if (localAnimal is not null) return localAnimal.IdRancho;
+
+            var dbRancho = Animales.AsNoTracking()
+                .Where(a => a.IdAnimal == idAnimal)
+                .Select(a => a.IdRancho)
+                .FirstOrDefault();
+            if (dbRancho != Guid.Empty) return dbRancho;
+        }
+
+        var idLote = TryGetGuidProperty(entry, "IdLote");
+        if (idLote != Guid.Empty)
+        {
+            var localLote = Lotes.Local.FirstOrDefault(l => l.IdLote == idLote);
+            if (localLote is not null) return localLote.IdRancho;
+
+            var dbRancho = Lotes.AsNoTracking()
+                .Where(l => l.IdLote == idLote)
+                .Select(l => l.IdRancho)
+                .FirstOrDefault();
+            if (dbRancho != Guid.Empty) return dbRancho;
+        }
+
+        var idEvento = TryGetGuidProperty(entry, "IdEventoSanitario");
+        if (idEvento != Guid.Empty)
+        {
+            var evAnimalId = EventosSanitarios.Local.FirstOrDefault(e => e.IdEventoSanitario == idEvento)?.IdAnimal
+                ?? EventosSanitarios.AsNoTracking()
+                    .Where(e => e.IdEventoSanitario == idEvento)
+                    .Select(e => e.IdAnimal)
+                    .FirstOrDefault();
+
+            if (evAnimalId != Guid.Empty)
+            {
+                var localAnimal = Animales.Local.FirstOrDefault(a => a.IdAnimal == evAnimalId);
+                if (localAnimal is not null) return localAnimal.IdRancho;
+
+                return Animales.AsNoTracking()
+                    .Where(a => a.IdAnimal == evAnimalId)
+                    .Select(a => a.IdRancho)
+                    .FirstOrDefault();
+            }
+        }
+
+        return Guid.Empty;
+    }
+
+    private async Task<Guid> ResolveEntityRanchoIdAsync(EntityEntry entry, CancellationToken ct)
+    {
+        if (entry.Entity is Rancho r) return r.IdRancho;
+
+        var directRancho = TryGetGuidProperty(entry, "IdRancho");
+        if (directRancho != Guid.Empty) return directRancho;
+
+        var idAnimal = TryGetGuidProperty(entry, "IdAnimal");
+        if (idAnimal != Guid.Empty)
+        {
+            var localAnimal = Animales.Local.FirstOrDefault(a => a.IdAnimal == idAnimal);
+            if (localAnimal is not null) return localAnimal.IdRancho;
+
+            var dbRancho = await Animales.AsNoTracking()
+                .Where(a => a.IdAnimal == idAnimal)
+                .Select(a => a.IdRancho)
+                .FirstOrDefaultAsync(ct);
+            if (dbRancho != Guid.Empty) return dbRancho;
+        }
+
+        var idLote = TryGetGuidProperty(entry, "IdLote");
+        if (idLote != Guid.Empty)
+        {
+            var localLote = Lotes.Local.FirstOrDefault(l => l.IdLote == idLote);
+            if (localLote is not null) return localLote.IdRancho;
+
+            var dbRancho = await Lotes.AsNoTracking()
+                .Where(l => l.IdLote == idLote)
+                .Select(l => l.IdRancho)
+                .FirstOrDefaultAsync(ct);
+            if (dbRancho != Guid.Empty) return dbRancho;
+        }
+
+        var idEvento = TryGetGuidProperty(entry, "IdEventoSanitario");
+        if (idEvento != Guid.Empty)
+        {
+            var evAnimalId = EventosSanitarios.Local.FirstOrDefault(e => e.IdEventoSanitario == idEvento)?.IdAnimal
+                ?? await EventosSanitarios.AsNoTracking()
+                    .Where(e => e.IdEventoSanitario == idEvento)
+                    .Select(e => e.IdAnimal)
+                    .FirstOrDefaultAsync(ct);
+
+            if (evAnimalId != Guid.Empty)
+            {
+                var localAnimal = Animales.Local.FirstOrDefault(a => a.IdAnimal == evAnimalId);
+                if (localAnimal is not null) return localAnimal.IdRancho;
+
+                return await Animales.AsNoTracking()
+                    .Where(a => a.IdAnimal == evAnimalId)
+                    .Select(a => a.IdRancho)
+                    .FirstOrDefaultAsync(ct);
+            }
+        }
+
+        return Guid.Empty;
+    }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        modelBuilder.Entity<CambioServidor>(e =>
-        {
-            e.ToTable("CambioServidor");
-            e.HasKey(x => x.IdCambio);
-            e.Property(x => x.IdCambio).HasColumnType("char(36)").ValueGeneratedNever();
-            e.Property(x => x.IdRancho).HasColumnType("char(36)").IsRequired();
-            e.Property(x => x.Entidad).HasMaxLength(80).IsRequired();
-            e.Property(x => x.IdRegistro).HasColumnType("char(36)").IsRequired();
-            e.Property(x => x.Operacion).HasMaxLength(20).IsRequired();
-            e.Property(x => x.Version).IsRequired();
-            e.Property(x => x.OcurrioEn).HasPrecision(6).IsRequired();
-            e.Property(x => x.IdUsuario).HasColumnType("char(36)");
-            e.Property(x => x.Datos).HasColumnType("longtext");
-            e.HasIndex(x => new { x.IdRancho, x.OcurrioEn, x.IdCambio });
-            e.HasIndex(x => new { x.IdRancho, x.Entidad, x.IdRegistro, x.Version }).IsUnique();
-        });
-
-        modelBuilder.Entity<RegistroOperacionSync>(e =>
-        {
-            e.ToTable("RegistroOperacionSync");
-            e.HasKey(x => x.IdOperacion);
-            e.Property(x => x.IdOperacion).HasColumnType("char(36)").ValueGeneratedNever();
-            e.Property(x => x.IdUsuario).HasColumnType("char(36)").IsRequired();
-            e.Property(x => x.IdRancho).HasColumnType("char(36)").IsRequired();
-            e.Property(x => x.IdDispositivo).HasMaxLength(120).IsRequired();
-            e.Property(x => x.HashSolicitud).HasMaxLength(64).IsRequired();
-            e.Property(x => x.ResultadoJson).HasColumnType("longtext").IsRequired();
-            e.Property(x => x.ProcesadoEn).HasPrecision(6).IsRequired();
-            e.HasIndex(x => new { x.IdUsuario, x.IdRancho, x.IdDispositivo, x.ProcesadoEn });
-        });
-
         modelBuilder.Entity<Usuario>(e =>
         {
             e.ToTable("Usuario");
@@ -79,6 +400,7 @@ public sealed class FarmDbContext(
             e.Property(x => x.UbicacionGeneral).HasMaxLength(250).IsRequired();
             e.Property(x => x.Estado).HasMaxLength(20).IsRequired();
             e.Property(x => x.IdAutor).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.VersionRegistro).IsConcurrencyToken();
             e.HasOne<Usuario>().WithMany().HasForeignKey(x => x.IdAutor).OnDelete(DeleteBehavior.Restrict);
         });
 
@@ -106,6 +428,7 @@ public sealed class FarmDbContext(
             e.Property(x => x.Ubicacion).HasMaxLength(250);
             e.Property(x => x.Estado).HasMaxLength(20).IsRequired();
             e.Property(x => x.IdAutor).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.VersionRegistro).IsConcurrencyToken();
             e.HasIndex(x => new { x.IdRancho, x.Nombre }).IsUnique();
             e.HasOne<Rancho>().WithMany().HasForeignKey(x => x.IdRancho).OnDelete(DeleteBehavior.Restrict);
             e.HasOne<Usuario>().WithMany().HasForeignKey(x => x.IdAutor).OnDelete(DeleteBehavior.Restrict);
@@ -127,6 +450,7 @@ public sealed class FarmDbContext(
             e.Property(x => x.Estado).HasMaxLength(25).IsRequired();
             e.Property(x => x.FechaSalida).HasColumnType("date");
             e.Property(x => x.IdAutor).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.VersionRegistro).IsConcurrencyToken();
             e.HasIndex(x => new { x.IdRancho, x.Arete }).IsUnique();
             e.HasOne<Rancho>().WithMany().HasForeignKey(x => x.IdRancho).OnDelete(DeleteBehavior.Restrict);
             e.HasOne<Lote>().WithMany().HasForeignKey(x => x.IdLote).OnDelete(DeleteBehavior.Restrict);
@@ -146,6 +470,7 @@ public sealed class FarmDbContext(
             e.Property(x => x.Unidad).HasMaxLength(20).IsRequired();
             e.Property(x => x.Frecuencia).HasMaxLength(80).IsRequired();
             e.Property(x => x.IdAutor).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.VersionRegistro).IsConcurrencyToken();
             e.HasIndex(x => x.IdAnimal);
             e.HasIndex(x => x.IdLote);
             e.HasOne<Animal>().WithMany().HasForeignKey(x => x.IdAnimal).OnDelete(DeleteBehavior.Restrict);
@@ -165,6 +490,7 @@ public sealed class FarmDbContext(
             e.Property(x => x.OrigenExterno).HasMaxLength(250);
             e.Property(x => x.DestinoExterno).HasMaxLength(250);
             e.Property(x => x.IdAutor).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.VersionRegistro).IsConcurrencyToken();
             e.HasIndex(x => x.IdAnimal);
             e.HasIndex(x => x.Fecha);
             e.HasOne<Animal>().WithMany().HasForeignKey(x => x.IdAnimal).OnDelete(DeleteBehavior.Restrict);
@@ -184,6 +510,7 @@ public sealed class FarmDbContext(
             e.Property(x => x.EvidenciaDiagnosticoUri).HasMaxLength(500);
             e.Property(x => x.Responsable).HasMaxLength(180).IsRequired();
             e.Property(x => x.IdAutor).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.VersionRegistro).IsConcurrencyToken();
             e.HasIndex(x => x.IdAnimal);
             e.HasOne<Animal>().WithMany().HasForeignKey(x => x.IdAnimal).OnDelete(DeleteBehavior.Restrict);
             e.HasOne<Usuario>().WithMany().HasForeignKey(x => x.IdAutor).OnDelete(DeleteBehavior.Restrict);
@@ -204,6 +531,7 @@ public sealed class FarmDbContext(
             e.Property(x => x.PrescripcionUri).HasMaxLength(500);
             e.Property(x => x.Estado).HasMaxLength(25).IsRequired();
             e.Property(x => x.IdAutor).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.VersionRegistro).IsConcurrencyToken();
             e.HasIndex(x => x.IdEventoSanitario);
             e.HasOne<EventoSanitario>().WithMany().HasForeignKey(x => x.IdEventoSanitario).OnDelete(DeleteBehavior.Restrict);
             e.HasOne<Usuario>().WithMany().HasForeignKey(x => x.IdAutor).OnDelete(DeleteBehavior.Restrict);
@@ -223,6 +551,7 @@ public sealed class FarmDbContext(
             e.Property(x => x.Descripcion).HasMaxLength(250).IsRequired();
             e.Property(x => x.Estado).HasMaxLength(25).IsRequired();
             e.Property(x => x.IdAutor).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.VersionRegistro).IsConcurrencyToken();
             e.HasIndex(x => x.IdRancho);
             e.HasIndex(x => x.IdAnimal);
             e.HasIndex(x => x.IdLote);
@@ -237,135 +566,48 @@ public sealed class FarmDbContext(
             e.HasOne<Usuario>().WithMany().HasForeignKey(x => x.IdAutor).OnDelete(DeleteBehavior.Restrict);
         });
 
-        foreach (var entityType in modelBuilder.Model.GetEntityTypes()
-                     .Where(t => t.ClrType != typeof(CambioServidor) && t.FindProperty("VersionRegistro") is not null))
+        modelBuilder.Entity<RegistroSyncServidor>(e =>
         {
-            modelBuilder.Entity(entityType.ClrType).Property<long>("VersionRegistro").IsConcurrencyToken();
-        }
-    }
+            e.ToTable("RegistroSyncServidor");
+            e.HasKey(x => x.IdOperacion);
+            e.Property(x => x.IdOperacion).HasColumnType("char(36)").ValueGeneratedNever();
+            e.Property(x => x.IdUsuario).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.IdRancho).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.IdDispositivo).HasMaxLength(120).IsRequired();
+            e.Property(x => x.HashSolicitud).HasColumnType("char(64)").HasMaxLength(64).IsRequired();
+            e.Property(x => x.Entidad).HasMaxLength(80).IsRequired();
+            e.Property(x => x.IdRegistro).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.Resultado).HasColumnType("longtext").IsRequired();
+            e.Property(x => x.VersionResultante).IsRequired();
+            e.Property(x => x.AplicadoEn).HasPrecision(6).IsRequired();
+            e.HasIndex(x => new { x.IdRancho, x.Entidad, x.IdRegistro });
+            e.HasOne<Usuario>().WithMany().HasForeignKey(x => x.IdUsuario).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Rancho>().WithMany().HasForeignKey(x => x.IdRancho).OnDelete(DeleteBehavior.Restrict);
+        });
 
-    public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) =>
-        await SaveChangesAsync(acceptAllChangesOnSuccess: true, cancellationToken);
-
-    public override async Task<int> SaveChangesAsync(
-        bool acceptAllChangesOnSuccess,
-        CancellationToken cancellationToken = default)
-    {
-        if (_preparingServerChanges)
-            return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
-
-        _preparingServerChanges = true;
-        try
+        modelBuilder.Entity<CambioServidor>(e =>
         {
-            var entries = ChangeTracker.Entries()
-                .Where(e => e.Entity is not CambioServidor and not RegistroOperacionSync &&
-                            e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
-                .ToList();
-
-            foreach (var entry in entries)
-            {
-                var entity = entry.Entity;
-                var name = entity.GetType().Name;
-                var entityId = GetEntityId(entity);
-                if (entityId == Guid.Empty) continue;
-
-                var ranchId = await ResolveRanchIdAsync(entity, cancellationToken);
-                if (ranchId is null || ranchId == Guid.Empty) continue;
-
-                var version = GetEntityVersion(entity);
-                var operation = entry.State == EntityState.Added
-                    ? "Crear"
-                    : IsSoftDelete(entry) ? "Eliminar" : "Actualizar";
-                var alreadyTracked = ChangeTracker.Entries<CambioServidor>().Any(e =>
-                    e.Entity.IdRancho == ranchId && e.Entity.Entidad == name &&
-                    e.Entity.IdRegistro == entityId && e.Entity.Version == version);
-                if (alreadyTracked) continue;
-
-                var userIdText = httpContextAccessor?.HttpContext?.User.FindFirstValue(ClaimTypes.NameIdentifier)
-                    ?? httpContextAccessor?.HttpContext?.User.FindFirstValue("sub");
-                Guid? userId = Guid.TryParse(userIdText, out var parsedUserId) ? parsedUserId : null;
-                var timestamp = DateTime.UtcNow;
-                var data = operation == "Eliminar"
-                    ? null
-                    : JsonSerializer.Serialize(entity, entity.GetType(), SyncJsonOptions);
-                CambiosServidor.Add(new CambioServidor
-                {
-                    IdCambio = Guid.NewGuid(),
-                    IdRancho = ranchId.Value,
-                    Entidad = name,
-                    IdRegistro = entityId,
-                    Operacion = operation,
-                    Version = version,
-                    OcurrioEn = timestamp,
-                    IdUsuario = userId,
-                    Datos = data
-                });
-            }
-
-            return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
-        }
-        finally
-        {
-            _preparingServerChanges = false;
-        }
-    }
-
-    private static Guid GetEntityId(object entity) => entity switch
-    {
-        Animal x => x.IdAnimal,
-        Lote x => x.IdLote,
-        EventoSanitario x => x.IdEventoSanitario,
-        Tratamiento x => x.IdTratamiento,
-        Recordatorio x => x.IdRecordatorio,
-        Alimentacion x => x.IdAlimentacion,
-        MovimientoAnimal x => x.IdMovimiento,
-        _ => Guid.Empty
-    };
-
-    private static long GetEntityVersion(object entity) => entity switch
-    {
-        Animal x => x.VersionRegistro,
-        Lote x => x.VersionRegistro,
-        EventoSanitario x => x.VersionRegistro,
-        Tratamiento x => x.VersionRegistro,
-        Recordatorio x => x.VersionRegistro,
-        Alimentacion x => x.VersionRegistro,
-        MovimientoAnimal x => x.VersionRegistro,
-        _ => 1
-    };
-
-    private static bool IsSoftDelete(Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry entry) =>
-        entry.State == EntityState.Deleted ||
-        (entry.State == EntityState.Modified &&
-         entry.Properties.Any(p => p.Metadata.Name == "EliminadoEn" &&
-                                   p.OriginalValue is null && p.CurrentValue is DateTime));
-
-    private async Task<Guid?> ResolveRanchIdAsync(object entity, CancellationToken ct)
-    {
-        switch (entity)
-        {
-            case Animal x: return x.IdRancho;
-            case Lote x: return x.IdRancho;
-            case Recordatorio x: return x.IdRancho;
-            case EventoSanitario x:
-                return await Animales.AsNoTracking().Where(a => a.IdAnimal == x.IdAnimal)
-                    .Select(a => (Guid?)a.IdRancho).FirstOrDefaultAsync(ct);
-            case Tratamiento x:
-                return await (from t in Tratamientos.AsNoTracking()
-                              join ev in EventosSanitarios.AsNoTracking() on t.IdEventoSanitario equals ev.IdEventoSanitario
-                              join a in Animales.AsNoTracking() on ev.IdAnimal equals a.IdAnimal
-                              where t.IdTratamiento == x.IdTratamiento
-                              select (Guid?)a.IdRancho).FirstOrDefaultAsync(ct);
-            case Alimentacion x when x.IdAnimal.HasValue:
-                return await Animales.AsNoTracking().Where(a => a.IdAnimal == x.IdAnimal.Value)
-                    .Select(a => (Guid?)a.IdRancho).FirstOrDefaultAsync(ct);
-            case Alimentacion x when x.IdLote.HasValue:
-                return await Lotes.AsNoTracking().Where(l => l.IdLote == x.IdLote.Value)
-                    .Select(l => (Guid?)l.IdRancho).FirstOrDefaultAsync(ct);
-            case MovimientoAnimal x:
-                return await Animales.AsNoTracking().Where(a => a.IdAnimal == x.IdAnimal)
-                    .Select(a => (Guid?)a.IdRancho).FirstOrDefaultAsync(ct);
-            default: return null;
-        }
+            e.ToTable("CambioServidor");
+            e.HasKey(x => x.IdCambio);
+            e.Property(x => x.IdCambio).HasColumnType("char(36)").ValueGeneratedNever();
+            e.Property(x => x.IdRancho).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.Entidad).HasMaxLength(80).IsRequired();
+            e.Property(x => x.IdRegistro).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.Operacion).HasMaxLength(20).IsRequired();
+            e.Property(x => x.Version).IsRequired();
+            e.Property(x => x.OcurrioEn).HasPrecision(6).IsRequired();
+            e.Property(x => x.IdUsuario).HasColumnType("char(36)");
+            e.Property(x => x.IdOperacion).HasColumnType("char(36)");
+            e.Property(x => x.Origen).HasMaxLength(25).IsRequired();
+            e.Property(x => x.Antes).HasColumnType("longtext");
+            e.Property(x => x.Despues).HasColumnType("longtext");
+            e.Property(x => x.Datos).HasColumnType("longtext");
+            e.HasIndex(x => new { x.IdRancho, x.OcurrioEn, x.IdCambio });
+            e.HasIndex(x => new { x.IdRancho, x.Entidad, x.IdRegistro, x.Version }).IsUnique();
+            e.HasIndex(x => x.IdOperacion);
+            e.HasOne<Rancho>().WithMany().HasForeignKey(x => x.IdRancho).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Usuario>().WithMany().HasForeignKey(x => x.IdUsuario).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<RegistroSyncServidor>().WithMany().HasForeignKey(x => x.IdOperacion).OnDelete(DeleteBehavior.Restrict);
+        });
     }
 }

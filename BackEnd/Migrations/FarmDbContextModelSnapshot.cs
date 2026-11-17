@@ -165,13 +165,22 @@ namespace FarmBovi.Api.Migrations
                     b.Property<Guid>("IdCambio")
                         .HasColumnType("char(36)");
 
+                    b.Property<string>("Antes")
+                        .HasColumnType("longtext");
+
                     b.Property<string>("Datos")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("Despues")
                         .HasColumnType("longtext");
 
                     b.Property<string>("Entidad")
                         .IsRequired()
                         .HasMaxLength(80)
                         .HasColumnType("varchar(80)");
+
+                    b.Property<Guid?>("IdOperacion")
+                        .HasColumnType("char(36)");
 
                     b.Property<Guid>("IdRancho")
                         .HasColumnType("char(36)");
@@ -191,10 +200,19 @@ namespace FarmBovi.Api.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("varchar(20)");
 
+                    b.Property<string>("Origen")
+                        .IsRequired()
+                        .HasMaxLength(25)
+                        .HasColumnType("varchar(25)");
+
                     b.Property<long>("Version")
                         .HasColumnType("bigint");
 
                     b.HasKey("IdCambio");
+
+                    b.HasIndex("IdOperacion");
+
+                    b.HasIndex("IdUsuario");
 
                     b.HasIndex("IdRancho", "OcurrioEn", "IdCambio");
 
@@ -483,15 +501,24 @@ namespace FarmBovi.Api.Migrations
                     b.ToTable("Recordatorio", (string)null);
                 });
 
-            modelBuilder.Entity("FarmBovi.Api.Models.RegistroOperacionSync", b =>
+            modelBuilder.Entity("FarmBovi.Api.Models.RegistroSyncServidor", b =>
                 {
                     b.Property<Guid>("IdOperacion")
                         .HasColumnType("char(36)");
 
+                    b.Property<DateTime>("AplicadoEn")
+                        .HasPrecision(6)
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Entidad")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("varchar(80)");
+
                     b.Property<string>("HashSolicitud")
                         .IsRequired()
                         .HasMaxLength(64)
-                        .HasColumnType("varchar(64)");
+                        .HasColumnType("char(64)");
 
                     b.Property<string>("IdDispositivo")
                         .IsRequired()
@@ -501,22 +528,26 @@ namespace FarmBovi.Api.Migrations
                     b.Property<Guid>("IdRancho")
                         .HasColumnType("char(36)");
 
+                    b.Property<Guid>("IdRegistro")
+                        .HasColumnType("char(36)");
+
                     b.Property<Guid>("IdUsuario")
                         .HasColumnType("char(36)");
 
-                    b.Property<DateTime>("ProcesadoEn")
-                        .HasPrecision(6)
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<string>("ResultadoJson")
+                    b.Property<string>("Resultado")
                         .IsRequired()
                         .HasColumnType("longtext");
 
+                    b.Property<long>("VersionResultante")
+                        .HasColumnType("bigint");
+
                     b.HasKey("IdOperacion");
 
-                    b.HasIndex("IdUsuario", "IdRancho", "IdDispositivo", "ProcesadoEn");
+                    b.HasIndex("IdUsuario");
 
-                    b.ToTable("RegistroOperacionSync", (string)null);
+                    b.HasIndex("IdRancho", "Entidad", "IdRegistro");
+
+                    b.ToTable("RegistroSyncServidor", (string)null);
                 });
 
             modelBuilder.Entity("FarmBovi.Api.Models.Tratamiento", b =>
@@ -704,6 +735,25 @@ namespace FarmBovi.Api.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("FarmBovi.Api.Models.CambioServidor", b =>
+                {
+                    b.HasOne("FarmBovi.Api.Models.RegistroSyncServidor", null)
+                        .WithMany()
+                        .HasForeignKey("IdOperacion")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("FarmBovi.Api.Models.Rancho", null)
+                        .WithMany()
+                        .HasForeignKey("IdRancho")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("FarmBovi.Api.Models.Usuario", null)
+                        .WithMany()
+                        .HasForeignKey("IdUsuario")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
             modelBuilder.Entity("FarmBovi.Api.Models.EventoSanitario", b =>
                 {
                     b.HasOne("FarmBovi.Api.Models.Animal", null)
@@ -801,6 +851,21 @@ namespace FarmBovi.Api.Migrations
                         .WithMany()
                         .HasForeignKey("IdTratamiento")
                         .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("FarmBovi.Api.Models.RegistroSyncServidor", b =>
+                {
+                    b.HasOne("FarmBovi.Api.Models.Rancho", null)
+                        .WithMany()
+                        .HasForeignKey("IdRancho")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("FarmBovi.Api.Models.Usuario", null)
+                        .WithMany()
+                        .HasForeignKey("IdUsuario")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("FarmBovi.Api.Models.Tratamiento", b =>
