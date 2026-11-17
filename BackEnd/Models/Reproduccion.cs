@@ -7,12 +7,26 @@ namespace FarmBovi.Api.Models;
 public sealed class Reproduccion
 {
     [Key]
-    public int IdReproduccion { get; set; }
-    public int IdAnimal { get; set; }
+    [Column(TypeName = "char(36)")]
+    public Guid IdReproduccion { get; set; }
+
+    [Column(TypeName = "char(36)")]
+    public Guid IdAnimal { get; set; }
+
+    [MaxLength(50)]
     public string TipoEvento { get; set; } = null!;
+
     public DateTime Fecha { get; set; }
+
+    [MaxLength(250)]
     public string? Observaciones { get; set; }
-    public int? IdAutor { get; set; }
+
+    [Column(TypeName = "char(36)")]
+    public Guid? IdAutor { get; set; }
+
     public DateTime FechaCreacion { get; set; } = DateTime.UtcNow;
+
     public DateTime? EliminadoEn { get; set; }
+
+    public long VersionRegistro { get; set; } = 1;
 }

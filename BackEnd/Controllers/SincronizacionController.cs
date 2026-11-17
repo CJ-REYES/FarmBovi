@@ -74,16 +74,9 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             },
             [nameof(Tratamiento)] = new(StringComparer.OrdinalIgnoreCase)
             {
-                nameof(Tratamiento.Producto),
-                nameof(Tratamiento.Dosis),
-                nameof(Tratamiento.UnidadDosis),
-                nameof(Tratamiento.ViaAdministracion),
-                nameof(Tratamiento.Frecuencia),
-                nameof(Tratamiento.FechaInicio),
-                nameof(Tratamiento.FechaFin),
-                nameof(Tratamiento.Responsable),
-                nameof(Tratamiento.PrescripcionUri),
-                nameof(Tratamiento.Estado)
+                nameof(Tratamiento.Tipo),
+                nameof(Tratamiento.Medicamento),
+                nameof(Tratamiento.Dosis)
             },
             [nameof(Recordatorio)] = new(StringComparer.OrdinalIgnoreCase)
             {
@@ -1211,11 +1204,10 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             case Tratamiento t:
                 t.IdTratamiento = targetId;
                 t.IdAutor = idUsuarioJwt;
-                if (t.FechaInicio == default) t.FechaInicio = ahora;
                 t.CreadoEn = ahora;
                 t.VersionRegistro = 1;
                 t.EliminadoEn = null;
-                break;
+                 break;
 
             case Recordatorio rec:
                 rec.IdRecordatorio = targetId;

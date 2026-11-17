@@ -178,8 +178,16 @@ public sealed class FarmDbContext(
     }
 
     private static bool IsSynchronizableEntity(object entity) =>
-        entity is Animal or Lote or Rancho or Alimentacion or MovimientoAnimal
-            or EventoSanitario or Tratamiento or Reproduccion or Recordatorio or Pesaje;
+        entity is Animal 
+        || entity is Lote 
+        || entity is Rancho 
+        || entity is Alimentacion 
+        || entity is MovimientoAnimal
+        || entity is EventoSanitario 
+        || entity is Tratamiento 
+        || entity is Reproduccion 
+        || entity is Recordatorio 
+        || entity is Pesaje;
 
     private CambioServidor? BuildApiChangeRecord(EntityEntry entry, Guid idRancho, DateTime ahora)
     {
@@ -596,3 +604,6 @@ public sealed class FarmDbContext(
             e.Property(x => x.IdUsuario).HasColumnType("char(36)");
             e.Property(x => x.IdOperacion).HasColumnType("char(36)");
             e.Property(x => x.Origen).HasMaxLength(25).IsRequired();
+        });
+    }
+}

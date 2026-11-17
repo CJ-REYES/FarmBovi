@@ -37,8 +37,6 @@ public sealed class TratamientosController(FarmDbContext db, FarmDomainValidatio
         if (existing is not null)
             return Ok(existing);
 
-        if (item.FechaInicio == default) item.FechaInicio = DateTime.UtcNow;
-
         var (authorId, authorError) = await validator.ResolveAuthorAsync(User, item.IdAutor, ct);
         if (authorError is not null) return BadRequest(authorError);
 
@@ -46,12 +44,9 @@ public sealed class TratamientosController(FarmDbContext db, FarmDomainValidatio
         if (validationError is not null) return BadRequest(validationError);
 
         item.IdAutor = authorId;
-        item.Producto = item.Producto.Trim();
-        item.UnidadDosis = item.UnidadDosis.Trim();
-        item.Frecuencia = item.Frecuencia.Trim();
-        item.Responsable = item.Responsable.Trim();
-        item.Estado = item.Estado.Trim();
-        if (item.CreadoEn == default) item.CreadoEn = DateTime.UtcNow;
+        item.Tipo = item.Tipo.Trim();
+        item.Medicamento = item.Medicamento.Trim();
+        if (item.Dosis is not null) item.Dosis = item.Dosis.Trim();
         if (item.VersionRegistro <= 0) item.VersionRegistro = 1;
 
         db.Tratamientos.Add(item);
@@ -62,7 +57,7 @@ public sealed class TratamientosController(FarmDbContext db, FarmDomainValidatio
         } 
         catch (DbUpdateException) 
         { 
-            return Conflict("No se pudo registrar el tratamiento, verifique la referencia del animal o evento sanitario."); 
+            return Conflict("No se pudo registrar el tratamiento, verifique la referencia del evento sanitario."); 
         }
 
         return CreatedAtAction(nameof(Get), new { id = item.IdTratamiento }, item);
@@ -81,18 +76,10 @@ public sealed class TratamientosController(FarmDbContext db, FarmDomainValidatio
         if (validationError is not null) return BadRequest(validationError);
 
         item.IdEventoSanitario = input.IdEventoSanitario;
-        item.Producto = input.Producto.Trim();
-        item.Dosis = input.Dosis;
-        item.UnidadDosis = input.UnidadDosis.Trim();
-        item.ViaAdministracion = input.ViaAdministracion;
-        item.Frecuencia = input.Frecuencia.Trim();
-        item.FechaInicio = input.FechaInicio;
-        item.FechaFin = input.FechaFin;
-        item.Responsable = input.Responsable.Trim();
-        item.PrescripcionUri = input.PrescripcionUri;
-        item.Estado = input.Estado.Trim();
+        item.Tipo = input.Tipo.Trim();
+        item.Medicamento = input.Medicamento.Trim();
+        item.Dosis = input.Dosis?.Trim();
         item.IdAutor = authorId;
-        item.EliminadoEn = input.EliminadoEn;
         item.VersionRegistro++;
 
         try 
@@ -120,7 +107,6 @@ public sealed class TratamientosController(FarmDbContext db, FarmDomainValidatio
 
         if (item.EliminadoEn is null)
         {
-            item.EliminadoEn = DateTime.UtcNow;
             item.VersionRegistro++;
             await db.SaveChangesAsync(ct);
         }

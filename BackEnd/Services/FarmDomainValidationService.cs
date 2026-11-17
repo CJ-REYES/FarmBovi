@@ -204,19 +204,10 @@ public sealed class FarmDomainValidationService(FarmDbContext db)
         if (item.IdEventoSanitario == Guid.Empty)
             return "El identificador del evento sanitario (idEventoSanitario) es obligatorio.";
 
-        if (item.Dosis <= 0)
-            return "La dosis del tratamiento debe ser mayor que cero.";
-
-        if (item.FechaFin.HasValue && item.FechaFin.Value < item.FechaInicio)
-            return "La fecha de fin no puede ser anterior a la fecha de inicio.";
-
-        if (string.IsNullOrWhiteSpace(item.Producto) ||
-            string.IsNullOrWhiteSpace(item.UnidadDosis) ||
-            string.IsNullOrWhiteSpace(item.Frecuencia) ||
-            string.IsNullOrWhiteSpace(item.Responsable) ||
-            string.IsNullOrWhiteSpace(item.Estado))
+        if (string.IsNullOrWhiteSpace(item.Tipo) ||
+            string.IsNullOrWhiteSpace(item.Medicamento))
         {
-            return "Producto, unidadDosis, frecuencia, responsable y estado del tratamiento son obligatorios.";
+            return "El tipo y el medicamento del tratamiento son obligatorios.";
         }
 
         var eventoExists = await db.EventosSanitarios.AsNoTracking()

@@ -11,24 +11,24 @@ namespace FarmBovi.Api.Controllers;
 public sealed class ReproduccionController(FarmDbContext db) : ControllerBase
 {
     [HttpGet]
-    public async Task<ActionResult<List<Reproduccion>>> GetAll([FromQuery] int? idRancho, CancellationToken ct)
+    public async Task<ActionResult<List<Reproduccion>>> GetAll([FromQuery] Guid? idRancho, CancellationToken ct)
     {
         var query = db.Reproduccion
             .AsNoTracking()
             .Where(r => r.EliminadoEn == null);
 
-        if (idRancho.HasValue)
+        if (idRancho.HasValue && idRancho.Value != Guid.Empty)
         {
-            int ranchoId = idRancho.Value;
-            query = query.Where(item => db.Animales.Any(an => an.IdAnimal.ToString() == item.IdAnimal.ToString() && an.IdRancho == ranchoId));
+            var ranchoId = idRancho.Value;
+            query = query.Where(item => db.Animales.Any(an => an.IdAnimal == item.IdAnimal && an.IdRancho == ranchoId));
         }
 
         var lista = await query.ToListAsync(ct);
         return Ok(lista);
     }
 
-    [HttpGet("{id:int}")]
-    public async Task<ActionResult<Reproduccion>> Get(int id, CancellationToken ct)
+    [HttpGet("{id:guid}")]
+    public async Task<ActionResult<Reproduccion>> Get(Guid id, CancellationToken ct)
     {
         var item = await db.Reproduccion.FindAsync([id], ct);
         return item is not null ? Ok(item) : NotFound();
@@ -37,8 +37,11 @@ public sealed class ReproduccionController(FarmDbContext db) : ControllerBase
     [HttpPost]
     public async Task<ActionResult<Reproduccion>> Create(Reproduccion item, CancellationToken ct)
     {
-        item.IdReproduccion = 0;
-        item.FechaCreacion = DateTime.UtcNow;
+        if (item.IdReproduccion == Guid.Empty)
+            item.IdReproduccion = Guid.NewGuid();
+
+        if (item.FechaCreacion == default)
+            item.FechaCreacion = DateTime.UtcNow;
 
         db.Reproduccion.Add(item);
 
@@ -54,8 +57,8 @@ public sealed class ReproduccionController(FarmDbContext db) : ControllerBase
         return CreatedAtAction(nameof(Get), new { id = item.IdReproduccion }, item);
     }
 
-    [HttpPut("{id:int}")]
-    public async Task<IActionResult> Update(int id, Reproduccion input, CancellationToken ct)
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Update(Guid id, Reproduccion input, CancellationToken ct)
     {
         var item = await db.Reproduccion.FindAsync([id], ct);
         if (item is null) return NotFound();
@@ -65,6 +68,7 @@ public sealed class ReproduccionController(FarmDbContext db) : ControllerBase
         item.Fecha = input.Fecha;
         item.Observaciones = input.Observaciones;
         item.IdAutor = input.IdAutor;
+        item.VersionRegistro++;
 
         try 
         { 
@@ -78,21 +82,17 @@ public sealed class ReproduccionController(FarmDbContext db) : ControllerBase
         return NoContent();
     }
 
-    [HttpDelete("{id:int}")]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         var item = await db.Reproduccion.FindAsync([id], ct);
         if (item is null) return NotFound();
 
-        db.Reproduccion.Remove(item);
-
-        try 
-        { 
-            await db.SaveChangesAsync(ct); 
-        } 
-        catch (DbUpdateException) 
-        { 
-            return Conflict("No se pudo eliminar el registro debido a restricciones de datos."); 
+        if (item.EliminadoEn is null)
+        {
+            item.EliminadoEn = DateTime.UtcNow;
+            item.VersionRegistro++;
+            await db.SaveChangesAsync(ct);
         }
 
         return NoContent();
