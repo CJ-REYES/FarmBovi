@@ -18,7 +18,7 @@ Devuelve un JWT y los ranchos activos que tiene asignados el usuario. Las creden
 | --- | --- |
 | `IdCambio` | UUID generado por el servidor. |
 | `IdRancho` | Rancho propietario del dato. |
-| `Entidad` | `Animal`, `Lote`, `EventoSanitario`, `Tratamiento`, `Recordatorio`, `Alimentacion` o `MovimientoAnimal`. |
+| `Entidad` | Entidad del modelo servidor. Pull mapea `Animal`, `Lote`, `EventoSanitario` y `Tratamiento` a `healthRecords`, además de `Alimentacion`, `MovimientoAnimal` y `Recordatorio` a sus tablas cliente. |
 | `IdRegistro` | UUID del registro afectado. |
 | `Operacion` | `Crear`, `Actualizar` o `Eliminar`. |
 | `Version` | Versión resultante del registro, inicia en 1 y aumenta por actualización o baja. |
@@ -32,21 +32,31 @@ Los cambios de una entidad y su fila `CambioServidor` se guardan en el mismo `Sa
 ## Pull
 
 ```http
-GET /api/sync/cambios?idRancho={uuid}&cursor={cursor-opaco}&limite={1..500}
+GET /api/sync/cambios?entidad={cattle|lots|healthRecords|feedingRecords|movements|alerts}&ranchId={uuid}&cursorOpaco={cursor-opaco}&limite={1..500}
 Authorization: Bearer {token}
 ```
 
-El servidor comprueba la membresía activa del usuario en el rancho. Sin token responde `401`; sin membresía, `403`. El límite predeterminado es 100. Los resultados se ordenan por `(OcurrioEn, IdCambio)` para que fechas iguales no causen saltos. La respuesta es:
+El servidor comprueba la membresía activa del usuario en el rancho. Sin token responde `401`; sin membresía, `403`. También acepta `idRancho` y `cursor` como alias. Si no se indica rancho, lo infiere solo cuando el usuario tiene exactamente una membresía activa. El límite predeterminado es 100. Los resultados de la entidad solicitada se ordenan por `(OcurrioEn, IdCambio)` para que fechas iguales no causen saltos. La respuesta usa el contrato consumido por el cliente:
 
 ```json
 {
-  "cambios": [],
-  "siguienteCursor": "cursor-opaco-o-null",
-  "hayMas": false
+  "entidad": "cattle",
+  "cambios": [{
+    "remoteId": "uuid-del-registro",
+    "clientUuid": null,
+    "operacion": "UPSERT",
+    "versionServidor": 1,
+    "datos": { "areteSiniiga": "A-1", "gender": "Hembra" },
+    "eliminado": false,
+    "actualizadoEnServidor": "2026-11-17T10:00:00Z"
+  }],
+  "siguienteCursorOpaco": "cursor-opaco-o-null",
+  "hayMasPaginas": false,
+  "fechaServidor": "2026-11-17T10:00:01Z"
 }
 ```
 
-El cliente guarda y reenvía `siguienteCursor` sin modificarlo. Las bajas se entregan como cambios con `operacion: "Eliminar"` y `datos: null`.
+El cliente guarda y reenvía `siguienteCursorOpaco` sin modificarlo. Las bajas se entregan como `operacion: "DELETE"`, `eliminado: true` y `datos: null`. `weighings`, `genealogy`, `reproductionRecords` y `media` aún no tienen modelos remotos equivalentes y no se descargan por este endpoint.
 
 ## Push y auditoría
 

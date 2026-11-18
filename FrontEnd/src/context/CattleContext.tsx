@@ -48,10 +48,37 @@ export function CattleProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const refreshCattleFromLocalDb = useCallback(async () => {
+    try {
+      const localCattle = await CattleService.getAllFromCache();
+      setCattle(localCattle.map((item) => ({
+        ...item,
+        earTag: item.earTag || item.tagNumber || item.areteSiniiga || '',
+        name: item.name || item.nombre || '',
+        breed: item.breed || item.raza || '',
+        sex: item.sex || 'Hembra'
+      } as Cattle)));
+      setSource('cache');
+      setError(null);
+    } catch (err) {
+      console.error('Error al actualizar bovinos desde IndexedDB:', err);
+      setError('No se pudo actualizar la información ganadera local.');
+    }
+  }, []);
+
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void fetchCattle();
   }, [fetchCattle]);
+
+  useEffect(() => {
+    const onPullApplied = (event: Event) => {
+      const detail = (event as CustomEvent<{ entidad?: string }>).detail;
+      if (detail?.entidad === 'cattle') void refreshCattleFromLocalDb();
+    };
+    window.addEventListener('farmbovi:sync-pull-applied', onPullApplied);
+    return () => window.removeEventListener('farmbovi:sync-pull-applied', onPullApplied);
+  }, [refreshCattleFromLocalDb]);
 
   const save = async (data: CattleInput, id?: number) => {
     if (mutationLockRef.current) return;

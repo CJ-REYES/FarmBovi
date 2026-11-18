@@ -64,14 +64,10 @@ internal static class MySqlTestHelper
             .ReplaceService<IHistoryRepository, MariaDbCompatibleHistoryRepository>()
             .Options);
 
-    /// <summary>
-    /// Prepara una base de datos limpia. Si el usuario tiene permisos para CREATE DATABASE,
-    /// usa una base temporal aislada; de lo contrario, limpia las tablas de la base configurada.
-    /// </summary>
+    /// <summary>Prepara una base temporal aislada y nunca modifica la base configurada.</summary>
     public static async Task<(string ConnectionString, bool IsIsolatedDatabase, string IsolatedDbName)> PrepareCleanDatabaseAsync(string prefix)
     {
         var baseConn = GetBaseConnectionString();
-        var baseBuilder = new MySqlConnectionStringBuilder(baseConn);
         var isolatedName = $"{prefix}_{Guid.NewGuid():N}"[..32];
 
         try
@@ -88,8 +84,10 @@ internal static class MySqlTestHelper
         }
         catch (MySqlException ex) when (ex.Number is 1044 or 1045)
         {
-            await DropAllTablesInDatabaseAsync(baseConn);
-            return (baseConn, false, baseBuilder.Database);
+            throw new InvalidOperationException(
+                "Las pruebas MySQL requieren permiso para crear una base temporal aislada. " +
+                "No se modificó la base configurada; concede CREATE/DROP DATABASE o usa una cuenta de pruebas aislada.",
+                ex);
         }
     }
 
@@ -106,34 +104,7 @@ internal static class MySqlTestHelper
             return;
         }
 
-        // Restaurar la base local limpia con todas las migraciones aplicadas
-        await DropAllTablesInDatabaseAsync(connectionString);
-        await using var db = CreateContext(connectionString);
-        await db.Database.MigrateAsync();
-    }
-
-    private static async Task DropAllTablesInDatabaseAsync(string connectionString)
-    {
-        await using var conn = new MySqlConnection(connectionString);
-        await conn.OpenAsync();
-
-        var tables = new List<string>();
-        await using (var listCmd = conn.CreateCommand())
-        {
-            listCmd.CommandText = "SHOW TABLES;";
-            await using var reader = await listCmd.ExecuteReaderAsync();
-            while (await reader.ReadAsync())
-            {
-                tables.Add(reader.GetString(0));
-            }
-        }
-
-        if (tables.Count == 0) return;
-
-        await using var dropCmd = conn.CreateCommand();
-        var escaped = string.Join(", ", tables.Select(t => $"`{t.Replace("`", "``")}`"));
-        dropCmd.CommandText = $"SET FOREIGN_KEY_CHECKS = 0; DROP TABLE IF EXISTS {escaped}; SET FOREIGN_KEY_CHECKS = 1;";
-        await dropCmd.ExecuteNonQueryAsync();
+        throw new InvalidOperationException("La limpieza de pruebas solo se permite en una base aislada.");
     }
 }
 
@@ -366,6 +337,45 @@ public sealed class MySqlIntegrationTests
                 Assert.Equal(lote.IdLote, animal.IdLote);
                 Assert.Equal(user.IdUsuario, animal.IdAutor);
             }
+        }
+        finally
+        {
+            await MySqlTestHelper.CleanupDatabaseAsync(connStr, isIsolated, dbName);
+        }
+    }
+
+    [MySqlIntegrationFact]
+    public async Task RegistroUsuarioConcurrente_IndiceUnicoEvitaDuplicados()
+    {
+        var (connStr, isIsolated, dbName) = await MySqlTestHelper.PrepareCleanDatabaseAsync("fb_user_unique");
+        try
+        {
+            await using (var db = MySqlTestHelper.CreateContext(connStr))
+                await db.Database.MigrateAsync();
+
+            var correo = $"race-{Guid.NewGuid():N}@farmbovi.local";
+            async Task<int> CreateAsync(string nombre)
+            {
+                await using var db = MySqlTestHelper.CreateContext(connStr);
+                var controller = new UsuarioController(db);
+                AttachJwtUser(controller, Guid.NewGuid());
+                var result = await controller.Create(
+                    new UsuarioRequest(nombre, correo.ToUpperInvariant(), "ClaveSegura123", "Activo"),
+                    CancellationToken.None);
+                return result.Result switch
+                {
+                    CreatedAtActionResult => StatusCodes.Status201Created,
+                    ConflictObjectResult => StatusCodes.Status409Conflict,
+                    _ => throw new InvalidOperationException($"Respuesta de registro inesperada: {result.Result?.GetType().Name}")
+                };
+            }
+
+            var statuses = await Task.WhenAll(CreateAsync("Usuario A"), CreateAsync("Usuario B"));
+            Assert.Contains(StatusCodes.Status201Created, statuses);
+            Assert.Contains(StatusCodes.Status409Conflict, statuses);
+
+            await using var verifyDb = MySqlTestHelper.CreateContext(connStr);
+            Assert.Equal(1, await verifyDb.Usuarios.CountAsync(u => u.Correo == correo.ToLowerInvariant()));
         }
         finally
         {

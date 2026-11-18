@@ -89,6 +89,10 @@ export const CattleService = {
     return { data: localRecords.map(this.toCattle), source: 'cache' };
   },
 
+  async getAllFromCache(): Promise<ExtendedCattle[]> {
+    return (await CattleRepository.getAll()).map(this.toCattle);
+  },
+
   async save(input: CattleInput, id?: number | string): Promise<void> {
     if (id !== undefined && id !== null) {
       await CattleRepository.update(id, input, input);

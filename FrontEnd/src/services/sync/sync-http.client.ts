@@ -35,8 +35,8 @@ export class SyncEndpointNotConfiguredError extends Error {
 }
 
 let configuredEndpoints: SyncEndpointsConfig = {
-  pushEndpoint: (import.meta.env.VITE_SYNC_PUSH_URL as string | undefined)?.trim() || null,
-  pullEndpoint: (import.meta.env.VITE_SYNC_PULL_URL as string | undefined)?.trim() || null
+  pushEndpoint: (import.meta.env?.VITE_SYNC_PUSH_URL as string | undefined)?.trim() || null,
+  pullEndpoint: (import.meta.env?.VITE_SYNC_PULL_URL as string | undefined)?.trim() || null
 };
 
 function mapHttpErrorToOperationResult(
