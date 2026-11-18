@@ -63,9 +63,17 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             NameClaimType = ClaimTypes.Name
         };
     });
-builder.Services.AddAuthorization();
+
+// Política global: todo endpoint exige JWT salvo los marcados explícitamente con [AllowAnonymous].
+builder.Services.AddAuthorization(options =>
+{
+    options.FallbackPolicy = new AuthorizationPolicyBuilder(JwtBearerDefaults.AuthenticationScheme)
+        .RequireAuthenticatedUser()
+        .Build();
+});
 
 builder.Services.AddScoped<FarmDomainValidationService>();
+builder.Services.AddScoped<RanchAccessService>();
 
 var connectionString = builder.Configuration.GetConnectionString("FarmBovi")
     ?? throw new InvalidOperationException("Configura ConnectionStrings:FarmBovi.");
@@ -91,7 +99,19 @@ if (app.Environment.IsDevelopment())
     app.UseDeveloperExceptionPage();
 
     await using var scope = app.Services.CreateAsyncScope();
-    await scope.ServiceProvider.GetRequiredService<FarmDbContext>().Database.MigrateAsync();
+    var dbContext = scope.ServiceProvider.GetRequiredService<FarmDbContext>();
+    
+    // 1. Aplica migraciones automáticamente al iniciar
+    await dbContext.Database.MigrateAsync();
+
+    // 2. Genera un hash criptográfico válido con PasswordHasher y lo actualiza directamente en la BD
+    var hasher = new Microsoft.AspNetCore.Identity.PasswordHasher<object>();
+    var hashedPassword = hasher.HashPassword(new object(), "miPassword123");
+
+    await dbContext.Database.ExecuteSqlRawAsync(
+        "UPDATE usuario SET Contrasena = {0} WHERE Correo = 'prueba@farmbovi.com';", 
+        hashedPassword
+    );
 
     app.UseSwagger();
     app.UseSwaggerUI();
@@ -123,10 +143,15 @@ if (Directory.Exists(Path.Combine(app.Environment.ContentRootPath, "wwwroot")))
 app.UseCors("Frontend");
 app.UseAuthentication();
 app.UseAuthorization();
-app.MapControllers();
-app.MapHealthChecks("/health");
+app.MapControllers().RequireAuthorization();
+
+// Excepción pública: sonda de salud para despliegue/monitoreo (no expone datos de negocio).
+app.MapHealthChecks("/health").AllowAnonymous();
 
 app.Run();
+
+/// <summary>Expuesto para pruebas de integración con WebApplicationFactory.</summary>
+public partial class Program;
 
 public sealed class SwaggerBearerOperationFilter : IOperationFilter
 {

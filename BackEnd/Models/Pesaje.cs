@@ -7,8 +7,8 @@ namespace FarmBovi.Api.Models;
 public sealed class Pesaje
 {
     [Key]
-    [Column(TypeName = "char(36)]")]
-    public Guid IdPesaje { get; set; }
+    [Column(TypeName = "char(36)")]
+    public Guid IdPesaje { get; set; } = Guid.NewGuid();
 
     [Column(TypeName = "char(36)")]
     public Guid IdAnimal { get; set; }
@@ -16,13 +16,13 @@ public sealed class Pesaje
     [Column(TypeName = "decimal(10,2)")]
     public decimal Peso { get; set; }
 
-    public DateTime Fecha { get; set; }
+    public DateTime Fecha { get; set; } = DateTime.UtcNow;
 
     [MaxLength(250)]
     public string? Observaciones { get; set; }
 
-    [Column(TypeName = "char(36)")]
-    public Guid? IdAutor { get; set; }
+    // Cambiado de Guid a int para que coincida con el usuario autenticado
+    public int IdAutor { get; set; }
 
     public DateTime FechaCreacion { get; set; } = DateTime.UtcNow;
 

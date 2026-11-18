@@ -12,9 +12,9 @@ public sealed record UsuarioRequest(
     [Required, EmailAddress, StringLength(254)] string Correo,
     [StringLength(200, MinimumLength = 8)] string? Contrasena,
     [Required, StringLength(20)] string Estado,
-    Guid? IdUsuario = null);
+    int? Id = null);
 
-public sealed record UsuarioResponse(Guid IdUsuario, string Nombre, string Correo, string Estado, DateTime CreadoEn);
+public sealed record UsuarioResponse(int Id, string Nombre, string Correo, string Estado);
 
 [ApiController]
 [Route("api/usuarios")]
@@ -23,40 +23,30 @@ public sealed class UsuarioController(FarmDbContext db) : ControllerBase
     private static readonly PasswordHasher<Usuario> Hasher = new();
 
     private static UsuarioResponse ToResponse(Usuario user) =>
-        new(user.IdUsuario, user.Nombre, user.Correo, user.Estado, user.CreadoEn);
+        new(user.Id, user.Nombre, user.Correo, user.Estado);
 
     [HttpGet]
     public async Task<ActionResult<List<UsuarioResponse>>> GetAll(CancellationToken ct) =>
         (await db.Usuarios.AsNoTracking().ToListAsync(ct)).Select(ToResponse).ToList();
 
-    [HttpGet("{id:guid}")]
-    public async Task<ActionResult<UsuarioResponse>> Get(Guid id, CancellationToken ct)
+    [HttpGet("{id:int}")]
+    public async Task<ActionResult<UsuarioResponse>> Get(int id, CancellationToken ct)
     {
-        var item = await db.Usuarios.AsNoTracking().FirstOrDefaultAsync(u => u.IdUsuario == id, ct);
+        var item = await db.Usuarios.AsNoTracking().FirstOrDefaultAsync(u => u.Id == id, ct);
         return item is null ? NotFound() : Ok(ToResponse(item));
     }
 
     [HttpPost]
     public async Task<ActionResult<UsuarioResponse>> Create(UsuarioRequest input, CancellationToken ct)
     {
-        var id = input.IdUsuario is { } clientId && clientId != Guid.Empty
-            ? clientId
-            : Guid.NewGuid();
-
-        var existing = await db.Usuarios.AsNoTracking().FirstOrDefaultAsync(u => u.IdUsuario == id, ct);
-        if (existing is not null)
-            return Ok(ToResponse(existing));
-
         if (string.IsNullOrWhiteSpace(input.Contrasena) || input.Contrasena.Length < 8)
             return BadRequest("La contraseña debe tener al menos 8 caracteres.");
 
         var item = new Usuario
         {
-            IdUsuario = id,
             Nombre = input.Nombre.Trim(),
             Correo = input.Correo.Trim().ToLowerInvariant(),
-            Estado = input.Estado.Trim(),
-            CreadoEn = DateTime.UtcNow
+            Estado = input.Estado.Trim()
         };
         item.Contrasena = Hasher.HashPassword(item, input.Contrasena);
 
@@ -70,11 +60,11 @@ public sealed class UsuarioController(FarmDbContext db) : ControllerBase
             return Conflict("Ya existe un usuario con ese correo.");
         }
 
-        return CreatedAtAction(nameof(Get), new { id = item.IdUsuario }, ToResponse(item));
+        return CreatedAtAction(nameof(Get), new { id = item.Id }, ToResponse(item));
     }
 
-    [HttpPut("{id:guid}")]
-    public async Task<IActionResult> Update(Guid id, UsuarioRequest input, CancellationToken ct)
+    [HttpPut("{id:int}")]
+    public async Task<IActionResult> Update(int id, UsuarioRequest input, CancellationToken ct)
     {
         var item = await db.Usuarios.FindAsync([id], ct);
         if (item is null) return NotFound();
@@ -97,8 +87,8 @@ public sealed class UsuarioController(FarmDbContext db) : ControllerBase
         return NoContent();
     }
 
-    [HttpDelete("{id:guid}")]
-    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
+    [HttpDelete("{id:int}")]
+    public async Task<IActionResult> Delete(int id, CancellationToken ct)
     {
         var item = await db.Usuarios.FindAsync([id], ct);
         if (item is null) return NotFound();

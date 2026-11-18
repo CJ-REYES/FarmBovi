@@ -33,7 +33,7 @@ public sealed class EventoSanitario
     public string? Observaciones { get; set; }
 
     [Required]
-    public Guid IdAutor { get; set; }
+    public int IdAutor { get; set; }
 
     [Required]
     public DateTime CreadoEn { get; set; } = DateTime.UtcNow;

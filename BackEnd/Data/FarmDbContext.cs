@@ -9,7 +9,7 @@ namespace FarmBovi.Api.Data;
 public sealed record PushTraceMetadata(
     Guid IdCambio,
     Guid IdOperacion,
-    Guid IdUsuario,
+    int IdUsuario,
     Guid IdRancho,
     string Entidad,
     Guid IdRegistro,
@@ -204,10 +204,12 @@ public sealed class FarmDbContext(
         if (keyVal is not Guid idRegistro || idRegistro == Guid.Empty) return null;
 
         var userIdText = httpContextAccessor?.HttpContext?.User.FindFirstValue(ClaimTypes.NameIdentifier)
-            ?? httpContextAccessor?.HttpContext?.User.FindFirstValue("sub");
-        Guid? idUsuario = Guid.TryParse(userIdText, out var parsedUser) && parsedUser != Guid.Empty
+            ?? httpContextAccessor?.HttpContext?.User.FindFirstValue("sub")
+            ?? httpContextAccessor?.HttpContext?.User.FindFirstValue("idUsuario");
+
+        int? idUsuario = int.TryParse(userIdText, out var parsedUser) && parsedUser > 0
             ? parsedUser
-            : TryGetGuidProperty(entry, "IdAutor") is var autor && autor != Guid.Empty ? autor : null;
+            : TryGetIntProperty(entry, "IdAutor") is var autor && autor > 0 ? autor : null;
 
         var version = TryGetLongProperty(entry, "VersionRegistro") ?? 1L;
         var wasSoftDeleted = entry.State == EntityState.Modified
@@ -262,6 +264,16 @@ public sealed class FarmDbContext(
             ? entry.Property(propName).OriginalValue
             : entry.Property(propName).CurrentValue;
         return val is Guid g ? g : Guid.Empty;
+    }
+
+    private static int TryGetIntProperty(EntityEntry entry, string propName)
+    {
+        var prop = entry.Metadata.FindProperty(propName);
+        if (prop is null) return 0;
+        var val = entry.State == EntityState.Deleted
+            ? entry.Property(propName).OriginalValue
+            : entry.Property(propName).CurrentValue;
+        return val is int i ? i : 0;
     }
 
     private static long? TryGetLongProperty(EntityEntry entry, string propName)
@@ -390,14 +402,13 @@ public sealed class FarmDbContext(
     {
         modelBuilder.Entity<Usuario>(e =>
         {
-            e.ToTable("Usuario");
-            e.HasKey(x => x.IdUsuario);
-            e.Property(x => x.IdUsuario).HasColumnType("char(36)").ValueGeneratedNever();
+            e.ToTable("usuario");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("Id").ValueGeneratedOnAdd();
             e.Property(x => x.Nombre).HasMaxLength(120).IsRequired();
             e.Property(x => x.Correo).HasMaxLength(254).IsRequired();
             e.Property(x => x.Contrasena).HasMaxLength(500).IsRequired();
             e.Property(x => x.Estado).HasMaxLength(20).IsRequired();
-            e.Property(x => x.CreadoEn).IsRequired();
             e.HasIndex(x => x.Correo).IsUnique();
         });
 
@@ -409,7 +420,7 @@ public sealed class FarmDbContext(
             e.Property(x => x.Nombre).HasMaxLength(120).IsRequired();
             e.Property(x => x.UbicacionGeneral).HasMaxLength(250).IsRequired();
             e.Property(x => x.Estado).HasMaxLength(20).IsRequired();
-            e.Property(x => x.IdAutor).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.IdAutor).IsRequired();
             e.Property(x => x.VersionRegistro).IsConcurrencyToken();
             e.HasOne<Usuario>().WithMany().HasForeignKey(x => x.IdAutor).OnDelete(DeleteBehavior.Restrict);
         });
@@ -419,7 +430,7 @@ public sealed class FarmDbContext(
             e.ToTable("UsuarioRancho");
             e.HasKey(x => x.IdUsuarioRancho);
             e.Property(x => x.IdUsuarioRancho).HasColumnType("char(36)").ValueGeneratedNever();
-            e.Property(x => x.IdUsuario).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.IdUsuario).IsRequired();
             e.Property(x => x.IdRancho).HasColumnType("char(36)").IsRequired();
             e.Property(x => x.Rol).HasMaxLength(30).IsRequired();
             e.Property(x => x.Estado).HasMaxLength(20).IsRequired();
@@ -437,7 +448,7 @@ public sealed class FarmDbContext(
             e.Property(x => x.Nombre).HasMaxLength(120).IsRequired();
             e.Property(x => x.Ubicacion).HasMaxLength(250);
             e.Property(x => x.Estado).HasMaxLength(20).IsRequired();
-            e.Property(x => x.IdAutor).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.IdAutor).IsRequired();
             e.Property(x => x.VersionRegistro).IsConcurrencyToken();
             e.HasIndex(x => new { x.IdRancho, x.Nombre }).IsUnique();
             e.HasOne<Rancho>().WithMany().HasForeignKey(x => x.IdRancho).OnDelete(DeleteBehavior.Restrict);
@@ -459,7 +470,7 @@ public sealed class FarmDbContext(
             e.Property(x => x.Procedencia).HasMaxLength(250).IsRequired();
             e.Property(x => x.Estado).HasMaxLength(25).IsRequired();
             e.Property(x => x.FechaSalida).HasColumnType("date");
-            e.Property(x => x.IdAutor).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.IdAutor).IsRequired();
             e.Property(x => x.VersionRegistro).IsConcurrencyToken();
             e.HasIndex(x => new { x.IdRancho, x.Arete }).IsUnique();
             e.HasOne<Rancho>().WithMany().HasForeignKey(x => x.IdRancho).OnDelete(DeleteBehavior.Restrict);
@@ -479,7 +490,7 @@ public sealed class FarmDbContext(
             e.Property(x => x.Cantidad).HasPrecision(10, 3).IsRequired();
             e.Property(x => x.Unidad).HasMaxLength(20).IsRequired();
             e.Property(x => x.Frecuencia).HasMaxLength(80).IsRequired();
-            e.Property(x => x.IdAutor).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.IdAutor).IsRequired();
             e.Property(x => x.VersionRegistro).IsConcurrencyToken();
             e.HasIndex(x => x.IdAnimal);
             e.HasIndex(x => x.IdLote);
@@ -499,7 +510,7 @@ public sealed class FarmDbContext(
             e.Property(x => x.Tipo).HasMaxLength(30).IsRequired();
             e.Property(x => x.OrigenExterno).HasMaxLength(250);
             e.Property(x => x.DestinoExterno).HasMaxLength(250);
-            e.Property(x => x.IdAutor).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.IdAutor).IsRequired();
             e.Property(x => x.VersionRegistro).IsConcurrencyToken();
             e.HasIndex(x => x.IdAnimal);
             e.HasIndex(x => x.Fecha);
@@ -519,7 +530,7 @@ public sealed class FarmDbContext(
             e.Property(x => x.ProfesionalDiagnostico).HasMaxLength(180);
             e.Property(x => x.EvidenciaDiagnosticoUri).HasMaxLength(500);
             e.Property(x => x.Responsable).HasMaxLength(180).IsRequired();
-            e.Property(x => x.IdAutor).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.IdAutor).IsRequired();
             e.Property(x => x.VersionRegistro).IsConcurrencyToken();
             e.HasIndex(x => x.IdAnimal);
             e.HasOne<Animal>().WithMany().HasForeignKey(x => x.IdAnimal).OnDelete(DeleteBehavior.Restrict);
@@ -535,7 +546,7 @@ public sealed class FarmDbContext(
             e.Property(x => x.Tipo).HasMaxLength(50).IsRequired();
             e.Property(x => x.Medicamento).HasMaxLength(150).IsRequired();
             e.Property(x => x.Dosis).HasMaxLength(100);
-            e.Property(x => x.IdAutor).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.IdAutor).IsRequired();
             e.Property(x => x.VersionRegistro).IsConcurrencyToken();
             e.HasIndex(x => x.IdEventoSanitario);
             e.HasOne<EventoSanitario>().WithMany().HasForeignKey(x => x.IdEventoSanitario).OnDelete(DeleteBehavior.Restrict);
@@ -551,18 +562,20 @@ public sealed class FarmDbContext(
             e.Property(x => x.IdAnimal).HasColumnType("char(36)");
             e.Property(x => x.IdLote).HasColumnType("char(36)");
             e.Property(x => x.IdTratamiento).HasColumnType("char(36)");
-            e.Property(x => x.IdResponsable).HasColumnType("char(36)");
+            e.Property(x => x.IdResponsable).IsRequired(false);
             e.Property(x => x.Tipo).HasMaxLength(35).IsRequired();
             e.Property(x => x.Descripcion).HasMaxLength(250).IsRequired();
             e.Property(x => x.Estado).HasMaxLength(25).IsRequired();
-            e.Property(x => x.IdAutor).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.IdAutor).IsRequired();
             e.Property(x => x.VersionRegistro).IsConcurrencyToken();
+            
             e.HasIndex(x => x.IdRancho);
             e.HasIndex(x => x.IdAnimal);
             e.HasIndex(x => x.IdLote);
             e.HasIndex(x => x.IdTratamiento);
             e.HasIndex(x => x.IdResponsable);
             e.HasIndex(x => x.FechaProgramada);
+
             e.HasOne<Rancho>().WithMany().HasForeignKey(x => x.IdRancho).OnDelete(DeleteBehavior.Restrict);
             e.HasOne<Animal>().WithMany().HasForeignKey(x => x.IdAnimal).OnDelete(DeleteBehavior.Restrict);
             e.HasOne<Lote>().WithMany().HasForeignKey(x => x.IdLote).OnDelete(DeleteBehavior.Restrict);
@@ -571,12 +584,44 @@ public sealed class FarmDbContext(
             e.HasOne<Usuario>().WithMany().HasForeignKey(x => x.IdAutor).OnDelete(DeleteBehavior.Restrict);
         });
 
+        modelBuilder.Entity<Pesaje>(e =>
+        {
+            e.ToTable("Pesaje");
+            e.HasKey(x => x.IdPesaje);
+            e.Property(x => x.IdPesaje).HasColumnType("char(36)").ValueGeneratedNever();
+            e.Property(x => x.IdAnimal).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.Peso).HasColumnType("decimal(10,2)").IsRequired();
+            e.Property(x => x.Fecha).IsRequired();
+            e.Property(x => x.Observaciones).HasMaxLength(250);
+            e.Property(x => x.IdAutor).IsRequired();
+            e.Property(x => x.VersionRegistro).IsConcurrencyToken();
+            e.HasIndex(x => x.IdAnimal);
+            e.HasOne<Animal>().WithMany().HasForeignKey(x => x.IdAnimal).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Usuario>().WithMany().HasForeignKey(x => x.IdAutor).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<Reproduccion>(e =>
+        {
+            e.ToTable("Reproduccion");
+            e.HasKey(x => x.IdReproduccion);
+            e.Property(x => x.IdReproduccion).HasColumnType("char(36)").ValueGeneratedNever();
+            e.Property(x => x.IdAnimal).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.TipoEvento).HasMaxLength(50).IsRequired();
+            e.Property(x => x.Fecha).IsRequired();
+            e.Property(x => x.Observaciones).HasMaxLength(250);
+            e.Property(x => x.IdAutor).IsRequired();
+            e.Property(x => x.VersionRegistro).IsConcurrencyToken();
+            e.HasIndex(x => x.IdAnimal);
+            e.HasOne<Animal>().WithMany().HasForeignKey(x => x.IdAnimal).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Usuario>().WithMany().HasForeignKey(x => x.IdAutor).OnDelete(DeleteBehavior.Restrict);
+        });
+
         modelBuilder.Entity<RegistroSyncServidor>(e =>
         {
             e.ToTable("RegistroSyncServidor");
             e.HasKey(x => x.IdOperacion);
             e.Property(x => x.IdOperacion).HasColumnType("char(36)").ValueGeneratedNever();
-            e.Property(x => x.IdUsuario).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.IdUsuario).IsRequired();
             e.Property(x => x.IdRancho).HasColumnType("char(36)").IsRequired();
             e.Property(x => x.IdDispositivo).HasMaxLength(120).IsRequired();
             e.Property(x => x.HashSolicitud).HasColumnType("char(64)").HasMaxLength(64).IsRequired();
@@ -601,7 +646,7 @@ public sealed class FarmDbContext(
             e.Property(x => x.Operacion).HasMaxLength(20).IsRequired();
             e.Property(x => x.Version).IsRequired();
             e.Property(x => x.OcurrioEn).HasPrecision(6).IsRequired();
-            e.Property(x => x.IdUsuario).HasColumnType("char(36)");
+            e.Property(x => x.IdUsuario);
             e.Property(x => x.IdOperacion).HasColumnType("char(36)");
             e.Property(x => x.Origen).HasMaxLength(25).IsRequired();
         });

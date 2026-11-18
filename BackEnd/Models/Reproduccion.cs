@@ -8,21 +8,22 @@ public sealed class Reproduccion
 {
     [Key]
     [Column(TypeName = "char(36)")]
-    public Guid IdReproduccion { get; set; }
+    public Guid IdReproduccion { get; set; } = Guid.NewGuid();
 
     [Column(TypeName = "char(36)")]
     public Guid IdAnimal { get; set; }
 
+    [Required]
     [MaxLength(50)]
-    public string TipoEvento { get; set; } = null!;
+    public string TipoEvento { get; set; } = string.Empty;
 
-    public DateTime Fecha { get; set; }
+    public DateTime Fecha { get; set; } = DateTime.UtcNow;
 
     [MaxLength(250)]
     public string? Observaciones { get; set; }
 
-    [Column(TypeName = "char(36)")]
-    public Guid? IdAutor { get; set; }
+    // Cambiado de Guid a int para que coincida con el usuario autenticado
+    public int IdAutor { get; set; }
 
     public DateTime FechaCreacion { get; set; } = DateTime.UtcNow;
 

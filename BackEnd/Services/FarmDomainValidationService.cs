@@ -2,6 +2,7 @@ using System.Security.Claims;
 using FarmBovi.Api.Data;
 using FarmBovi.Api.Models;
 using Microsoft.EntityFrameworkCore;
+using System.IdentityModel.Tokens.Jwt;
 
 namespace FarmBovi.Api.Services;
 
@@ -17,38 +18,35 @@ public sealed class FarmDomainValidationService(FarmDbContext db)
         "Baja"
     };
 
-    /// <summary>
-    /// Resuelve IdAutor priorizando la identidad autenticada (ClaimsPrincipal) cuando exista,
-    /// sin confiar en el valor enviado por el cliente. Mientras la autenticación siga pendiente
-    /// en el contrato de API, verifica que el IdAutor exista en Usuario.
-    /// </summary>
-    public async Task<(Guid AuthorId, string? Error)> ResolveAuthorAsync(
-        ClaimsPrincipal? user, Guid clientProvidedAuthorId, CancellationToken ct)
+    public async Task<(int AuthorId, string? Error)> ResolveAuthorAsync(
+        ClaimsPrincipal? user, int clientProvidedAuthorId, CancellationToken ct)
     {
-        Guid resolvedId = Guid.Empty;
+        int resolvedId = 0;
 
         if (user?.Identity?.IsAuthenticated == true)
         {
             var claimValue = user.FindFirstValue(ClaimTypes.NameIdentifier)
+                ?? user.FindFirstValue(JwtRegisteredClaimNames.Sub)
                 ?? user.FindFirstValue("sub")
                 ?? user.FindFirstValue("idUsuario");
 
-            if (!Guid.TryParse(claimValue, out resolvedId) || resolvedId == Guid.Empty)
-                return (Guid.Empty, "La identidad autenticada no contiene un identificador de usuario válido.");
+            if (!int.TryParse(claimValue, out resolvedId) || resolvedId <= 0)
+                return (0, "La identidad autenticada no contiene un identificador de usuario válido.");
         }
         else
         {
-            if (clientProvidedAuthorId == Guid.Empty)
-                return (Guid.Empty, "El identificador de autor (idAutor) es obligatorio.");
+            if (clientProvidedAuthorId <= 0)
+                return (0, "El identificador de autor (idAutor) es obligatorio.");
 
             resolvedId = clientProvidedAuthorId;
         }
 
+        // Línea 48 corregida a u.Id
         var authorExists = await db.Usuarios.AsNoTracking()
-            .AnyAsync(u => u.IdUsuario == resolvedId, ct);
+            .AnyAsync(u => u.Id == resolvedId, ct);
 
         if (!authorExists)
-            return (Guid.Empty, "El usuario autor especificado no existe.");
+            return (0, "El usuario autor especificado no existe.");
 
         return (resolvedId, null);
     }
@@ -101,7 +99,6 @@ public sealed class FarmDomainValidationService(FarmDbContext db)
     public async Task<string?> ValidateAlimentacionAsync(
         Guid? idAnimal, Guid? idLote, decimal cantidad, DateTime inicio, DateTime? fin, CancellationToken ct)
     {
-        // Regla 05: XOR(idAnimal, idLote). Exactamente uno debe estar informado.
         if (idAnimal.HasValue == idLote.HasValue)
             return "Debe informarse exactamente uno entre idAnimal e idLote (son mutuamente excluyentes).";
 
@@ -230,7 +227,6 @@ public sealed class FarmDomainValidationService(FarmDbContext db)
             return "Tipo, descripción y estado del recordatorio son obligatorios.";
         }
 
-        // Regla 12: Recordatorio puede ser general del rancho, individual o por lote; animal y lote son excluyentes.
         if (item.IdAnimal.HasValue && item.IdLote.HasValue)
             return "El recordatorio puede ser general del rancho, individual o por lote; animal y lote son excluyentes.";
 
@@ -261,8 +257,9 @@ public sealed class FarmDomainValidationService(FarmDbContext db)
 
         if (item.IdResponsable.HasValue)
         {
+            // Línea 265 corregida a u.Id
             var respExists = await db.Usuarios.AsNoTracking()
-                .AnyAsync(u => u.IdUsuario == item.IdResponsable.Value, ct);
+                .AnyAsync(u => u.Id == item.IdResponsable.Value, ct);
             if (!respExists)
                 return "El usuario responsable especificado no existe.";
         }
@@ -294,7 +291,6 @@ public sealed class FarmDomainValidationService(FarmDbContext db)
         return null;
     }
 
-    // Regla 14: Pesaje.pesoRealKg > 0 proviene de báscula y nunca se sustituye con EstimacionPeso.
     public static string? ValidatePesaje(decimal pesoRealKg) =>
         pesoRealKg <= 0
             ? "El peso real de báscula (pesoRealKg) debe ser mayor que cero."

@@ -13,15 +13,19 @@ namespace FarmBovi.Api.Controllers;
 [Route("api/reproduction")]
 public sealed class ReproduccionController(FarmDbContext db) : ControllerBase
 {
-    private Guid? GetCurrentUserId()
+    private int? GetCurrentUserId()
     {
-        var claim = User.FindFirst(ClaimTypes.NameIdentifier) ?? User.FindFirst("sub");
-        if (claim != null && Guid.TryParse(claim.Value, out var userId))
+        var rawClaim = User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? User.FindFirstValue("sub")
+            ?? User.FindFirstValue("idUsuario");
+
+        if (!string.IsNullOrWhiteSpace(rawClaim) && int.TryParse(rawClaim, out var userId) && userId > 0)
             return userId;
+
         return null;
     }
 
-    private async Task<bool> UserHasAccessToRanchoAsync(Guid userId, Guid idRancho, CancellationToken ct)
+    private async Task<bool> UserHasAccessToRanchoAsync(int userId, Guid idRancho, CancellationToken ct)
     {
         return await db.UsuarioRanchos
             .AnyAsync(ur => ur.IdUsuario == userId && ur.IdRancho == idRancho, ct);
@@ -33,7 +37,7 @@ public sealed class ReproduccionController(FarmDbContext db) : ControllerBase
         var userId = GetCurrentUserId();
         if (userId == null) return Unauthorized();
 
-        // Obtener los ranchos autorizados para este usuario
+        // Obtener los ranchos autorizados para este usuario (int a int)
         var ranchosAutorizadosIds = await db.UsuarioRanchos
             .Where(ur => ur.IdUsuario == userId.Value)
             .Select(ur => ur.IdRancho)
@@ -103,7 +107,7 @@ public sealed class ReproduccionController(FarmDbContext db) : ControllerBase
         if (item.FechaCreacion == default)
             item.FechaCreacion = DateTime.UtcNow;
 
-        if (item.IdAutor == Guid.Empty)
+        if (item.IdAutor == 0)
         {
             item.IdAutor = userId.Value;
         }

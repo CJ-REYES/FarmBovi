@@ -15,7 +15,7 @@ public sealed class Recordatorio
     public Guid? IdAnimal { get; set; }
     public Guid? IdLote { get; set; }
     public Guid? IdTratamiento { get; set; }
-    public Guid? IdResponsable { get; set; }
+    public int? IdResponsable { get; set; }
 
     [Required, MaxLength(50)]
     public string Tipo { get; set; } = string.Empty;
@@ -32,7 +32,7 @@ public sealed class Recordatorio
     public DateTime? FechaCompletado { get; set; }
 
     [Required]
-    public Guid IdAutor { get; set; }
+    public int IdAutor { get; set; }
 
     [Required]
     public DateTime CreadoEn { get; set; } = DateTime.UtcNow;
