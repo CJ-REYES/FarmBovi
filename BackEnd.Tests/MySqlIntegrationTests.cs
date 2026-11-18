@@ -353,12 +353,23 @@ public sealed class MySqlIntegrationTests
             await using (var db = MySqlTestHelper.CreateContext(connStr))
                 await db.Database.MigrateAsync();
 
+            // Crear usuarios requiere un administrador de rancho autenticado.
+            var adminId = Guid.NewGuid();
+            var ranchId = Guid.NewGuid();
+            await using (var seedDb = MySqlTestHelper.CreateContext(connStr))
+            {
+                seedDb.Usuarios.Add(new Usuario { IdUsuario = adminId, Nombre = "Admin", Correo = $"admin-{adminId:N}@farmbovi.local", Contrasena = "hash", Estado = "Activo" });
+                seedDb.Ranchos.Add(new Rancho { IdRancho = ranchId, Nombre = "Rancho", UbicacionGeneral = "Norte", Estado = "Activo", IdAutor = adminId });
+                seedDb.UsuarioRanchos.Add(new UsuarioRancho { IdUsuario = adminId, IdRancho = ranchId, Rol = "Admin", Estado = "Activo" });
+                await seedDb.SaveChangesAsync();
+            }
+
             var correo = $"race-{Guid.NewGuid():N}@farmbovi.local";
             async Task<int> CreateAsync(string nombre)
             {
                 await using var db = MySqlTestHelper.CreateContext(connStr);
-                var controller = new UsuarioController(db);
-                AttachJwtUser(controller, Guid.NewGuid());
+                var controller = new UsuarioController(db, new FarmBovi.Api.Services.RanchAccessService(db));
+                AttachJwtUser(controller, adminId);
                 var result = await controller.Create(
                     new UsuarioRequest(nombre, correo.ToUpperInvariant(), "ClaveSegura123", "Activo"),
                     CancellationToken.None);

@@ -7,15 +7,20 @@ using Microsoft.EntityFrameworkCore;
 namespace FarmBovi.Api.Controllers;
 
 [ApiController]
+[RanchScope(RanchResource.Animal)]
 [Route("api/animales")]
 public sealed class AnimalsController(FarmDbContext db, FarmDomainValidationService validator) : ControllerBase
 {
     [HttpGet]
-    public Task<List<Animal>> GetAll([FromQuery] bool incluirEliminados = false, CancellationToken ct = default)
+    public Task<List<Animal>> GetAll([FromServices] RanchAccessService access, [FromQuery] bool incluirEliminados = false, CancellationToken ct = default)
     {
         var query = db.Animales.AsNoTracking();
         if (!incluirEliminados)
             query = query.Where(a => a.EliminadoEn == null);
+
+        // Solo registros de ranchos donde el usuario tiene membresía activa.
+        var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
+        query = query.Where(x => ranchIds.Contains(x.IdRancho));
 
         return query.ToListAsync(ct);
     }

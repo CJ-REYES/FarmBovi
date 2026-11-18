@@ -192,4 +192,199 @@ public sealed class SyncPullTests
         Assert.Equal(animalId, treatment.Datos.Value.GetProperty("cattleId").GetGuid());
         Assert.Equal("Antibiótico 2 ml", treatment.Datos.Value.GetProperty("descripcion").GetString());
     }
+
+    private static string TreatmentJson(Guid eventId) =>
+        "{\"IdEventoSanitario\":\"" + eventId + "\",\"Producto\":\"Ivermectina\",\"Dosis\":5,\"UnidadDosis\":\"ml\",\"FechaInicio\":\"2026-11-17T00:00:00Z\"}";
+
+    private static async Task<Guid> SeedHealthEventAsync(FarmDbContext db, Guid userId, Guid ranchId)
+    {
+        var animalId = Guid.NewGuid();
+        var eventId = Guid.NewGuid();
+        db.Animales.Add(new Animal { IdAnimal = animalId, IdRancho = ranchId, Arete = "S-" + animalId.ToString("N")[..6], Raza = "R", Sexo = "Hembra", Procedencia = "L", Estado = "Activo", IdAutor = userId });
+        db.EventosSanitarios.Add(new EventoSanitario { IdEventoSanitario = eventId, IdAnimal = animalId, Tipo = "Vacuna", Responsable = "MVZ", IdAutor = userId });
+        await db.SaveChangesAsync();
+        db.CambiosServidor.RemoveRange(db.CambiosServidor);
+        await db.SaveChangesAsync();
+        return eventId;
+    }
+
+    [Fact]
+    public async Task GetCambios_FechasIgualesEntrePaginas_NoSaltaNiRepiteRegistros()
+    {
+        await using var db = CreateDb(Guid.NewGuid().ToString("N"));
+        var (userA, _, ranchA, _) = await SeedAsync(db);
+        var timestamp = new DateTime(2026, 11, 17, 12, 0, 0, DateTimeKind.Utc);
+        var expected = Enumerable.Range(0, 7).Select(_ => Guid.NewGuid()).ToList();
+        foreach (var id in expected)
+            db.CambiosServidor.Add(Change(ranchA, nameof(Lote), id, "Crear", timestamp, "{\"Nombre\":\"L\"}", id));
+        await db.SaveChangesAsync();
+
+        var received = new List<Guid>();
+        string? cursor = null;
+        for (var i = 0; i < 20; i++)
+        {
+            var page = OkValue(await Controller(db, userA).GetCambios("lots", ranchA, null, cursor, null, 3));
+            received.AddRange(page.Cambios.Select(c => c.RemoteId));
+            cursor = page.SiguienteCursorOpaco;
+            if (!page.HayMasPaginas) break;
+        }
+
+        Assert.Equal(expected.OrderBy(g => g).ToList(), received);
+
+        // Un cambio nuevo con la misma fecha y un IdCambio mayor sigue siendo alcanzable desde el último cursor.
+        var later = Guid.Parse("ffffffff-ffff-4fff-bfff-ffffffffffff");
+        db.CambiosServidor.Add(Change(ranchA, nameof(Lote), later, "Actualizar", timestamp, "{\"Nombre\":\"L2\"}", later));
+        await db.SaveChangesAsync();
+        var tail = OkValue(await Controller(db, userA).GetCambios("lots", ranchA, null, cursor, null, 3));
+        Assert.Equal(later, Assert.Single(tail.Cambios).RemoteId);
+        Assert.Equal("UPSERT", tail.Cambios[0].Operacion);
+
+        // Sin cambios nuevos, el cursor se conserva.
+        var empty = OkValue(await Controller(db, userA).GetCambios("lots", ranchA, null, tail.SiguienteCursorOpaco, null, 3));
+        Assert.Empty(empty.Cambios);
+        Assert.Equal(tail.SiguienteCursorOpaco, empty.SiguienteCursorOpaco);
+    }
+
+    [Fact]
+    public async Task GetCambios_EliminacionDevuelveDeleteSinDatos()
+    {
+        await using var db = CreateDb(Guid.NewGuid().ToString("N"));
+        var (userA, _, ranchA, _) = await SeedAsync(db);
+        var id = Guid.NewGuid();
+        var t = DateTime.UtcNow;
+        db.CambiosServidor.AddRange(
+            Change(ranchA, nameof(Recordatorio), id, "Crear", t, "{\"Tipo\":\"Vacuna\",\"Descripcion\":\"Aplicar\",\"FechaProgramada\":\"2026-12-01T00:00:00Z\",\"Estado\":\"Pendiente\"}"),
+            Change(ranchA, nameof(Recordatorio), id, "Eliminar", t.AddSeconds(1), "{\"Tipo\":\"basura\"}"));
+        await db.SaveChangesAsync();
+
+        var response = OkValue(await Controller(db, userA).GetCambios("alerts", ranchA, null, null, null, 10));
+        Assert.Equal(2, response.Cambios.Count);
+        Assert.Equal("UPSERT", response.Cambios[0].Operacion);
+        Assert.False(response.Cambios[0].Eliminado);
+        Assert.Equal("Aplicar", response.Cambios[0].Datos!.Value.GetProperty("mensaje").GetString());
+        Assert.False(response.Cambios[0].Datos!.Value.GetProperty("leida").GetBoolean());
+        Assert.Equal("DELETE", response.Cambios[1].Operacion);
+        Assert.True(response.Cambios[1].Eliminado);
+        Assert.Null(response.Cambios[1].Datos);
+    }
+
+    [Fact]
+    public async Task GetCambios_MapeaTodasLasEntidadesRemotasDelAlcance()
+    {
+        await using var db = CreateDb(Guid.NewGuid().ToString("N"));
+        var (userA, _, ranchA, _) = await SeedAsync(db);
+        var t = DateTime.UtcNow;
+        var animal = Guid.NewGuid();
+        var lote = Guid.NewGuid();
+        db.CambiosServidor.AddRange(
+            Change(ranchA, nameof(Lote), Guid.NewGuid(), "Crear", t, "{\"Nombre\":\"Engorda\",\"Ubicacion\":\"Norte\"}"),
+            Change(ranchA, nameof(Alimentacion), Guid.NewGuid(), "Crear", t, "{\"Alimento\":\"Maíz\",\"Cantidad\":12.5,\"Inicio\":\"2026-11-17T00:00:00Z\",\"IdLote\":\"" + lote + "\"}"),
+            Change(ranchA, nameof(MovimientoAnimal), Guid.NewGuid(), "Crear", t, "{\"IdAnimal\":\"" + animal + "\",\"Fecha\":\"2026-11-17T00:00:00Z\",\"Motivo\":\"Venta\",\"IdLoteOrigen\":\"" + lote + "\"}"),
+            Change(ranchA, nameof(EventoSanitario), Guid.NewGuid(), "Crear", t, "{\"IdAnimal\":\"" + animal + "\",\"Tipo\":\"Enfermedad\",\"Diagnostico\":\"Neumonía\",\"Fecha\":\"2026-11-17T00:00:00Z\"}"));
+        await db.SaveChangesAsync();
+
+        var lots = OkValue(await Controller(db, userA).GetCambios("lots", ranchA, null, null, null, 10));
+        Assert.Equal("Engorda", Assert.Single(lots.Cambios).Datos!.Value.GetProperty("nombre").GetString());
+        Assert.Equal("Norte", lots.Cambios[0].Datos!.Value.GetProperty("ubicacion").GetString());
+
+        var feeding = OkValue(await Controller(db, userA).GetCambios("feedingRecords", ranchA, null, null, null, 10));
+        var feed = Assert.Single(feeding.Cambios).Datos!.Value;
+        Assert.Equal("Maíz", feed.GetProperty("tipoAlimento").GetString());
+        Assert.Equal(12.5m, feed.GetProperty("cantidadKg").GetDecimal());
+        Assert.Equal(lote, feed.GetProperty("lotId").GetGuid());
+
+        var movements = OkValue(await Controller(db, userA).GetCambios("movements", ranchA, null, null, null, 10));
+        var move = Assert.Single(movements.Cambios).Datos!.Value;
+        Assert.Equal(animal, move.GetProperty("cattleId").GetGuid());
+        Assert.Equal("Venta", move.GetProperty("motivo").GetString());
+        Assert.Equal(lote, move.GetProperty("origenLotId").GetGuid());
+
+        var health = OkValue(await Controller(db, userA).GetCambios("healthRecords", ranchA, null, null, null, 10));
+        var record = Assert.Single(health.Cambios).Datos!.Value;
+        Assert.Equal(animal, record.GetProperty("cattleId").GetGuid());
+        Assert.Equal("Neumonía", record.GetProperty("descripcion").GetString());
+    }
+
+    [Fact]
+    public async Task GetCambios_EntidadesSinModeloRemoto_SeRechazan()
+    {
+        await using var db = CreateDb(Guid.NewGuid().ToString("N"));
+        var (userA, _, ranchA, _) = await SeedAsync(db);
+        foreach (var entity in new[] { "weighings", "genealogy", "reproductionRecords", "media" })
+        {
+            var result = await Controller(db, userA).GetCambios(entity, ranchA, null, null, null, 10);
+            Assert.IsType<BadRequestObjectResult>(result.Result);
+        }
+    }
+
+    [Fact]
+    public async Task GetCambios_TratamientoSinEventoSanitario_NoEntregaUpsertNuloNiAvanzaCursor()
+    {
+        await using var db = CreateDb(Guid.NewGuid().ToString("N"));
+        var (userA, _, ranchA, _) = await SeedAsync(db);
+        var t = new DateTime(2026, 11, 17, 8, 0, 0, DateTimeKind.Utc);
+        var orphan = Guid.NewGuid();
+        db.CambiosServidor.Add(Change(ranchA, nameof(Tratamiento), orphan, "Crear", t, TreatmentJson(Guid.NewGuid())));
+        await db.SaveChangesAsync();
+
+        var result = await Controller(db, userA).GetCambios("healthRecords", ranchA, null, null, null, 10);
+        var error = Assert.IsType<UnprocessableEntityObjectResult>(result.Result);
+        var payload = Assert.IsType<PullErrorResponse>(error.Value);
+        Assert.Equal("REFERENCIA_INEXISTENTE", payload.Codigo);
+        Assert.Equal(orphan, payload.RemoteId);
+        Assert.Null(payload.CursorVigente);
+    }
+
+    [Fact]
+    public async Task GetCambios_ErrorTrasCambiosValidos_CortaPaginaYRecuperaAlCorregirse()
+    {
+        await using var db = CreateDb(Guid.NewGuid().ToString("N"));
+        var (userA, _, ranchA, _) = await SeedAsync(db);
+        var eventId = await SeedHealthEventAsync(db, userA, ranchA);
+        var missingEvent = Guid.NewGuid();
+        var t = new DateTime(2026, 11, 17, 8, 0, 0, DateTimeKind.Utc);
+        var ok1 = Guid.NewGuid();
+        var broken = Guid.NewGuid();
+        var ok2 = Guid.NewGuid();
+        db.CambiosServidor.AddRange(
+            Change(ranchA, nameof(Tratamiento), ok1, "Crear", t, TreatmentJson(eventId)),
+            Change(ranchA, nameof(Tratamiento), broken, "Crear", t.AddSeconds(1), TreatmentJson(missingEvent)),
+            Change(ranchA, nameof(Tratamiento), ok2, "Crear", t.AddSeconds(2), TreatmentJson(eventId)));
+        await db.SaveChangesAsync();
+
+        // 1. Se entrega solo lo previo al error; el cursor apunta al último cambio entregado.
+        var first = OkValue(await Controller(db, userA).GetCambios("healthRecords", ranchA, null, null, null, 10));
+        Assert.Equal(ok1, Assert.Single(first.Cambios).RemoteId);
+        Assert.True(first.HayMasPaginas);
+        Assert.All(first.Cambios, c => Assert.NotNull(c.Datos));
+
+        // 2. Reintentar desde ese cursor devuelve 422 con el mismo cursor (no avanza).
+        var blocked = await Controller(db, userA).GetCambios("healthRecords", ranchA, null, null, first.SiguienteCursorOpaco, 10);
+        var error = Assert.IsType<PullErrorResponse>(Assert.IsType<UnprocessableEntityObjectResult>(blocked.Result).Value);
+        Assert.Equal(broken, error.RemoteId);
+        Assert.Equal(first.SiguienteCursorOpaco, error.CursorVigente);
+
+        // 3. Al corregirse la referencia en el servidor, el mismo cursor recupera todo sin saltos.
+        var animalId = db.EventosSanitarios.Single(e => e.IdEventoSanitario == eventId).IdAnimal;
+        db.EventosSanitarios.Add(new EventoSanitario { IdEventoSanitario = missingEvent, IdAnimal = animalId, Tipo = "Vacuna", Responsable = "MVZ", IdAutor = userA });
+        await db.SaveChangesAsync();
+        var recovered = OkValue(await Controller(db, userA).GetCambios("healthRecords", ranchA, null, null, first.SiguienteCursorOpaco, 10));
+        Assert.Equal(new[] { broken, ok2 }, recovered.Cambios.Where(c => c.RemoteId == broken || c.RemoteId == ok2).Select(c => c.RemoteId));
+        Assert.All(recovered.Cambios, c => Assert.NotNull(c.Datos));
+    }
+
+    [Theory]
+    [InlineData("Crear", "{no-es-json")]
+    [InlineData("Crear", null)]
+    [InlineData("Fusionar", "{\"Nombre\":\"L\"}")]
+    public async Task GetCambios_DatosInvalidosUOperacionDesconocida_Devuelven422(string operation, string? data)
+    {
+        await using var db = CreateDb(Guid.NewGuid().ToString("N"));
+        var (userA, _, ranchA, _) = await SeedAsync(db);
+        db.CambiosServidor.Add(Change(ranchA, nameof(Lote), Guid.NewGuid(), operation, DateTime.UtcNow, data));
+        await db.SaveChangesAsync();
+
+        var result = await Controller(db, userA).GetCambios("lots", ranchA, null, null, null, 10);
+        Assert.IsType<UnprocessableEntityObjectResult>(result.Result);
+    }
 }

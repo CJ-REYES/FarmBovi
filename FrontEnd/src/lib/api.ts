@@ -1,7 +1,7 @@
 import type { Cattle, CattleInput } from '../types/cattle';
 
 export const API_BASE_URL = (
-  (import.meta.env?.VITE_API_URL as string | undefined) || '/api'
+  (import.meta.env.VITE_API_URL as string | undefined) || '/api'
 ).replace(/\/$/, '');
 
 /**

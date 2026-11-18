@@ -41,18 +41,20 @@ export interface PullOptions {
 }
 
 /**
- * Entidades que el servidor expone actualmente. Se descargan padres antes que
- * hijos para que lotes y bovinos existan al resolver las referencias locales.
- * Las entidades locales sin modelo equivalente en el backend quedan fuera hasta
- * que exista un contrato de servidor para ellas.
+ * Orden topológico padre -> hijo para asegurar que lotes y bovinos existan
+ * antes de descargar pesajes, eventos de salud, movimientos o genealogía.
  */
 export const PULL_ENTITY_ORDER: readonly SyncEntityName[] = [
   'lots',
   'cattle',
+  'genealogy',
+  'weighings',
   'healthRecords',
   'feedingRecords',
+  'reproductionRecords',
   'movements',
-  'alerts'
+  'alerts',
+  'media'
 ];
 
 const inFlightPullEntities = new Set<SyncEntityName>();
@@ -107,7 +109,7 @@ export const SyncPullEngine = {
       tables.push(db.lots as unknown as Table<unknown, string>);
     }
 
-    const metrics = await db.transaction('rw', tables, async () => {
+    return await db.transaction('rw', tables, async () => {
       let appliedCount = 0;
       let deletedCount = 0;
       let conflictCount = 0;
@@ -195,19 +197,6 @@ export const SyncPullEngine = {
         committedCheckpoint: nextCheckpoint
       };
     });
-
-    if (
-      typeof window !== 'undefined' &&
-      (metrics.appliedCount > 0 || metrics.deletedCount > 0)
-    ) {
-      window.dispatchEvent(
-        new CustomEvent('farmbovi:sync-pull-applied', {
-          detail: { entidad: params.entidad }
-        })
-      );
-    }
-
-    return metrics;
   },
 
   async findExistingLocalRecord(
@@ -397,7 +386,7 @@ export const SyncPullEngine = {
       return summary;
     }
 
-    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
       summary.status = 'offline';
       return summary;
     }

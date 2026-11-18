@@ -82,26 +82,33 @@ async function resolveLocalForeignUuid(
   return rawRef;
 }
 
-export const SYNC_ENTITY_TABLES: Partial<
-  Record<SyncEntityName, Table<BaseLocalEntity, string>>
-> = {
-  cattle: db.cattle as unknown as Table<BaseLocalEntity, string>,
-  weighings: db.weighings as unknown as Table<BaseLocalEntity, string>,
-  healthRecords: db.healthRecords as unknown as Table<BaseLocalEntity, string>,
-  feedingRecords: db.feedingRecords as unknown as Table<BaseLocalEntity, string>,
-  reproductionRecords: db.reproductionRecords as unknown as Table<BaseLocalEntity, string>,
-  lots: db.lots as unknown as Table<BaseLocalEntity, string>,
-  movements: db.movements as unknown as Table<BaseLocalEntity, string>,
-  genealogy: db.genealogy as unknown as Table<BaseLocalEntity, string>,
-  alerts: db.alerts as unknown as Table<BaseLocalEntity, string>,
-  media: db.media as unknown as Table<BaseLocalEntity, string>
-};
-
-/** Same IndexedDB table is used for upserts and remote tombstones. */
 export function getSyncEntityTable(
   entidad: SyncEntityName
 ): Table<BaseLocalEntity, string> | null {
-  return SYNC_ENTITY_TABLES[entidad] ?? null;
+  switch (entidad) {
+    case 'cattle':
+      return db.cattle as unknown as Table<BaseLocalEntity, string>;
+    case 'weighings':
+      return db.weighings as unknown as Table<BaseLocalEntity, string>;
+    case 'healthRecords':
+      return db.healthRecords as unknown as Table<BaseLocalEntity, string>;
+    case 'feedingRecords':
+      return db.feedingRecords as unknown as Table<BaseLocalEntity, string>;
+    case 'reproductionRecords':
+      return db.reproductionRecords as unknown as Table<BaseLocalEntity, string>;
+    case 'lots':
+      return db.lots as unknown as Table<BaseLocalEntity, string>;
+    case 'movements':
+      return db.movements as unknown as Table<BaseLocalEntity, string>;
+    case 'genealogy':
+      return db.genealogy as unknown as Table<BaseLocalEntity, string>;
+    case 'alerts':
+      return db.alerts as unknown as Table<BaseLocalEntity, string>;
+    case 'media':
+      return db.media as unknown as Table<BaseLocalEntity, string>;
+    default:
+      return null;
+  }
 }
 
 export async function mapRemoteChangeToLocalEntity(

@@ -26,6 +26,19 @@ public sealed record CambiosPullResponse(
     bool HayMasPaginas,
     DateTime FechaServidor);
 
+/// <summary>
+/// Error de procesamiento Pull (HTTP 422). <c>CursorVigente</c> es el mismo cursor recibido:
+/// el cliente no debe avanzar su cursor local.
+/// </summary>
+public sealed record PullErrorResponse(
+    string Codigo,
+    string Mensaje,
+    string Entidad,
+    Guid IdCambio,
+    string EntidadServidor,
+    Guid RemoteId,
+    string? CursorVigente);
+
 [ApiController]
 [Route("api/sync/cambios")]
 [Authorize]
@@ -112,11 +125,37 @@ public sealed class SyncController(FarmDbContext db) : ControllerBase
         if (hasMore)
             page.RemoveAt(limite);
 
+        // Se procesa en orden; ante el primer cambio que no puede construirse se corta la página
+        // para que el cursor nunca avance más allá de un registro no entregado.
         var cambios = new List<CambioPullResponse>(page.Count);
+        CambioServidor? lastDelivered = null;
         foreach (var change in page)
-            cambios.Add(await ToPullChangeAsync(entidad, requestedRanchId, change, ct));
-        var nextCursor = page.Count > 0
-            ? EncodeCursor(page[^1].OcurrioEn, page[^1].IdCambio)
+        {
+            var (pullChange, error) = await ToPullChangeAsync(entidad, requestedRanchId, change, ct);
+            if (error is not null)
+            {
+                if (cambios.Count == 0)
+                {
+                    return UnprocessableEntity(new PullErrorResponse(
+                        error.Value.Codigo,
+                        error.Value.Mensaje,
+                        entidad,
+                        change.IdCambio,
+                        change.Entidad,
+                        change.IdRegistro,
+                        effectiveCursor));
+                }
+
+                hasMore = true;
+                break;
+            }
+
+            cambios.Add(pullChange!);
+            lastDelivered = change;
+        }
+
+        var nextCursor = lastDelivered is not null
+            ? EncodeCursor(lastDelivered.OcurrioEn, lastDelivered.IdCambio)
             : effectiveCursor;
 
         return Ok(new CambiosPullResponse(
@@ -127,44 +166,68 @@ public sealed class SyncController(FarmDbContext db) : ControllerBase
             DateTime.UtcNow));
     }
 
-    private async Task<CambioPullResponse> ToPullChangeAsync(
+    private static readonly string[] UpsertOperations = ["Crear", "Actualizar", "CREATE", "UPDATE", "UPSERT"];
+    private static readonly string[] DeleteOperations = ["Eliminar", "DELETE"];
+
+    private async Task<(CambioPullResponse? Change, (string Codigo, string Mensaje)? Error)> ToPullChangeAsync(
         string clientEntity,
         Guid ranchId,
         CambioServidor change,
         CancellationToken ct)
     {
-        var deleted = string.Equals(change.Operacion, "Eliminar", StringComparison.OrdinalIgnoreCase) ||
-                      string.Equals(change.Operacion, "DELETE", StringComparison.OrdinalIgnoreCase);
+        var deleted = DeleteOperations.Contains(change.Operacion, StringComparer.OrdinalIgnoreCase);
+        if (!deleted && !UpsertOperations.Contains(change.Operacion, StringComparer.OrdinalIgnoreCase))
+            return (null, ("OPERACION_DESCONOCIDA", $"La operación '{change.Operacion}' no se puede sincronizar."));
+
         JsonElement? data = null;
         if (!deleted)
         {
-            data = string.Equals(clientEntity, "healthRecords", StringComparison.OrdinalIgnoreCase) &&
-                   string.Equals(change.Entidad, nameof(Tratamiento), StringComparison.OrdinalIgnoreCase)
-                ? await MapTreatmentDataAsync(change.Datos, ranchId, ct)
-                : MapData(clientEntity, change.Datos);
+            try
+            {
+                var (mapped, error) = string.Equals(clientEntity, "healthRecords", StringComparison.OrdinalIgnoreCase) &&
+                                      string.Equals(change.Entidad, nameof(Tratamiento), StringComparison.OrdinalIgnoreCase)
+                    ? await MapTreatmentDataAsync(change.Datos, ranchId, ct)
+                    : MapData(clientEntity, change.Datos);
+                if (error is not null)
+                    return (null, error);
+                data = mapped;
+            }
+            catch (JsonException)
+            {
+                return (null, ("DATOS_INVALIDOS", "La instantánea del cambio no es JSON válido."));
+            }
         }
 
-        return new CambioPullResponse(
+        return (new CambioPullResponse(
             change.IdRegistro,
             null,
             deleted ? "DELETE" : "UPSERT",
             change.Version,
             data,
             deleted,
-            DateTime.SpecifyKind(change.OcurrioEn, DateTimeKind.Utc));
+            DateTime.SpecifyKind(change.OcurrioEn, DateTimeKind.Utc)), null);
     }
 
-    private async Task<JsonElement?> MapTreatmentDataAsync(string? rawJson, Guid ranchId, CancellationToken ct)
+    /// <summary>
+    /// Un tratamiento remoto se entrega como registro sanitario local. Requiere que su evento sanitario
+    /// exista y pertenezca a un animal del mismo rancho; de lo contrario no se construye un UPSERT
+    /// incompleto sino un error REFERENCIA_INEXISTENTE / DATOS_INCOMPLETOS.
+    /// </summary>
+    private async Task<(JsonElement? Data, (string Codigo, string Mensaje)? Error)> MapTreatmentDataAsync(
+        string? rawJson, Guid ranchId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(rawJson))
-            return null;
+            return (null, ("DATOS_INCOMPLETOS", "El tratamiento no tiene instantánea de datos."));
 
         using var document = JsonDocument.Parse(rawJson);
         var source = document.RootElement;
-        if (!TryGetProperty(source, "IdEventoSanitario", out var eventIdValue) ||
-            !Guid.TryParse(eventIdValue.GetString(), out var eventId))
-            return null;
+        if (source.ValueKind != JsonValueKind.Object ||
+            !TryGetProperty(source, "IdEventoSanitario", out var eventIdValue) ||
+            eventIdValue.ValueKind != JsonValueKind.String ||
+            !Guid.TryParse(eventIdValue.GetString(), out var eventId) || eventId == Guid.Empty)
+            return (null, ("DATOS_INCOMPLETOS", "El tratamiento no indica un idEventoSanitario válido."));
 
+        // Se acepta el evento aunque esté eliminado lógicamente: el historial se conserva.
         var animalId = await (from healthEvent in db.EventosSanitarios.AsNoTracking()
                               join animal in db.Animales.AsNoTracking()
                                   on healthEvent.IdAnimal equals animal.IdAnimal
@@ -172,34 +235,37 @@ public sealed class SyncController(FarmDbContext db) : ControllerBase
                                     animal.IdRancho == ranchId
                               select (Guid?)animal.IdAnimal).FirstOrDefaultAsync(ct);
         if (animalId is null)
-            return null;
+            return (null, ("REFERENCIA_INEXISTENTE",
+                $"El evento sanitario {eventId} del tratamiento no existe en el rancho solicitado."));
 
         var producto = TryGetString(source, "Producto") ?? "Tratamiento";
         var dosis = TryGetProperty(source, "Dosis", out var dosisValue)
             ? dosisValue.ToString()
             : string.Empty;
         var unidad = TryGetString(source, "UnidadDosis") ?? string.Empty;
-        var fecha = TryGetString(source, "FechaInicio") ?? DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture);
+        var fecha = TryGetString(source, "FechaInicio");
+        if (string.IsNullOrWhiteSpace(fecha))
+            return (null, ("DATOS_INCOMPLETOS", "El tratamiento no tiene fechaInicio."));
 
-        return JsonSerializer.SerializeToElement(new
+        return (JsonSerializer.SerializeToElement(new
         {
             cattleId = animalId.Value,
             ranchId,
             tipo = "Tratamiento",
             descripcion = string.Join(" ", new[] { producto, dosis, unidad }.Where(part => !string.IsNullOrWhiteSpace(part))),
             fecha
-        });
+        }), null);
     }
 
-    private static JsonElement? MapData(string clientEntity, string? rawJson)
+    private static (JsonElement? Data, (string Codigo, string Mensaje)? Error) MapData(string clientEntity, string? rawJson)
     {
         if (string.IsNullOrWhiteSpace(rawJson))
-            return null;
+            return (null, ("DATOS_INCOMPLETOS", "El cambio UPSERT no tiene instantánea de datos."));
 
         using var document = JsonDocument.Parse(rawJson);
         var source = document.RootElement;
         if (source.ValueKind != JsonValueKind.Object)
-            return source.Clone();
+            return (null, ("DATOS_INVALIDOS", "La instantánea del cambio debe ser un objeto JSON."));
 
         var data = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         void Copy(string target, params string[] sources)
@@ -278,7 +344,7 @@ public sealed class SyncController(FarmDbContext db) : ControllerBase
                 break;
         }
 
-        return JsonSerializer.SerializeToElement(data);
+        return (JsonSerializer.SerializeToElement(data), null);
     }
 
     private static bool TryGetProperty(JsonElement source, string name, out JsonElement value)

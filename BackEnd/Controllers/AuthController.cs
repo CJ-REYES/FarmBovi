@@ -4,6 +4,7 @@ using System.Security.Claims;
 using System.Text;
 using FarmBovi.Api.Data;
 using FarmBovi.Api.Models;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -26,6 +27,7 @@ public sealed class AuthController(FarmDbContext db, IConfiguration configuratio
     private static readonly PasswordHasher<Usuario> Hasher = new();
 
     [HttpPost("login")]
+    [AllowAnonymous]
     public async Task<ActionResult<LoginResponse>> Login(LoginRequest input, CancellationToken ct)
     {
         var correo = input.Correo.Trim().ToLowerInvariant();

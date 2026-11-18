@@ -4,15 +4,14 @@ Esta rama integra los cambios de `develop`. Conserva el login JWT y Pull de `ini
 
 ## Trabajo incluido
 
-- `POST /api/auth/login` valida usuarios activos y contraseña, emite JWT e informa los ranchos asignados.
-- `GET /api/sync/cambios` entrega cambios por rancho con cursor, paginación y bajas. Requiere JWT y membresía activa.
-- `POST /api/sync/operaciones`, `GET /api/sync/operaciones/{idOperacion}` y `GET /api/sync/auditoria` usan la implementación de Push/auditoría de `develop`.
+- `POST /api/auth/login` (marcado explícitamente con `[AllowAnonymous]`) valida usuarios activos y contraseña, emite JWT e informa los ranchos asignados.
+- Política global de autorización JWT (`FallbackPolicy`) en toda la API (solo `POST /api/auth/login` y `GET /health` son públicos).
+- Aislamiento por rancho (`RanchAccessService` y `[RanchScope]`) en todos los controladores CRUD de dominio y `UsuarioRanchosController`, además de control de permisos en `UsuarioController`.
+- `GET /api/sync/cambios` entrega cambios por rancho con cursor determinista `(OcurrioEn, IdCambio)`, paginación, bajas (`DELETE`, `eliminado: true`, `datos: null`) y validación de referencias en tratamientos (sin avanzar el cursor ante errores `422`). Requiere JWT y membresía activa.
+- `POST /api/sync/operaciones`, `GET /api/sync/operaciones/{idOperacion}` y `GET /api/sync/auditoria` usan la implementación de Push/auditoría de `develop` sin modificaciones.
 - `FarmDbContext` registra los cambios de dominio en `CambioServidor` y las operaciones idempotentes en `RegistroSyncServidor`.
-- `api/usuarios` requiere autenticación.
 - Las claves de las entidades de dominio y sus relaciones usan GUID (`char(36)` en MySQL). `Usuario.IdLegacy` conserva el ID entero previo.
-- Pull está descrito en [08-contrato-sincronizacion.md](08-contrato-sincronizacion.md); Push y auditoría están en [sync-push-auditoria.md](sync-push-auditoria.md).
-
-La autenticación aún no cubre todos los controladores CRUD de dominio y ranchos. Antes de exponer toda la API a usuarios externos, revisa y aplica autorización también a esas rutas según los roles acordados.
+- Pull y su alcance real están descritos en [08-contrato-sincronizacion.md](08-contrato-sincronizacion.md); Push y auditoría están en [sync-push-auditoria.md](sync-push-auditoria.md).
 
 ## Configuración por ambiente
 

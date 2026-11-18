@@ -135,6 +135,6 @@ dotnet build FarmBovi.sln --configuration Release --no-restore
 
 ## Alcance actual
 
-El backend incluye usuarios, login JWT y endpoints de sincronización para varios ranchos. La interfaz incluye motores offline; revisa las guías de sincronización y validación para conocer los límites de la integración actual. Antes de exponer toda la API con datos reales, revisa la autorización de los endpoints CRUD que no pertenecen a Login, usuarios o sincronización.
+El backend incluye usuarios, login JWT, autorización global y por rancho en los controladores CRUD y endpoints de sincronización para varios ranchos. La interfaz incluye motores offline; revisa las guías de sincronización y validación para conocer los límites de la integración actual.
 
 Repositorio público: [CJ-REYES/FarmBovi](https://github.com/CJ-REYES/FarmBovi).

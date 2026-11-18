@@ -231,16 +231,6 @@ export function validateSyncPullResponse<TData = Record<string, unknown>>(
       return { valid: false, reason: 'Un cambio remoto tiene operacion inválida.' };
     }
 
-    if (
-      (rawItem.operacion === 'DELETE' && (rawItem.eliminado !== true || rawItem.datos !== null)) ||
-      (rawItem.operacion === 'UPSERT' && rawItem.eliminado === true)
-    ) {
-      return {
-        valid: false,
-        reason: 'El cambio remoto tiene una operación de eliminación inconsistente.'
-      };
-    }
-
     if (!isValidVersion(rawItem.versionServidor)) {
       return { valid: false, reason: 'Un cambio remoto omite versionServidor.' };
     }

@@ -19,19 +19,26 @@ dotnet run --project BackEnd
 
 En desarrollo la API aplica migraciones al arrancar. En producción aplica `dotnet ef database update --project BackEnd --startup-project BackEnd` durante el despliegue, antes de iniciar la nueva versión.
 
-## Controladores CRUD
+## Controladores CRUD y autorización
 
-Todos los recursos tienen `GET` para colección y elemento, `POST`, `PUT` y `DELETE`. Las claves se generan en la base.
+Todos los endpoints de la API están protegidos por una política global de autorización JWT (`FallbackPolicy`). Las únicas rutas públicas (`[AllowAnonymous]`) son `POST /api/auth/login` y `GET /health`.
+
+Además del token JWT válido, todos los controladores de dominio aplican aislamiento por rancho mediante `RanchAccessService` y `[RanchScope]`: cada usuario solo puede consultar o modificar registros pertenecientes a ranchos donde tenga una membresía activa (`UsuarioRancho` activo y sin `FechaBaja`). Las operaciones administrativas sobre `api/ranchos` (`PUT`/`DELETE`), `api/usuario-ranchos` y la gestión de otros usuarios en `api/usuarios` requieren rol administrador (`Admin`, `Administrador` o `Propietario`).
 
 | Modelo | Ruta | Clave |
 | --- | --- | --- |
 | Animal | `/api/animales` | `IdAnimal` |
 | Lote | `/api/lotes` | `IdLote` |
 | Rancho | `/api/ranchos` | `IdRancho` |
-| Usuario | `/api/usuarios` | `Id` |
+| Usuario | `/api/usuarios` | `IdUsuario` |
 | UsuarioRancho | `/api/usuario-ranchos` | `IdUsuarioRancho` |
+| Alimentación | `/api/alimentacion` | `IdAlimentacion` |
+| Evento sanitario | `/api/eventos-sanitarios` | `IdEventoSanitario` |
+| Tratamiento | `/api/tratamientos` | `IdTratamiento` |
+| Movimiento animal | `/api/movimientos-animales` | `IdMovimiento` |
+| Recordatorio | `/api/recordatorios` | `IdRecordatorio` |
 
-Las respuestas habituales son `200` para consultas, `201` al crear, `204` al actualizar o eliminar, `404` si la clave no existe y `400` si la validación del request falla. Las contraseñas se reciben como `Contrasena`, se guardan con hash y nunca se devuelven en el CRUD de usuarios.
+Las respuestas habituales son `200` para consultas, `201` al crear, `204` al actualizar o eliminar, `401` sin JWT o con token inválido/vencido, `403` si el usuario no tiene permisos sobre el rancho o recurso, `404` si la clave no existe y `400` si la validación del request falla. Las contraseñas se reciben como `Contrasena`, se guardan con hash y nunca se devuelven en las respuestas. Para cambiar la propia contraseña en `PUT /api/usuarios/{id}` se requiere `ContrasenaActual`.
 
 ## Inicio de sesión y sincronización Pull
 

@@ -1,17 +1,26 @@
 using FarmBovi.Api.Data;
 using FarmBovi.Api.Models;
+using FarmBovi.Api.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 namespace FarmBovi.Api.Controllers;
 
 [ApiController]
+[RanchScope(RanchResource.UsuarioRancho, AdminForCreate = true, AdminForUpdateDelete = true)]
 [Route("api/usuario-ranchos")]
 public sealed class UsuarioRanchosController(FarmDbContext db) : ControllerBase
 {
     [HttpGet]
-    public Task<List<UsuarioRancho>> GetAll(CancellationToken ct) =>
-        db.UsuarioRanchos.AsNoTracking().ToListAsync(ct);
+    public Task<List<UsuarioRancho>> GetAll([FromServices] RanchAccessService access, CancellationToken ct)
+    {
+        // Un administrador ve las membresías de sus ranchos; cualquier usuario ve las propias.
+        var userId = RanchAccessService.GetUserId(User) ?? Guid.Empty;
+        var adminRanchIds = access.AdminRanchIds(userId);
+        return db.UsuarioRanchos.AsNoTracking()
+            .Where(ur => ur.IdUsuario == userId || adminRanchIds.Contains(ur.IdRancho))
+            .ToListAsync(ct);
+    }
 
     [HttpGet("{id:guid}")]
     public async Task<ActionResult<UsuarioRancho>> Get(Guid id, CancellationToken ct) =>
