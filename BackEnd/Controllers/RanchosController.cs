@@ -7,15 +7,20 @@ using Microsoft.EntityFrameworkCore;
 namespace FarmBovi.Api.Controllers;
 
 [ApiController]
+[RanchScope(RanchResource.Rancho, AdminForUpdateDelete = true)]
 [Route("api/ranchos")]
 public sealed class RanchosController(FarmDbContext db, FarmDomainValidationService validator) : ControllerBase
 {
     [HttpGet]
-    public Task<List<Rancho>> GetAll([FromQuery] bool incluirEliminados = false, CancellationToken ct = default)
+    public Task<List<Rancho>> GetAll([FromServices] RanchAccessService access, [FromQuery] bool incluirEliminados = false, CancellationToken ct = default)
     {
         var query = db.Ranchos.AsNoTracking();
         if (!incluirEliminados)
             query = query.Where(r => r.EliminadoEn == null);
+
+        // Solo registros de ranchos donde el usuario tiene membresía activa.
+        var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
+        query = query.Where(x => ranchIds.Contains(x.IdRancho));
 
         return query.ToListAsync(ct);
     }
@@ -54,6 +59,19 @@ public sealed class RanchosController(FarmDbContext db, FarmDomainValidationServ
         if (item.VersionRegistro <= 0) item.VersionRegistro = 1;
 
         db.Ranchos.Add(item);
+        // Quien crea el rancho queda como su administrador para poder operarlo con las reglas por rancho.
+        if (RanchAccessService.GetUserId(User) is { } creatorId)
+        {
+            db.UsuarioRanchos.Add(new UsuarioRancho
+            {
+                IdUsuarioRancho = Guid.NewGuid(),
+                IdUsuario = creatorId,
+                IdRancho = item.IdRancho,
+                Rol = "Admin",
+                Estado = "Activo",
+                FechaAlta = DateTime.UtcNow
+            });
+        }
         try
         {
             await db.SaveChangesAsync(ct);

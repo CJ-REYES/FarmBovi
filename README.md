@@ -95,9 +95,9 @@ URL indicada: `http://localhost:4173`.
 
 ## Estado y limitaciones declaradas
 
-El README fuente declara implementados frontend, PWA, IndexedDB y motores offline, y menciona validaciones `lint`, `typecheck` y `build`. También declara diez controladores REST. Sin embargo, identifica como pendientes la sincronización remota del servidor (`POST /api/sync/push` y `GET /api/sync/pull`) y el proxy de IA de BoviScale. La bitácora también señala autenticación/autorización, aislamiento por rancho, carga multimedia y pruebas reales en Android/iOS como asuntos por completar.
+Esta rama incluye Login JWT, endpoints de sincronización Push/Pull y persistencia de cambios en el backend. En el frontend, la cola local y los motores de sincronización requieren completar y validar la integración con el contrato real. BoviScale conserva su proxy de IA como pendiente.
 
-No debe confundirse una arquitectura cliente preparada con sincronización remota ya operativa.
+Para el contrato de sincronización y el reparto de trabajo, consulta [08-contrato-sincronizacion.md](docs/08-contrato-sincronizacion.md) y [09-entrega-roberto.md](docs/09-entrega-roberto.md).
 
 ## Índice
 
@@ -118,4 +118,23 @@ No debe confundirse una arquitectura cliente preparada con sincronización remot
 - [15. Inventario de cambios](docs/15-inventario-cambios.md)
 - [16. Decisiones técnicas](docs/16-decisiones-tecnicas.md)
 
-Repositorio: https://github.com/CJ-REYES/FarmBovi
+```bash
+npm run lint
+npm run typecheck
+npm run build
+```
+
+Desde la raíz:
+
+```bash
+dotnet restore FarmBovi.sln --locked-mode
+dotnet build FarmBovi.sln --configuration Release --no-restore
+```
+
+`package-lock.json`, `packages.lock.json` y el manifiesto de herramientas fijan las dependencias. GitHub Actions ejecuta la compilación y las comprobaciones del frontend en cada push o pull request.
+
+## Alcance actual
+
+El backend incluye usuarios, login JWT, autorización global y por rancho en los controladores CRUD y endpoints de sincronización para varios ranchos. La interfaz incluye motores offline; revisa las guías de sincronización y validación para conocer los límites de la integración actual.
+
+Repositorio público: [CJ-REYES/FarmBovi](https://github.com/CJ-REYES/FarmBovi).
