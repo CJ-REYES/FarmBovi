@@ -17,7 +17,25 @@ public sealed class GenealogiaController(GenealogiaService genealogia) : Control
             return Unauthorized();
 
         var result = await genealogia.RegistrarAsync(request, userId, ct);
-        return ToActionResult(result, createdAtAction: nameof(ObtenerPadres), routeValues: new { idAnimal = request.IdAnimal });
+        if (result.Status == GenealogiaOperationStatus.Success && result.Data is { } created)
+        {
+            return CreatedAtAction(
+                nameof(ObtenerPorId),
+                new { idGenealogia = created.IdGenealogia },
+                created);
+        }
+
+        return ToActionResult(result);
+    }
+
+    [HttpGet("{idGenealogia:guid}")]
+    public async Task<IActionResult> ObtenerPorId(Guid idGenealogia, CancellationToken ct)
+    {
+        if (RanchAccessService.GetUserId(User) is not { } userId)
+            return Unauthorized();
+
+        var result = await genealogia.ObtenerPorIdAsync(idGenealogia, userId, ct);
+        return ToActionResult(result);
     }
 
     [HttpPut("{idAnimal:guid}")]

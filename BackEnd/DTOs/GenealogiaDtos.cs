@@ -1,15 +1,20 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace FarmBovi.Api.DTOs;
 
 public sealed record RegistrarGenealogiaRequest(
     Guid IdAnimal,
     Guid? IdPadre,
     Guid? IdMadre,
+    [MaxLength(500, ErrorMessage = "Las observaciones no pueden exceder 500 caracteres.")]
     string? Observaciones = null);
 
 public sealed record ActualizarGenealogiaRequest(
     Guid? IdPadre,
     Guid? IdMadre,
-    string? Observaciones = null);
+    [MaxLength(500, ErrorMessage = "Las observaciones no pueden exceder 500 caracteres.")]
+    string? Observaciones = null,
+    long? VersionRegistro = null);
 
 public sealed record AnimalResumenGenealogiaDto(
     Guid IdAnimal,

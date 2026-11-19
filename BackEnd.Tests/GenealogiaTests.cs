@@ -1,4 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Security.Claims;
 using FarmBovi.Api.Controllers;
 using FarmBovi.Api.Data;
@@ -180,9 +183,9 @@ public sealed class GenealogiaTests
         await using var db = CreateInMemoryDb(nameof(Registrar_CicloGenealogicoDirectoEIndirecto_Retorna400BadRequest));
         var (userId, ranchoId, _) = await SeedBaseAsync(db);
 
-        var a = NewAnimal(ranchoId, userId, "A-01");
-        var b = NewAnimal(ranchoId, userId, "B-01");
-        var c = NewAnimal(ranchoId, userId, "C-01");
+        var a = NewAnimal(ranchoId, userId, "A-01", "Macho");
+        var b = NewAnimal(ranchoId, userId, "B-01", "Hembra");
+        var c = NewAnimal(ranchoId, userId, "C-01", "Macho");
         db.Animales.AddRange(a, b, c);
         await db.SaveChangesAsync();
 
@@ -249,5 +252,397 @@ public sealed class GenealogiaTests
 
         Assert.IsType<NoContentResult>(await controller.Eliminar(cria.IdAnimal, default));
         Assert.IsType<CreatedAtActionResult>(await controller.Registrar(new RegistrarGenealogiaRequest(cria.IdAnimal, p1.IdAnimal, m1.IdAnimal), default));
+    }
+
+    [Fact]
+    public async Task ObtenerPadresYDescendientes_AislamientoPorRancho_NoExponeRelacionesDeOtroRancho()
+    {
+        await using var db = CreateInMemoryDb(nameof(ObtenerPadresYDescendientes_AislamientoPorRancho_NoExponeRelacionesDeOtroRancho));
+        var (userId, ranchoId, otroRanchoId) = await SeedBaseAsync(db);
+
+        var abueloAjeno = NewAnimal(otroRanchoId, userId, "ABU-AJ", "Macho");
+        var padrePropio = NewAnimal(ranchoId, userId, "PAD-PR", "Macho");
+        var hijoPropio = NewAnimal(ranchoId, userId, "HIJ-PR", "Macho");
+        var nietoAjeno = NewAnimal(otroRanchoId, userId, "NIE-AJ", "Hembra");
+
+        db.Animales.AddRange(abueloAjeno, padrePropio, hijoPropio, nietoAjeno);
+        // Se siembran directamente en BD relaciones cruzadas para comprobar que el SQL las excluye.
+        db.GenealogiasAnimales.AddRange(
+            new GenealogiaAnimal { IdAnimal = padrePropio.IdAnimal, IdPadre = abueloAjeno.IdAnimal, IdAutor = userId },
+            new GenealogiaAnimal { IdAnimal = hijoPropio.IdAnimal, IdPadre = padrePropio.IdAnimal, IdAutor = userId },
+            new GenealogiaAnimal { IdAnimal = nietoAjeno.IdAnimal, IdPadre = hijoPropio.IdAnimal, IdAutor = userId });
+        await db.SaveChangesAsync();
+
+        var controller = CreateController(db, userId);
+
+        var padresRes = Assert.IsType<OkObjectResult>(await controller.ObtenerPadres(hijoPropio.IdAnimal, profundidad: 3, default));
+        var padres = Assert.IsType<PadresAnimalResponse>(padresRes.Value);
+        Assert.Equal(padrePropio.IdAnimal, padres.Padre?.IdAnimal);
+        Assert.Single(padres.Ancestros);
+        Assert.DoesNotContain(padres.Ancestros, a => a.Animal.IdRancho == otroRanchoId);
+
+        var descRes = Assert.IsType<OkObjectResult>(await controller.ObtenerDescendientes(padrePropio.IdAnimal, profundidad: 3, default));
+        var desc = Assert.IsType<DescendientesAnimalResponse>(descRes.Value);
+        Assert.Equal(1, desc.TotalDescendientes);
+        Assert.Single(desc.Descendientes);
+        Assert.Equal(hijoPropio.IdAnimal, desc.Descendientes[0].Descendiente.IdAnimal);
+    }
+
+    [Fact]
+    public async Task Registrar_SexoIncorrectoODesconocido_ValidaReglasDeDominio()
+    {
+        await using var db = CreateInMemoryDb(nameof(Registrar_SexoIncorrectoODesconocido_ValidaReglasDeDominio));
+        var (userId, ranchoId, _) = await SeedBaseAsync(db);
+
+        var vacaComoPadre = NewAnimal(ranchoId, userId, "V-PAD", "Hembra");
+        var toroComoMadre = NewAnimal(ranchoId, userId, "T-MAD", "Macho");
+        var sexoDesconocido = NewAnimal(ranchoId, userId, "DESC-1", "Desconocido");
+        var cria1 = NewAnimal(ranchoId, userId, "CRIA-1", "Macho");
+        var cria2 = NewAnimal(ranchoId, userId, "CRIA-2", "Hembra");
+        db.Animales.AddRange(vacaComoPadre, toroComoMadre, sexoDesconocido, cria1, cria2);
+        await db.SaveChangesAsync();
+
+        var controller = CreateController(db, userId);
+
+        var padreHembra = await controller.Registrar(new RegistrarGenealogiaRequest(cria1.IdAnimal, vacaComoPadre.IdAnimal, null), default);
+        Assert.IsType<BadRequestObjectResult>(padreHembra);
+
+        var madreMacho = await controller.Registrar(new RegistrarGenealogiaRequest(cria1.IdAnimal, null, toroComoMadre.IdAnimal), default);
+        Assert.IsType<BadRequestObjectResult>(madreMacho);
+
+        // Sexo desconocido no bloquea registros incompletos.
+        var unknownAllowed = await controller.Registrar(new RegistrarGenealogiaRequest(cria2.IdAnimal, sexoDesconocido.IdAnimal, null), default);
+        Assert.IsType<CreatedAtActionResult>(unknownAllowed);
+    }
+
+    [Fact]
+    public async Task Registrar_FechasNacimientoIncompatiblesODesconocidas_ValidaCronologia()
+    {
+        await using var db = CreateInMemoryDb(nameof(Registrar_FechasNacimientoIncompatiblesODesconocidas_ValidaCronologia));
+        var (userId, ranchoId, _) = await SeedBaseAsync(db);
+
+        var padreJoven = NewAnimal(ranchoId, userId, "PJ", "Macho");
+        padreJoven.FechaNacimiento = new DateTime(2024, 5, 10);
+
+        var madreMismoDia = NewAnimal(ranchoId, userId, "MM", "Hembra");
+        madreMismoDia.FechaNacimiento = new DateTime(2024, 1, 10);
+
+        var padreSinFecha = NewAnimal(ranchoId, userId, "PSF", "Macho");
+        padreSinFecha.FechaNacimiento = null;
+
+        var cria = NewAnimal(ranchoId, userId, "CRIA-F", "Macho");
+        cria.FechaNacimiento = new DateTime(2024, 1, 10);
+
+        db.Animales.AddRange(padreJoven, madreMismoDia, padreSinFecha, cria);
+        await db.SaveChangesAsync();
+
+        var controller = CreateController(db, userId);
+
+        Assert.IsType<BadRequestObjectResult>(
+            await controller.Registrar(new RegistrarGenealogiaRequest(cria.IdAnimal, padreJoven.IdAnimal, null), default));
+
+        Assert.IsType<BadRequestObjectResult>(
+            await controller.Registrar(new RegistrarGenealogiaRequest(cria.IdAnimal, null, madreMismoDia.IdAnimal), default));
+
+        Assert.IsType<CreatedAtActionResult>(
+            await controller.Registrar(new RegistrarGenealogiaRequest(cria.IdAnimal, padreSinFecha.IdAnimal, null), default));
+    }
+
+    [Fact]
+    public async Task RegistrarYActualizar_Observaciones500AceptadasY501Rechazadas()
+    {
+        await using var db = CreateInMemoryDb(nameof(RegistrarYActualizar_Observaciones500AceptadasY501Rechazadas));
+        var (userId, ranchoId, _) = await SeedBaseAsync(db);
+
+        var padre = NewAnimal(ranchoId, userId, "P-OBS", "Macho");
+        var cria = NewAnimal(ranchoId, userId, "C-OBS", "Hembra");
+        db.Animales.AddRange(padre, cria);
+        await db.SaveChangesAsync();
+
+        var controller = CreateController(db, userId);
+        var obs501 = new string('x', 501);
+        var obs500 = "  " + new string('a', 500) + "  ";
+
+        var bad501 = await controller.Registrar(new RegistrarGenealogiaRequest(cria.IdAnimal, padre.IdAnimal, null, obs501), default);
+        Assert.IsType<BadRequestObjectResult>(bad501);
+
+        var ok500 = await controller.Registrar(new RegistrarGenealogiaRequest(cria.IdAnimal, padre.IdAnimal, null, obs500), default);
+        var created = Assert.IsType<CreatedAtActionResult>(ok500);
+        var dto = Assert.IsType<GenealogiaRegistroDto>(created.Value);
+        Assert.Equal(500, dto.Observaciones?.Length);
+
+        var badUpdate501 = await controller.Actualizar(cria.IdAnimal, new ActualizarGenealogiaRequest(padre.IdAnimal, null, obs501), default);
+        Assert.IsType<BadRequestObjectResult>(badUpdate501);
+    }
+
+    [Fact]
+    public async Task ObtenerDescendientes_ConvergenciaPorConsanguinidad_NoDuplicaDescendientes()
+    {
+        await using var db = CreateInMemoryDb(nameof(ObtenerDescendientes_ConvergenciaPorConsanguinidad_NoDuplicaDescendientes));
+        var (userId, ranchoId, _) = await SeedBaseAsync(db);
+
+        var ancestro = NewAnimal(ranchoId, userId, "ANC-1", "Macho");
+        var hijoMacho = NewAnimal(ranchoId, userId, "HM-1", "Macho");
+        var hijaHembra = NewAnimal(ranchoId, userId, "HH-1", "Hembra");
+        var nietoConvergente = NewAnimal(ranchoId, userId, "NC-1", "Macho");
+        db.Animales.AddRange(ancestro, hijoMacho, hijaHembra, nietoConvergente);
+        await db.SaveChangesAsync();
+
+        var controller = CreateController(db, userId);
+        Assert.IsType<CreatedAtActionResult>(await controller.Registrar(new RegistrarGenealogiaRequest(hijoMacho.IdAnimal, ancestro.IdAnimal, null), default));
+        Assert.IsType<CreatedAtActionResult>(await controller.Registrar(new RegistrarGenealogiaRequest(hijaHembra.IdAnimal, ancestro.IdAnimal, null), default));
+        Assert.IsType<CreatedAtActionResult>(await controller.Registrar(new RegistrarGenealogiaRequest(nietoConvergente.IdAnimal, hijoMacho.IdAnimal, hijaHembra.IdAnimal), default));
+
+        var descRes = Assert.IsType<OkObjectResult>(await controller.ObtenerDescendientes(ancestro.IdAnimal, profundidad: 3, default));
+        var desc = Assert.IsType<DescendientesAnimalResponse>(descRes.Value);
+
+        Assert.Equal(3, desc.TotalDescendientes);
+        Assert.Equal(3, desc.Descendientes.Count);
+        Assert.Equal(1, desc.Descendientes.Count(d => d.Descendiente.IdAnimal == nietoConvergente.IdAnimal));
+    }
+
+    [Fact]
+    public async Task ObtenerPorIdYCreatedAtAction_ApuntaAlRecursoCreado()
+    {
+        await using var db = CreateInMemoryDb(nameof(ObtenerPorIdYCreatedAtAction_ApuntaAlRecursoCreado));
+        var (userId, ranchoId, otroRanchoId) = await SeedBaseAsync(db);
+
+        var padre = NewAnimal(ranchoId, userId, "P-GET", "Macho");
+        var cria = NewAnimal(ranchoId, userId, "C-GET", "Hembra");
+        var ajeno = NewAnimal(otroRanchoId, userId, "AJ-GET", "Hembra");
+        var padreAjeno = NewAnimal(otroRanchoId, userId, "PAJ-GET", "Macho");
+        db.Animales.AddRange(padre, cria, ajeno, padreAjeno);
+        var relAjena = new GenealogiaAnimal { IdAnimal = ajeno.IdAnimal, IdPadre = padreAjeno.IdAnimal, IdAutor = userId };
+        db.GenealogiasAnimales.Add(relAjena);
+        await db.SaveChangesAsync();
+
+        var controller = CreateController(db, userId);
+
+        var postRes = await controller.Registrar(new RegistrarGenealogiaRequest(cria.IdAnimal, padre.IdAnimal, null, "Directo"), default);
+        var created = Assert.IsType<CreatedAtActionResult>(postRes);
+        Assert.Equal(nameof(GenealogiaController.ObtenerPorId), created.ActionName);
+        var createdDto = Assert.IsType<GenealogiaRegistroDto>(created.Value);
+        Assert.Equal(createdDto.IdGenealogia, created.RouteValues?["idGenealogia"]);
+
+        var getRes = Assert.IsType<OkObjectResult>(await controller.ObtenerPorId(createdDto.IdGenealogia, default));
+        var fetched = Assert.IsType<GenealogiaRegistroDto>(getRes.Value);
+        Assert.Equal(createdDto.IdGenealogia, fetched.IdGenealogia);
+
+        Assert.IsType<NotFoundObjectResult>(await controller.ObtenerPorId(Guid.NewGuid(), default));
+
+        var forbidden = Assert.IsType<ObjectResult>(await controller.ObtenerPorId(relAjena.IdGenealogia, default));
+        Assert.Equal(StatusCodes.Status403Forbidden, forbidden.StatusCode);
+    }
+
+    [Fact]
+    public async Task Actualizar_ConcurrenciaYVersionDesactualizada_Retorna409Conflict()
+    {
+        var dbName = nameof(Actualizar_ConcurrenciaYVersionDesactualizada_Retorna409Conflict);
+        Guid userId;
+        Guid criaId;
+        Guid padre1Id;
+        Guid padre2Id;
+
+        await using (var seedDb = CreateInMemoryDb(dbName))
+        {
+            (userId, var ranchoId, _) = await SeedBaseAsync(seedDb);
+            var p1 = NewAnimal(ranchoId, userId, "PC-1", "Macho");
+            var p2 = NewAnimal(ranchoId, userId, "PC-2", "Macho");
+            var cria = NewAnimal(ranchoId, userId, "CC-1", "Hembra");
+            seedDb.Animales.AddRange(p1, p2, cria);
+            await seedDb.SaveChangesAsync();
+
+            var c = CreateController(seedDb, userId);
+            Assert.IsType<CreatedAtActionResult>(await c.Registrar(new RegistrarGenealogiaRequest(cria.IdAnimal, p1.IdAnimal, null), default));
+            criaId = cria.IdAnimal;
+            padre1Id = p1.IdAnimal;
+            padre2Id = p2.IdAnimal;
+        }
+
+        // Conflicto por VersionRegistro desactualizada enviada por cliente.
+        await using (var db1 = CreateInMemoryDb(dbName))
+        {
+            var c1 = CreateController(db1, userId);
+            var okRes = await c1.Actualizar(criaId, new ActualizarGenealogiaRequest(padre2Id, null, "v2", VersionRegistro: 1), default);
+            Assert.IsType<OkObjectResult>(okRes);
+
+            var staleRes = await c1.Actualizar(criaId, new ActualizarGenealogiaRequest(padre1Id, null, "stale", VersionRegistro: 1), default);
+            Assert.IsType<ConflictObjectResult>(staleRes);
+        }
+
+        // Conflicto optimista real de EF Core (DbUpdateConcurrencyException) entre dos servicios concurrentes.
+        await using var dbA = CreateInMemoryDb(dbName);
+        await using var dbB = CreateInMemoryDb(dbName);
+
+        var regA = await dbA.GenealogiasAnimales.FirstAsync(g => g.IdAnimal == criaId);
+        var regB = await dbB.GenealogiasAnimales.FirstAsync(g => g.IdAnimal == criaId);
+        Assert.Equal(regA.VersionRegistro, regB.VersionRegistro);
+
+        regA.Observaciones = "Cambio A";
+        regA.VersionRegistro += 1;
+        await dbA.SaveChangesAsync();
+
+        var serviceB = new GenealogiaService(dbB, new RanchAccessService(dbB));
+        var conflictRes = await serviceB.ActualizarAsync(criaId, new ActualizarGenealogiaRequest(padre1Id, null, "Cambio B"), userId, default);
+        Assert.Equal(GenealogiaOperationStatus.Conflict, conflictRes.Status);
+    }
+
+    [Fact]
+    public async Task Genealogia_EmiteCambiosServidorEnCrearActualizarYEliminar()
+    {
+        await using var db = CreateInMemoryDb(nameof(Genealogia_EmiteCambiosServidorEnCrearActualizarYEliminar));
+        var (userId, ranchoId, _) = await SeedBaseAsync(db);
+
+        var padre = NewAnimal(ranchoId, userId, "P-SYNC", "Macho");
+        var madre = NewAnimal(ranchoId, userId, "M-SYNC", "Hembra");
+        var cria = NewAnimal(ranchoId, userId, "C-SYNC", "Macho");
+        db.Animales.AddRange(padre, madre, cria);
+        await db.SaveChangesAsync();
+
+        var controller = CreateController(db, userId);
+
+        var created = Assert.IsType<CreatedAtActionResult>(
+            await controller.Registrar(new RegistrarGenealogiaRequest(cria.IdAnimal, padre.IdAnimal, null, "Alta"), default));
+        var dto = Assert.IsType<GenealogiaRegistroDto>(created.Value);
+
+        Assert.IsType<OkObjectResult>(
+            await controller.Actualizar(cria.IdAnimal, new ActualizarGenealogiaRequest(padre.IdAnimal, madre.IdAnimal, "Edit"), default));
+
+        Assert.IsType<NoContentResult>(await controller.Eliminar(cria.IdAnimal, default));
+
+        var cambios = await db.CambiosServidor.AsNoTracking()
+            .Where(c => c.Entidad == nameof(GenealogiaAnimal) && c.IdRegistro == dto.IdGenealogia)
+            .OrderBy(c => c.Version)
+            .ToListAsync();
+
+        Assert.Equal(3, cambios.Count);
+        Assert.All(cambios, c => Assert.Equal(ranchoId, c.IdRancho));
+        Assert.Equal(["Crear", "Actualizar", "Eliminar"], cambios.Select(c => c.Operacion).ToArray());
+        Assert.Equal([1L, 2L, 3L], cambios.Select(c => c.Version).ToArray());
+        Assert.NotNull(cambios[0].Datos);
+        Assert.NotNull(cambios[1].Datos);
+        Assert.Null(cambios[2].Datos);
+    }
+}
+
+public sealed class GenealogiaApiTests : IAsyncLifetime
+{
+    private readonly FarmBoviApiFactory _factory = new();
+    private readonly Guid _userA = Guid.NewGuid();
+    private readonly Guid _userB = Guid.NewGuid();
+    private readonly Guid _ranchA = Guid.NewGuid();
+    private readonly Guid _ranchB = Guid.NewGuid();
+    private readonly Guid _padreA = Guid.NewGuid();
+    private readonly Guid _madreA = Guid.NewGuid();
+    private readonly Guid _criaA = Guid.NewGuid();
+
+    public async Task InitializeAsync()
+    {
+        await _factory.SeedAsync(db =>
+        {
+            db.Usuarios.AddRange(
+                new Usuario { IdUsuario = _userA, Nombre = "UserA", Correo = "ua@farmbovi.test", Contrasena = "h", Estado = "Activo" },
+                new Usuario { IdUsuario = _userB, Nombre = "UserB", Correo = "ub@farmbovi.test", Contrasena = "h", Estado = "Activo" });
+
+            db.Ranchos.AddRange(
+                new Rancho { IdRancho = _ranchA, Nombre = "Rancho A", UbicacionGeneral = "N", Estado = "Activo", IdAutor = _userA },
+                new Rancho { IdRancho = _ranchB, Nombre = "Rancho B", UbicacionGeneral = "S", Estado = "Activo", IdAutor = _userB });
+
+            db.UsuarioRanchos.AddRange(
+                new UsuarioRancho { IdUsuario = _userA, IdRancho = _ranchA, Rol = "Administrador", Estado = "Activo" },
+                new UsuarioRancho { IdUsuario = _userB, IdRancho = _ranchB, Rol = "Administrador", Estado = "Activo" });
+
+            db.Animales.AddRange(
+                new Animal { IdAnimal = _padreA, IdRancho = _ranchA, Arete = "PA-1", Raza = "Brahman", Sexo = "Macho", Procedencia = "Propio", Estado = "Activo", IdAutor = _userA },
+                new Animal { IdAnimal = _madreA, IdRancho = _ranchA, Arete = "MA-1", Raza = "Brahman", Sexo = "Hembra", Procedencia = "Propio", Estado = "Activo", IdAutor = _userA },
+                new Animal { IdAnimal = _criaA, IdRancho = _ranchA, Arete = "CA-1", Raza = "Brahman", Sexo = "Macho", Procedencia = "Propio", Estado = "Activo", IdAutor = _userA });
+
+            return Task.CompletedTask;
+        });
+    }
+
+    public Task DisposeAsync()
+    {
+        _factory.Dispose();
+        return Task.CompletedTask;
+    }
+
+    private HttpClient Client(Guid? userId = null)
+    {
+        var client = _factory.CreateClient();
+        if (userId is { } id)
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", FarmBoviApiFactory.CreateToken(id));
+        return client;
+    }
+
+    [Fact]
+    public async Task PipelineHttpReal_AuthLocationValidacionYCrudCompleto()
+    {
+        using var anonClient = Client();
+        var unauth = await anonClient.GetAsync($"/api/genealogia/{_criaA}/padres");
+        Assert.Equal(HttpStatusCode.Unauthorized, unauth.StatusCode);
+
+        using var clientA = Client(_userA);
+        using var clientB = Client(_userB);
+
+        // 400 por observaciones de 501 caracteres (validación DTO en pipeline HTTP).
+        var badObsRes = await clientA.PostAsJsonAsync("/api/genealogia", new
+        {
+            idAnimal = _criaA,
+            idPadre = _padreA,
+            idMadre = _madreA,
+            observaciones = new string('z', 501)
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, badObsRes.StatusCode);
+
+        // 201 Created con Location apuntando a GET /api/genealogia/{idGenealogia}.
+        var createRes = await clientA.PostAsJsonAsync("/api/genealogia", new
+        {
+            idAnimal = _criaA,
+            idPadre = _padreA,
+            idMadre = _madreA,
+            observaciones = "Registro HTTP"
+        });
+        Assert.Equal(HttpStatusCode.Created, createRes.StatusCode);
+        Assert.NotNull(createRes.Headers.Location);
+
+        var createdDto = await createRes.Content.ReadFromJsonAsync<GenealogiaRegistroDto>();
+        Assert.NotNull(createdDto);
+        Assert.Contains($"/api/genealogia/{createdDto!.IdGenealogia}", createRes.Headers.Location!.ToString(), StringComparison.OrdinalIgnoreCase);
+
+        // GET directo al Location creado.
+        var getDirect = await clientA.GetAsync(createRes.Headers.Location);
+        Assert.Equal(HttpStatusCode.OK, getDirect.StatusCode);
+
+        // 403 Forbidden desde otro rancho.
+        var getOtherRanch = await clientB.GetAsync($"/api/genealogia/{createdDto.IdGenealogia}");
+        Assert.Equal(HttpStatusCode.Forbidden, getOtherRanch.StatusCode);
+
+        // 409 Conflict al actualizar con versión obsoleta.
+        var stalePut = await clientA.PutAsJsonAsync($"/api/genealogia/{_criaA}", new
+        {
+            idPadre = _padreA,
+            idMadre = (Guid?)null,
+            observaciones = "Stale",
+            versionRegistro = 99L
+        });
+        Assert.Equal(HttpStatusCode.Conflict, stalePut.StatusCode);
+
+        // 200 OK en PUT válido.
+        var validPut = await clientA.PutAsJsonAsync($"/api/genealogia/{_criaA}", new
+        {
+            idPadre = _padreA,
+            idMadre = (Guid?)null,
+            observaciones = "Actualizado",
+            versionRegistro = 1L
+        });
+        Assert.Equal(HttpStatusCode.OK, validPut.StatusCode);
+
+        // 204 NoContent en DELETE y 404 en GET posterior.
+        var delRes = await clientA.DeleteAsync($"/api/genealogia/{_criaA}");
+        Assert.Equal(HttpStatusCode.NoContent, delRes.StatusCode);
+
+        var getAfterDel = await clientA.GetAsync($"/api/genealogia/{createdDto.IdGenealogia}");
+        Assert.Equal(HttpStatusCode.NotFound, getAfterDel.StatusCode);
     }
 }

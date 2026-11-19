@@ -393,4 +393,93 @@ public sealed class MySqlIntegrationTests
             await MySqlTestHelper.CleanupDatabaseAsync(connStr, isIsolated, dbName);
         }
     }
+
+    [MySqlIntegrationFact]
+    public async Task Genealogia_PersistenciaIndicesConcurrenciaYSync_EnMySqlReal()
+    {
+        var (connStr, isIsolated, dbName) = await MySqlTestHelper.PrepareCleanDatabaseAsync("fb_genealogia");
+        try
+        {
+            await using (var db = MySqlTestHelper.CreateContext(connStr))
+            {
+                await db.Database.MigrateAsync();
+                Assert.False(db.Database.HasPendingModelChanges());
+            }
+
+            var userId = Guid.NewGuid();
+            var ranchId = Guid.NewGuid();
+            var padre1Id = Guid.NewGuid();
+            var padre2Id = Guid.NewGuid();
+            var madreId = Guid.NewGuid();
+            var criaId = Guid.NewGuid();
+
+            await using (var seedDb = MySqlTestHelper.CreateContext(connStr))
+            {
+                seedDb.Usuarios.Add(new Usuario { IdUsuario = userId, Nombre = "Prod", Correo = $"g-{userId:N}@farmbovi.local", Contrasena = "h", Estado = "Activo" });
+                seedDb.Ranchos.Add(new Rancho { IdRancho = ranchId, Nombre = "Rancho G", UbicacionGeneral = "Norte", Estado = "Activo", IdAutor = userId });
+                seedDb.UsuarioRanchos.Add(new UsuarioRancho { IdUsuario = userId, IdRancho = ranchId, Rol = "Administrador", Estado = "Activo" });
+                seedDb.Animales.AddRange(
+                    new Animal { IdAnimal = padre1Id, IdRancho = ranchId, Arete = "G-P1", Raza = "Angus", Sexo = "Macho", Procedencia = "Propio", Estado = "Activo", IdAutor = userId },
+                    new Animal { IdAnimal = padre2Id, IdRancho = ranchId, Arete = "G-P2", Raza = "Angus", Sexo = "Macho", Procedencia = "Propio", Estado = "Activo", IdAutor = userId },
+                    new Animal { IdAnimal = madreId, IdRancho = ranchId, Arete = "G-M1", Raza = "Angus", Sexo = "Hembra", Procedencia = "Propio", Estado = "Activo", IdAutor = userId },
+                    new Animal { IdAnimal = criaId, IdRancho = ranchId, Arete = "G-C1", Raza = "Angus", Sexo = "Macho", Procedencia = "Propio", Estado = "Activo", IdAutor = userId });
+                await seedDb.SaveChangesAsync();
+            }
+
+            // 1. Inserciones simultáneas sobre el mismo animal: una gana (201), la otra recibe 409 por índice único en IdAnimal.
+            async Task<int> ConcurrentInsertAsync(Guid padreId)
+            {
+                await using var db = MySqlTestHelper.CreateContext(connStr);
+                var controller = new GenealogiaController(new FarmBovi.Api.Services.GenealogiaService(db, new FarmBovi.Api.Services.RanchAccessService(db)));
+                AttachJwtUser(controller, userId);
+                var res = await controller.Registrar(new RegistrarGenealogiaRequest(criaId, padreId, madreId, "Concurrente"), CancellationToken.None);
+                return res switch
+                {
+                    CreatedAtActionResult => StatusCodes.Status201Created,
+                    ConflictObjectResult => StatusCodes.Status409Conflict,
+                    _ => throw new InvalidOperationException($"Respuesta inesperada: {res.GetType().Name}")
+                };
+            }
+
+            var insertStatuses = await Task.WhenAll(ConcurrentInsertAsync(padre1Id), ConcurrentInsertAsync(padre2Id));
+            Assert.Contains(StatusCodes.Status201Created, insertStatuses);
+            Assert.Contains(StatusCodes.Status409Conflict, insertStatuses);
+
+            // 2. Actualizaciones simultáneas sobre el mismo registro: una gana (200), la otra recibe 409 por VersionRegistro.
+            using var gate = new Barrier(2);
+            async Task<int> ConcurrentUpdateAsync(Guid nuevoPadre, string obs)
+            {
+                await using var db = MySqlTestHelper.CreateContext(connStr);
+                var service = new FarmBovi.Api.Services.GenealogiaService(db, new FarmBovi.Api.Services.RanchAccessService(db));
+                gate.SignalAndWait();
+                var res = await service.ActualizarAsync(criaId, new ActualizarGenealogiaRequest(nuevoPadre, madreId, obs), userId, CancellationToken.None);
+                return res.Status switch
+                {
+                    FarmBovi.Api.Services.GenealogiaOperationStatus.Success => StatusCodes.Status200OK,
+                    FarmBovi.Api.Services.GenealogiaOperationStatus.Conflict => StatusCodes.Status409Conflict,
+                    _ => throw new InvalidOperationException($"Estado inesperado: {res.Status} ({res.Error})")
+                };
+            }
+
+            var updateStatuses = await Task.WhenAll(
+                ConcurrentUpdateAsync(padre1Id, "Update A"),
+                ConcurrentUpdateAsync(padre2Id, "Update B"));
+            Assert.Contains(StatusCodes.Status200OK, updateStatuses);
+            Assert.Contains(StatusCodes.Status409Conflict, updateStatuses);
+
+            // 3. Verificar integridad y CambioServidor en MySQL real.
+            await using var verifyDb = MySqlTestHelper.CreateContext(connStr);
+            Assert.Equal(1, await verifyDb.GenealogiasAnimales.CountAsync(g => g.IdAnimal == criaId));
+            var cambios = await verifyDb.CambiosServidor.AsNoTracking()
+                .Where(c => c.Entidad == nameof(GenealogiaAnimal))
+                .OrderBy(c => c.Version)
+                .ToListAsync();
+            Assert.Equal(2, cambios.Count);
+            Assert.Equal(["Crear", "Actualizar"], cambios.Select(c => c.Operacion).ToArray());
+        }
+        finally
+        {
+            await MySqlTestHelper.CleanupDatabaseAsync(connStr, isIsolated, dbName);
+        }
+    }
 }

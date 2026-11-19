@@ -2,6 +2,7 @@ using FarmBovi.Api.Data;
 using FarmBovi.Api.DTOs;
 using FarmBovi.Api.Models;
 using Microsoft.EntityFrameworkCore;
+using MySql.Data.MySqlClient;
 
 namespace FarmBovi.Api.Services;
 
@@ -22,12 +23,41 @@ public sealed record GenealogiaOperationResult<T>(
 public sealed class GenealogiaService(FarmDbContext db, RanchAccessService access)
 {
     public const int MaxProfundidad = 10;
+    public const int MaxObservacionesLength = 500;
+
+    private const string ConcurrencyConflictMessage =
+        "El registro de genealogía fue modificado por otro usuario. Recarga los datos e intenta nuevamente.";
+
+    private static readonly HashSet<string> SexosMasculinos = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "macho", "masculino", "m", "male"
+    };
+
+    private static readonly HashSet<string> SexosFemeninos = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "hembra", "femenino", "h", "f", "female"
+    };
+
+    /// <summary>
+    /// Valores reconocidos como sexo desconocido/no especificado.
+    /// Política explícita del dominio: si el sexo del progenitor es desconocido (null, vacío o marcador
+    /// explícito de desconocido), no se inventa el dato ni se bloquea el registro incompleto;
+    /// únicamente se rechaza cuando el sexo informado contradice el rol (ej. hembra como padre).
+    /// </summary>
+    private static readonly HashSet<string> SexosDesconocidos = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "desconocido", "desconocida", "unknown", "nd", "n/a", "indefinido", "indeterminado", "sin especificar"
+    };
 
     public async Task<GenealogiaOperationResult<GenealogiaRegistroDto>> RegistrarAsync(
         RegistrarGenealogiaRequest request,
         Guid userId,
         CancellationToken ct)
     {
+        var (observaciones, obsError) = ValidateAndNormalizeObservaciones(request.Observaciones);
+        if (obsError is not null)
+            return new(GenealogiaOperationStatus.BadRequest, Error: obsError);
+
         var validation = await ValidateParentescoAsync(request.IdAnimal, request.IdPadre, request.IdMadre, userId, ct);
         if (validation.Status != GenealogiaOperationStatus.Success)
             return new(validation.Status, Error: validation.Error);
@@ -43,7 +73,6 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
         }
 
         var ahora = DateTime.UtcNow;
-        var observaciones = NormalizeObservaciones(request.Observaciones);
 
         if (existente is not null)
         {
@@ -54,8 +83,15 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
             existente.EliminadoEn = null;
             existente.VersionRegistro += 1;
 
-            await db.SaveChangesAsync(ct);
-            return new(GenealogiaOperationStatus.Success, MapRegistro(existente));
+            try
+            {
+                await db.SaveChangesAsync(ct);
+                return new(GenealogiaOperationStatus.Success, MapRegistro(existente));
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                return new(GenealogiaOperationStatus.Conflict, Error: ConcurrencyConflictMessage);
+            }
         }
 
         var nuevo = new GenealogiaAnimal
@@ -71,8 +107,22 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
         };
 
         db.GenealogiasAnimales.Add(nuevo);
-        await db.SaveChangesAsync(ct);
-        return new(GenealogiaOperationStatus.Success, MapRegistro(nuevo));
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            return new(GenealogiaOperationStatus.Success, MapRegistro(nuevo));
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return new(GenealogiaOperationStatus.Conflict, Error: ConcurrencyConflictMessage);
+        }
+        catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
+        {
+            db.Entry(nuevo).State = EntityState.Detached;
+            return new(
+                GenealogiaOperationStatus.Conflict,
+                Error: "El animal ya tiene un registro de genealogía activo o está siendo registrado simultáneamente.");
+        }
     }
 
     public async Task<GenealogiaOperationResult<GenealogiaRegistroDto>> ActualizarAsync(
@@ -81,6 +131,10 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
         Guid userId,
         CancellationToken ct)
     {
+        var (observaciones, obsError) = ValidateAndNormalizeObservaciones(request.Observaciones);
+        if (obsError is not null)
+            return new(GenealogiaOperationStatus.BadRequest, Error: obsError);
+
         var validation = await ValidateParentescoAsync(idAnimal, request.IdPadre, request.IdMadre, userId, ct);
         if (validation.Status != GenealogiaOperationStatus.Success)
             return new(validation.Status, Error: validation.Error);
@@ -91,14 +145,24 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
         if (existente is null)
             return new(GenealogiaOperationStatus.NotFound, Error: "No existe un registro de genealogía activo para este animal.");
 
+        if (request.VersionRegistro is { } expectedVersion && existente.VersionRegistro != expectedVersion)
+            return new(GenealogiaOperationStatus.Conflict, Error: ConcurrencyConflictMessage);
+
         existente.IdPadre = request.IdPadre;
         existente.IdMadre = request.IdMadre;
-        existente.Observaciones = NormalizeObservaciones(request.Observaciones);
+        existente.Observaciones = observaciones;
         existente.IdAutor = userId;
         existente.VersionRegistro += 1;
 
-        await db.SaveChangesAsync(ct);
-        return new(GenealogiaOperationStatus.Success, MapRegistro(existente));
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            return new(GenealogiaOperationStatus.Success, MapRegistro(existente));
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return new(GenealogiaOperationStatus.Conflict, Error: ConcurrencyConflictMessage);
+        }
     }
 
     public async Task<GenealogiaOperationResult<bool>> EliminarAsync(
@@ -124,9 +188,40 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
         registro.EliminadoEn = DateTime.UtcNow;
         registro.IdAutor = userId;
         registro.VersionRegistro += 1;
-        await db.SaveChangesAsync(ct);
 
-        return new(GenealogiaOperationStatus.Success, true);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            return new(GenealogiaOperationStatus.Success, true);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return new(GenealogiaOperationStatus.Conflict, Error: ConcurrencyConflictMessage);
+        }
+    }
+
+    public async Task<GenealogiaOperationResult<GenealogiaRegistroDto>> ObtenerPorIdAsync(
+        Guid idGenealogia,
+        Guid userId,
+        CancellationToken ct)
+    {
+        if (idGenealogia == Guid.Empty)
+            return new(GenealogiaOperationStatus.BadRequest, Error: "El identificador de genealogía (idGenealogia) es obligatorio.");
+
+        var item = await (
+            from g in db.GenealogiasAnimales.AsNoTracking()
+            join a in db.Animales.AsNoTracking() on g.IdAnimal equals a.IdAnimal
+            where g.IdGenealogia == idGenealogia && g.EliminadoEn == null && a.EliminadoEn == null
+            select new { Rel = g, a.IdRancho }
+        ).FirstOrDefaultAsync(ct);
+
+        if (item is null)
+            return new(GenealogiaOperationStatus.NotFound, Error: "El registro de genealogía especificado no existe.");
+
+        if (!await access.CanAccessAsync(userId, item.IdRancho, ct))
+            return new(GenealogiaOperationStatus.Forbidden, Error: "No tienes permisos sobre el rancho de este animal.");
+
+        return new(GenealogiaOperationStatus.Success, MapRegistro(item.Rel));
     }
 
     public async Task<GenealogiaOperationResult<PadresAnimalResponse>> ObtenerPadresAsync(
@@ -148,50 +243,96 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
             return new(GenealogiaOperationStatus.Forbidden, Error: "No tienes permisos sobre el rancho de este animal.");
 
         var activeRanchIds = await access.ActiveRanchIds(userId).ToListAsync(ct);
-        var rels = await LoadActiveRelationsByAnimalAsync(ct);
-        var animalsMap = await LoadAccessibleAnimalsAsync(activeRanchIds, ct);
 
-        rels.TryGetValue(idAnimal, out var directRel);
-        var padre = directRel?.IdPadre is { } pId && animalsMap.TryGetValue(pId, out var p) ? MapResumen(p) : null;
-        var madre = directRel?.IdMadre is { } mId && animalsMap.TryGetValue(mId, out var m) ? MapResumen(m) : null;
+        AnimalResumenGenealogiaDto? padreDirecto = null;
+        AnimalResumenGenealogiaDto? madreDirecta = null;
+        string? observacionesDirectas = null;
 
         var ancestros = new List<AncestroGenealogicoDto>();
-        var queue = new Queue<(Guid ChildId, int Gen)>();
         var visited = new HashSet<Guid> { idAnimal };
-        queue.Enqueue((idAnimal, 0));
+        var frontier = new List<Guid> { idAnimal };
 
-        while (queue.Count > 0)
+        for (var gen = 0; gen < profundidad && frontier.Count > 0; gen++)
         {
-            var (currentId, gen) = queue.Dequeue();
-            if (gen >= profundidad || !rels.TryGetValue(currentId, out var rel))
-                continue;
+            var levelRels = await (
+                from g in db.GenealogiasAnimales.AsNoTracking()
+                join a in db.Animales.AsNoTracking() on g.IdAnimal equals a.IdAnimal
+                where g.EliminadoEn == null
+                      && a.EliminadoEn == null
+                      && activeRanchIds.Contains(a.IdRancho)
+                      && frontier.Contains(g.IdAnimal)
+                select g
+            ).ToListAsync(ct);
 
+            if (levelRels.Count == 0)
+                break;
+
+            var parentIds = new HashSet<Guid>();
+            foreach (var rel in levelRels)
+            {
+                if (rel.IdPadre is { } pid) parentIds.Add(pid);
+                if (rel.IdMadre is { } mid) parentIds.Add(mid);
+            }
+
+            var parentsMap = parentIds.Count == 0
+                ? new Dictionary<Guid, Animal>()
+                : await db.Animales.AsNoTracking()
+                    .Where(a => a.EliminadoEn == null
+                                && activeRanchIds.Contains(a.IdRancho)
+                                && parentIds.Contains(a.IdAnimal))
+                    .ToDictionaryAsync(a => a.IdAnimal, ct);
+
+            var relByChild = levelRels.ToDictionary(r => r.IdAnimal);
+            var nextFrontier = new List<Guid>();
             var nextGen = gen + 1;
-            if (rel.IdPadre is { } nextPadre && animalsMap.TryGetValue(nextPadre, out var padreAnimal))
+
+            foreach (var currentId in frontier)
             {
-                ancestros.Add(new AncestroGenealogicoDto(nextGen, "Padre", currentId, MapResumen(padreAnimal)));
-                if (visited.Add(nextPadre))
-                    queue.Enqueue((nextPadre, nextGen));
+                if (!relByChild.TryGetValue(currentId, out var rel))
+                    continue;
+
+                if (gen == 0 && currentId == idAnimal)
+                {
+                    observacionesDirectas = rel.Observaciones;
+                    if (rel.IdPadre is { } pId && parentsMap.TryGetValue(pId, out var p))
+                        padreDirecto = MapResumen(p);
+                    if (rel.IdMadre is { } mId && parentsMap.TryGetValue(mId, out var m))
+                        madreDirecta = MapResumen(m);
+                }
+
+                if (rel.IdPadre is { } nextPadre && parentsMap.TryGetValue(nextPadre, out var padreAnimal))
+                {
+                    ancestros.Add(new AncestroGenealogicoDto(nextGen, "Padre", currentId, MapResumen(padreAnimal)));
+                    if (visited.Add(nextPadre))
+                        nextFrontier.Add(nextPadre);
+                }
+
+                if (rel.IdMadre is { } nextMadre && parentsMap.TryGetValue(nextMadre, out var madreAnimal))
+                {
+                    ancestros.Add(new AncestroGenealogicoDto(nextGen, "Madre", currentId, MapResumen(madreAnimal)));
+                    if (visited.Add(nextMadre))
+                        nextFrontier.Add(nextMadre);
+                }
             }
 
-            if (rel.IdMadre is { } nextMadre && animalsMap.TryGetValue(nextMadre, out var madreAnimal))
-            {
-                ancestros.Add(new AncestroGenealogicoDto(nextGen, "Madre", currentId, MapResumen(madreAnimal)));
-                if (visited.Add(nextMadre))
-                    queue.Enqueue((nextMadre, nextGen));
-            }
+            frontier = nextFrontier;
         }
 
         var response = new PadresAnimalResponse(
             MapResumen(animal),
-            padre,
-            madre,
-            directRel?.Observaciones,
+            padreDirecto,
+            madreDirecta,
+            observacionesDirectas,
             ancestros);
 
         return new(GenealogiaOperationStatus.Success, response);
     }
 
+    /// <summary>
+    /// Consulta los descendientes únicos de un animal hasta <paramref name="profundidad"/> generaciones.
+    /// <c>TotalDescendientes</c> representa la cantidad de animales descendientes únicos alcanzables
+    /// dentro del límite de profundidad solicitado (sin duplicar animales en casos de consanguinidad).
+    /// </summary>
     public async Task<GenealogiaOperationResult<DescendientesAnimalResponse>> ObtenerDescendientesAsync(
         Guid idAnimal,
         int profundidad,
@@ -211,51 +352,61 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
             return new(GenealogiaOperationStatus.Forbidden, Error: "No tienes permisos sobre el rancho de este animal.");
 
         var activeRanchIds = await access.ActiveRanchIds(userId).ToListAsync(ct);
-        var animalsMap = await LoadAccessibleAnimalsAsync(activeRanchIds, ct);
-
-        var activeRelations = await db.GenealogiasAnimales.AsNoTracking()
-            .Where(g => g.EliminadoEn == null)
-            .ToListAsync(ct);
-
-        var childrenByParent = new Dictionary<Guid, List<(GenealogiaAnimal Rel, string Rol)>>();
-        foreach (var rel in activeRelations)
-        {
-            if (rel.IdPadre is { } pid)
-            {
-                if (!childrenByParent.TryGetValue(pid, out var list))
-                    childrenByParent[pid] = list = [];
-                list.Add((rel, "Padre"));
-            }
-
-            if (rel.IdMadre is { } mid)
-            {
-                if (!childrenByParent.TryGetValue(mid, out var list))
-                    childrenByParent[mid] = list = [];
-                list.Add((rel, "Madre"));
-            }
-        }
 
         var descendientes = new List<DescendienteGenealogicoDto>();
         var visited = new HashSet<Guid> { idAnimal };
-        var queue = new Queue<(Guid ParentId, int Gen)>();
-        queue.Enqueue((idAnimal, 0));
+        var frontier = new List<Guid> { idAnimal };
 
-        while (queue.Count > 0)
+        for (var gen = 0; gen < profundidad && frontier.Count > 0; gen++)
         {
-            var (currentParentId, gen) = queue.Dequeue();
-            if (gen >= profundidad || !childrenByParent.TryGetValue(currentParentId, out var children))
-                continue;
+            var levelMatches = await (
+                from g in db.GenealogiasAnimales.AsNoTracking()
+                join a in db.Animales.AsNoTracking() on g.IdAnimal equals a.IdAnimal
+                where g.EliminadoEn == null
+                      && a.EliminadoEn == null
+                      && activeRanchIds.Contains(a.IdRancho)
+                      && ((g.IdPadre != null && frontier.Contains(g.IdPadre.Value))
+                          || (g.IdMadre != null && frontier.Contains(g.IdMadre.Value)))
+                select new { Rel = g, Child = a }
+            ).ToListAsync(ct);
 
+            if (levelMatches.Count == 0)
+                break;
+
+            var frontierSet = frontier.ToHashSet();
+            var nextFrontier = new List<Guid>();
             var nextGen = gen + 1;
-            foreach (var (rel, rol) in children)
+
+            foreach (var match in levelMatches)
             {
-                if (!animalsMap.TryGetValue(rel.IdAnimal, out var childAnimal))
+                var rel = match.Rel;
+                var childAnimal = match.Child;
+
+                string rol;
+                Guid directParentId;
+                if (rel.IdPadre is { } pid && frontierSet.Contains(pid))
+                {
+                    rol = "Padre";
+                    directParentId = pid;
+                }
+                else if (rel.IdMadre is { } mid && frontierSet.Contains(mid))
+                {
+                    rol = "Madre";
+                    directParentId = mid;
+                }
+                else
+                {
+                    continue;
+                }
+
+                // Evitar duplicados cuando un mismo descendiente converge por dos ramas (ej. consanguinidad).
+                if (!visited.Add(childAnimal.IdAnimal))
                     continue;
 
                 descendientes.Add(new DescendienteGenealogicoDto(
                     nextGen,
                     rol,
-                    currentParentId,
+                    directParentId,
                     new AnimalResumenGenealogicoDetalleDto(
                         childAnimal.IdAnimal,
                         childAnimal.IdRancho,
@@ -267,9 +418,10 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
                         rel.IdPadre,
                         rel.IdMadre)));
 
-                if (visited.Add(rel.IdAnimal))
-                    queue.Enqueue((rel.IdAnimal, nextGen));
+                nextFrontier.Add(childAnimal.IdAnimal);
             }
+
+            frontier = nextFrontier;
         }
 
         var response = new DescendientesAnimalResponse(
@@ -321,6 +473,19 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
 
             if (!await access.CanAccessAsync(userId, padre.IdRancho, ct))
                 return new(GenealogiaOperationStatus.Forbidden, Error: "No tienes permisos sobre el rancho del padre especificado.");
+
+            if (!IsValidFatherSex(padre.Sexo))
+                return new(GenealogiaOperationStatus.BadRequest, Error: "El padre especificado debe ser de sexo macho.");
+
+            // Política explícita de fechas: si alguna fecha es desconocida (null), se permite el registro incompleto;
+            // cuando ambas existen, el progenitor debe haber nacido estrictamente antes que el descendiente.
+            if (animal.FechaNacimiento.HasValue && padre.FechaNacimiento.HasValue &&
+                padre.FechaNacimiento.Value.Date >= animal.FechaNacimiento.Value.Date)
+            {
+                return new(
+                    GenealogiaOperationStatus.BadRequest,
+                    Error: "La fecha de nacimiento del padre debe ser anterior a la fecha de nacimiento del animal descendiente.");
+            }
         }
 
         if (idMadre is { } madreId)
@@ -332,10 +497,23 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
 
             if (!await access.CanAccessAsync(userId, madre.IdRancho, ct))
                 return new(GenealogiaOperationStatus.Forbidden, Error: "No tienes permisos sobre el rancho de la madre especificada.");
+
+            if (!IsValidMotherSex(madre.Sexo))
+                return new(GenealogiaOperationStatus.BadRequest, Error: "La madre especificada debe ser de sexo hembra.");
+
+            if (animal.FechaNacimiento.HasValue && madre.FechaNacimiento.HasValue &&
+                madre.FechaNacimiento.Value.Date >= animal.FechaNacimiento.Value.Date)
+            {
+                return new(
+                    GenealogiaOperationStatus.BadRequest,
+                    Error: "La fecha de nacimiento de la madre debe ser anterior a la fecha de nacimiento del animal descendiente.");
+            }
         }
 
+        var activeRanchIds = await access.ActiveRanchIds(userId).ToListAsync(ct);
+
         // Tarea 10: evitar ciclos genealógicos (idAnimal no puede ser ancestro de idPadre ni de idMadre).
-        if (await CreatesCycleAsync(idAnimal, idPadre, idMadre, ct))
+        if (await CreatesCycleAsync(idAnimal, idPadre, idMadre, activeRanchIds, ct))
         {
             return new(
                 GenealogiaOperationStatus.BadRequest,
@@ -349,49 +527,97 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
         Guid idAnimal,
         Guid? idPadre,
         Guid? idMadre,
+        IReadOnlyCollection<Guid> activeRanchIds,
         CancellationToken ct)
     {
-        var rels = await LoadActiveRelationsByAnimalAsync(ct);
-        var queue = new Queue<Guid>();
         var visited = new HashSet<Guid>();
+        var frontier = new List<Guid>();
 
         if (idPadre is { } p && visited.Add(p))
-            queue.Enqueue(p);
+            frontier.Add(p);
         if (idMadre is { } m && visited.Add(m))
-            queue.Enqueue(m);
+            frontier.Add(m);
 
-        while (queue.Count > 0)
+        while (frontier.Count > 0)
         {
-            var current = queue.Dequeue();
-            if (current == idAnimal)
+            if (frontier.Contains(idAnimal))
                 return true;
 
-            if (!rels.TryGetValue(current, out var rel))
-                continue;
+            var levelRels = await (
+                from g in db.GenealogiasAnimales.AsNoTracking()
+                join a in db.Animales.AsNoTracking() on g.IdAnimal equals a.IdAnimal
+                where g.EliminadoEn == null
+                      && a.EliminadoEn == null
+                      && activeRanchIds.Contains(a.IdRancho)
+                      && frontier.Contains(g.IdAnimal)
+                select new { g.IdPadre, g.IdMadre }
+            ).ToListAsync(ct);
 
-            if (rel.IdPadre is { } nextP && visited.Add(nextP))
-                queue.Enqueue(nextP);
-            if (rel.IdMadre is { } nextM && visited.Add(nextM))
-                queue.Enqueue(nextM);
+            var nextFrontier = new List<Guid>();
+            foreach (var rel in levelRels)
+            {
+                if (rel.IdPadre is { } nextP)
+                {
+                    if (nextP == idAnimal)
+                        return true;
+                    if (visited.Add(nextP))
+                        nextFrontier.Add(nextP);
+                }
+
+                if (rel.IdMadre is { } nextM)
+                {
+                    if (nextM == idAnimal)
+                        return true;
+                    if (visited.Add(nextM))
+                        nextFrontier.Add(nextM);
+                }
+            }
+
+            frontier = nextFrontier;
         }
 
         return false;
     }
 
-    private async Task<Dictionary<Guid, GenealogiaAnimal>> LoadActiveRelationsByAnimalAsync(CancellationToken ct) =>
-        await db.GenealogiasAnimales.AsNoTracking()
-            .Where(g => g.EliminadoEn == null)
-            .ToDictionaryAsync(g => g.IdAnimal, ct);
+    private static bool IsUnknownSex(string? sexo)
+    {
+        if (string.IsNullOrWhiteSpace(sexo))
+            return true;
+        return SexosDesconocidos.Contains(sexo.Trim());
+    }
 
-    private async Task<Dictionary<Guid, Animal>> LoadAccessibleAnimalsAsync(
-        IReadOnlyCollection<Guid> activeRanchIds,
-        CancellationToken ct) =>
-        await db.Animales.AsNoTracking()
-            .Where(a => a.EliminadoEn == null && activeRanchIds.Contains(a.IdRancho))
-            .ToDictionaryAsync(a => a.IdAnimal, ct);
+    private static bool IsValidFatherSex(string? sexo)
+    {
+        if (IsUnknownSex(sexo))
+            return true;
+        return SexosMasculinos.Contains(sexo!.Trim());
+    }
 
-    private static string? NormalizeObservaciones(string? observaciones) =>
-        string.IsNullOrWhiteSpace(observaciones) ? null : observaciones.Trim();
+    private static bool IsValidMotherSex(string? sexo)
+    {
+        if (IsUnknownSex(sexo))
+            return true;
+        return SexosFemeninos.Contains(sexo!.Trim());
+    }
+
+    private static (string? Normalized, string? Error) ValidateAndNormalizeObservaciones(string? observaciones)
+    {
+        var normalized = string.IsNullOrWhiteSpace(observaciones) ? null : observaciones.Trim();
+        if (normalized is not null && normalized.Length > MaxObservacionesLength)
+            return (null, $"Las observaciones no pueden exceder {MaxObservacionesLength} caracteres.");
+
+        return (normalized, null);
+    }
+
+    private static bool IsUniqueConstraintViolation(DbUpdateException ex)
+    {
+        if (ex.InnerException is MySqlException mysqlEx && mysqlEx.Number == 1062)
+            return true;
+
+        var message = ex.InnerException?.Message ?? ex.Message;
+        return message.Contains("Duplicate entry", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("UNIQUE constraint failed", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static AnimalResumenGenealogiaDto MapResumen(Animal animal) =>
         new(animal.IdAnimal, animal.IdRancho, animal.Arete, animal.Raza, animal.Sexo, animal.FechaNacimiento, animal.Estado);

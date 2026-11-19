@@ -178,7 +178,7 @@ public sealed class FarmDbContext(
 
     private static bool IsSynchronizableEntity(object entity) =>
         entity is Animal or Lote or Rancho or Alimentacion or MovimientoAnimal
-            or EventoSanitario or Tratamiento or Recordatorio;
+            or EventoSanitario or Tratamiento or Recordatorio or GenealogiaAnimal;
 
     private CambioServidor? BuildApiChangeRecord(EntityEntry entry, Guid idRancho, DateTime ahora)
     {
