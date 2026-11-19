@@ -489,4 +489,78 @@ public sealed class MySqlIntegrationTests
             await MySqlTestHelper.CleanupDatabaseAsync(connStr, isIsolated, dbName);
         }
     }
+
+    [MySqlIntegrationFact]
+    public async Task Genealogia_ConcurrenciaOptimistaReal_DosContextosIndependientes_Retorna409()
+    {
+        var (connStr, isIsolated, dbName) = await MySqlTestHelper.PrepareCleanDatabaseAsync("fb_gen_occ");
+        try
+        {
+            await using (var db = MySqlTestHelper.CreateContext(connStr))
+            {
+                await db.Database.MigrateAsync();
+                Assert.False(db.Database.HasPendingModelChanges());
+            }
+
+            var userId = Guid.NewGuid();
+            var ranchId = Guid.NewGuid();
+            var padre1Id = Guid.NewGuid();
+            var padre2Id = Guid.NewGuid();
+            var madreId = Guid.NewGuid();
+            var criaId = Guid.NewGuid();
+
+            await using (var seedDb = MySqlTestHelper.CreateContext(connStr))
+            {
+                seedDb.Usuarios.Add(new Usuario { IdUsuario = userId, Nombre = "Prod", Correo = $"occ-{userId:N}@farmbovi.local", Contrasena = "h", Estado = "Activo" });
+                seedDb.Ranchos.Add(new Rancho { IdRancho = ranchId, Nombre = "Rancho OCC", UbicacionGeneral = "Norte", Estado = "Activo", IdAutor = userId });
+                seedDb.UsuarioRanchos.Add(new UsuarioRancho { IdUsuario = userId, IdRancho = ranchId, Rol = "Administrador", Estado = "Activo" });
+                seedDb.Animales.AddRange(
+                    new Animal { IdAnimal = padre1Id, IdRancho = ranchId, Arete = "OCC-P1", Raza = "Angus", Sexo = "Macho", Procedencia = "Propio", Estado = "Activo", IdAutor = userId },
+                    new Animal { IdAnimal = padre2Id, IdRancho = ranchId, Arete = "OCC-P2", Raza = "Angus", Sexo = "Macho", Procedencia = "Propio", Estado = "Activo", IdAutor = userId },
+                    new Animal { IdAnimal = madreId, IdRancho = ranchId, Arete = "OCC-M1", Raza = "Angus", Sexo = "Hembra", Procedencia = "Propio", Estado = "Activo", IdAutor = userId },
+                    new Animal { IdAnimal = criaId, IdRancho = ranchId, Arete = "OCC-C1", Raza = "Angus", Sexo = "Macho", Procedencia = "Propio", Estado = "Activo", IdAutor = userId });
+                await seedDb.SaveChangesAsync();
+
+                var seedController = new GenealogiaController(new FarmBovi.Api.Services.GenealogiaService(seedDb, new FarmBovi.Api.Services.RanchAccessService(seedDb)));
+                AttachJwtUser(seedController, userId);
+                Assert.IsType<CreatedAtActionResult>(await seedController.Registrar(new RegistrarGenealogiaRequest(criaId, padre1Id, madreId, "Inicial"), CancellationToken.None));
+            }
+
+            // 1. Abrir dos contextos independientes y consultar el mismo registro con la misma versión inicial (1).
+            await using var db1 = MySqlTestHelper.CreateContext(connStr);
+            await using var db2 = MySqlTestHelper.CreateContext(connStr);
+
+            var reg1 = await db1.GenealogiasAnimales.FirstAsync(g => g.IdAnimal == criaId);
+            var reg2 = await db2.GenealogiasAnimales.FirstAsync(g => g.IdAnimal == criaId);
+            Assert.Equal(1L, reg1.VersionRegistro);
+            Assert.Equal(1L, reg2.VersionRegistro);
+
+            // 2. El contexto 1 guarda su modificación (VersionRegistro pasa a 2 en BD).
+            var controller1 = new GenealogiaController(new FarmBovi.Api.Services.GenealogiaService(db1, new FarmBovi.Api.Services.RanchAccessService(db1)));
+            AttachJwtUser(controller1, userId);
+            var okRes = await controller1.Actualizar(criaId, new ActualizarGenealogiaRequest(padre1Id, madreId, "Modificacion Contexto 1", VersionRegistro: reg1.VersionRegistro), CancellationToken.None);
+            Assert.IsType<OkObjectResult>(okRes);
+
+            // 3. El contexto 2 mantiene reg2 rastreado con VersionRegistro = 1 (la validación previa pasa, pero SaveChangesAsync colisiona en BD) y la API devuelve HTTP 409.
+            var controller2 = new GenealogiaController(new FarmBovi.Api.Services.GenealogiaService(db2, new FarmBovi.Api.Services.RanchAccessService(db2)));
+            AttachJwtUser(controller2, userId);
+            var conflictRes = await controller2.Actualizar(criaId, new ActualizarGenealogiaRequest(padre2Id, madreId, "Modificacion Contexto 2", VersionRegistro: reg2.VersionRegistro), CancellationToken.None);
+            Assert.IsType<ConflictObjectResult>(conflictRes);
+
+            // 4. Comprobar en un tercer contexto que EF Core lanza DbUpdateConcurrencyException ante token obsoleto y que solo persistió la modificación del contexto 1.
+            await using var db3 = MySqlTestHelper.CreateContext(connStr);
+            var reg3 = await db3.GenealogiasAnimales.FirstAsync(g => g.IdAnimal == criaId);
+            Assert.Equal("Modificacion Contexto 1", reg3.Observaciones);
+            Assert.Equal(padre1Id, reg3.IdPadre);
+            Assert.Equal(2L, reg3.VersionRegistro);
+
+            db3.Entry(reg3).Property(x => x.VersionRegistro).OriginalValue = 1L;
+            reg3.Observaciones = "Forzar DbUpdateConcurrencyException";
+            await Assert.ThrowsAnyAsync<DbUpdateException>(() => db3.SaveChangesAsync());
+        }
+        finally
+        {
+            await MySqlTestHelper.CleanupDatabaseAsync(connStr, isIsolated, dbName);
+        }
+    }
 }

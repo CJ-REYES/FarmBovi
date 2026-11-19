@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Claims;
+using System.Text.Json;
 using FarmBovi.Api.Controllers;
 using FarmBovi.Api.Data;
 using FarmBovi.Api.DTOs;
@@ -243,7 +244,7 @@ public sealed class GenealogiaTests
 
         Assert.IsType<CreatedAtActionResult>(await controller.Registrar(new RegistrarGenealogiaRequest(cria.IdAnimal, p1.IdAnimal, null), default));
 
-        var updateRes = await controller.Actualizar(cria.IdAnimal, new ActualizarGenealogiaRequest(p2.IdAnimal, m1.IdAnimal, "Corregido"), default);
+        var updateRes = await controller.Actualizar(cria.IdAnimal, new ActualizarGenealogiaRequest(p2.IdAnimal, m1.IdAnimal, "Corregido", VersionRegistro: 1), default);
         var updateOk = Assert.IsType<OkObjectResult>(updateRes);
         var updatedDto = Assert.IsType<GenealogiaRegistroDto>(updateOk.Value);
         Assert.Equal(p2.IdAnimal, updatedDto.IdPadre);
@@ -371,7 +372,7 @@ public sealed class GenealogiaTests
         var dto = Assert.IsType<GenealogiaRegistroDto>(created.Value);
         Assert.Equal(500, dto.Observaciones?.Length);
 
-        var badUpdate501 = await controller.Actualizar(cria.IdAnimal, new ActualizarGenealogiaRequest(padre.IdAnimal, null, obs501), default);
+        var badUpdate501 = await controller.Actualizar(cria.IdAnimal, new ActualizarGenealogiaRequest(padre.IdAnimal, null, obs501, VersionRegistro: 1), default);
         Assert.IsType<BadRequestObjectResult>(badUpdate501);
     }
 
@@ -483,7 +484,7 @@ public sealed class GenealogiaTests
         await dbA.SaveChangesAsync();
 
         var serviceB = new GenealogiaService(dbB, new RanchAccessService(dbB));
-        var conflictRes = await serviceB.ActualizarAsync(criaId, new ActualizarGenealogiaRequest(padre1Id, null, "Cambio B"), userId, default);
+        var conflictRes = await serviceB.ActualizarAsync(criaId, new ActualizarGenealogiaRequest(padre1Id, null, "Cambio B", VersionRegistro: regB.VersionRegistro), userId, default);
         Assert.Equal(GenealogiaOperationStatus.Conflict, conflictRes.Status);
     }
 
@@ -506,7 +507,7 @@ public sealed class GenealogiaTests
         var dto = Assert.IsType<GenealogiaRegistroDto>(created.Value);
 
         Assert.IsType<OkObjectResult>(
-            await controller.Actualizar(cria.IdAnimal, new ActualizarGenealogiaRequest(padre.IdAnimal, madre.IdAnimal, "Edit"), default));
+            await controller.Actualizar(cria.IdAnimal, new ActualizarGenealogiaRequest(padre.IdAnimal, madre.IdAnimal, "Edit", VersionRegistro: 1), default));
 
         Assert.IsType<NoContentResult>(await controller.Eliminar(cria.IdAnimal, default));
 
@@ -522,6 +523,19 @@ public sealed class GenealogiaTests
         Assert.NotNull(cambios[0].Datos);
         Assert.NotNull(cambios[1].Datos);
         Assert.Null(cambios[2].Datos);
+
+        using var payloadDoc = JsonDocument.Parse(cambios[1].Datos!);
+        var root = payloadDoc.RootElement;
+        Assert.Equal(dto.IdGenealogia, root.GetProperty("idGenealogia").GetGuid());
+        Assert.Equal(cria.IdAnimal, root.GetProperty("idAnimal").GetGuid());
+        Assert.Equal(padre.IdAnimal, root.GetProperty("idPadre").GetGuid());
+        Assert.Equal(madre.IdAnimal, root.GetProperty("idMadre").GetGuid());
+        Assert.Equal(2L, root.GetProperty("versionRegistro").GetInt64());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("eliminadoEn").ValueKind);
+
+        using var deleteDoc = JsonDocument.Parse(cambios[2].Despues!);
+        Assert.NotEqual(JsonValueKind.Null, deleteDoc.RootElement.GetProperty("eliminadoEn").ValueKind);
+        Assert.Equal(3L, deleteDoc.RootElement.GetProperty("versionRegistro").GetInt64());
     }
 }
 
@@ -618,6 +632,33 @@ public sealed class GenealogiaApiTests : IAsyncLifetime
         var getOtherRanch = await clientB.GetAsync($"/api/genealogia/{createdDto.IdGenealogia}");
         Assert.Equal(HttpStatusCode.Forbidden, getOtherRanch.StatusCode);
 
+        // 400 BadRequest al actualizar sin enviar versionRegistro, con 0 o con negativo.
+        var missingVersionPut = await clientA.PutAsJsonAsync($"/api/genealogia/{_criaA}", new
+        {
+            idPadre = _padreA,
+            idMadre = (Guid?)null,
+            observaciones = "Sin versión"
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, missingVersionPut.StatusCode);
+
+        var zeroVersionPut = await clientA.PutAsJsonAsync($"/api/genealogia/{_criaA}", new
+        {
+            idPadre = _padreA,
+            idMadre = (Guid?)null,
+            observaciones = "Versión cero",
+            versionRegistro = 0L
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, zeroVersionPut.StatusCode);
+
+        var negativeVersionPut = await clientA.PutAsJsonAsync($"/api/genealogia/{_criaA}", new
+        {
+            idPadre = _padreA,
+            idMadre = (Guid?)null,
+            observaciones = "Versión negativa",
+            versionRegistro = -2L
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, negativeVersionPut.StatusCode);
+
         // 409 Conflict al actualizar con versión obsoleta.
         var stalePut = await clientA.PutAsJsonAsync($"/api/genealogia/{_criaA}", new
         {
@@ -628,7 +669,7 @@ public sealed class GenealogiaApiTests : IAsyncLifetime
         });
         Assert.Equal(HttpStatusCode.Conflict, stalePut.StatusCode);
 
-        // 200 OK en PUT válido.
+        // 200 OK en PUT válido (incrementa versión a 2).
         var validPut = await clientA.PutAsJsonAsync($"/api/genealogia/{_criaA}", new
         {
             idPadre = _padreA,
@@ -638,8 +679,12 @@ public sealed class GenealogiaApiTests : IAsyncLifetime
         });
         Assert.Equal(HttpStatusCode.OK, validPut.StatusCode);
 
-        // 204 NoContent en DELETE y 404 en GET posterior.
-        var delRes = await clientA.DeleteAsync($"/api/genealogia/{_criaA}");
+        // 409 Conflict en DELETE con versión obsoleta.
+        var staleDel = await clientA.DeleteAsync($"/api/genealogia/{_criaA}?versionRegistro=1");
+        Assert.Equal(HttpStatusCode.Conflict, staleDel.StatusCode);
+
+        // 204 NoContent en DELETE con versión vigente y 404 en GET posterior.
+        var delRes = await clientA.DeleteAsync($"/api/genealogia/{_criaA}?versionRegistro=2");
         Assert.Equal(HttpStatusCode.NoContent, delRes.StatusCode);
 
         var getAfterDel = await clientA.GetAsync($"/api/genealogia/{createdDto.IdGenealogia}");

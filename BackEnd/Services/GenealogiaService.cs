@@ -119,6 +119,9 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
         Guid userId,
         CancellationToken ct)
     {
+        if (request.VersionRegistro <= 0)
+            return new(GenealogiaOperationStatus.BadRequest, Error: "La versión del registro (versionRegistro) es obligatoria y debe ser mayor que cero.");
+
         var (observaciones, obsError) = ValidateAndNormalizeObservaciones(request.Observaciones);
         if (obsError is not null)
             return new(GenealogiaOperationStatus.BadRequest, Error: obsError);
@@ -133,7 +136,7 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
         if (existente is null)
             return new(GenealogiaOperationStatus.NotFound, Error: "No existe un registro de genealogía activo para este animal.");
 
-        if (request.VersionRegistro is { } expectedVersion && existente.VersionRegistro != expectedVersion)
+        if (existente.VersionRegistro != request.VersionRegistro)
             return new(GenealogiaOperationStatus.Conflict, Error: ConcurrencyConflictMessage);
 
         existente.IdPadre = request.IdPadre;
@@ -151,8 +154,12 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
     public async Task<GenealogiaOperationResult<bool>> EliminarAsync(
         Guid idAnimal,
         Guid userId,
-        CancellationToken ct)
+        CancellationToken ct,
+        long? expectedVersion = null)
     {
+        if (expectedVersion is <= 0)
+            return new(GenealogiaOperationStatus.BadRequest, Error: "La versión del registro (versionRegistro) debe ser mayor que cero.");
+
         var animal = await db.Animales.AsNoTracking()
             .FirstOrDefaultAsync(a => a.IdAnimal == idAnimal && a.EliminadoEn == null, ct);
 
@@ -167,6 +174,9 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
 
         if (registro is null)
             return new(GenealogiaOperationStatus.NotFound, Error: "El animal no tiene genealogía activa registrada.");
+
+        if (expectedVersion is { } version && registro.VersionRegistro != version)
+            return new(GenealogiaOperationStatus.Conflict, Error: ConcurrencyConflictMessage);
 
         registro.EliminadoEn = DateTime.UtcNow;
         registro.IdAutor = userId;

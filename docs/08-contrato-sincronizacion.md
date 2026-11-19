@@ -73,6 +73,8 @@ No todas las tablas locales de IndexedDB tienen representación en el servidor. 
 
 Solicitar cualquiera de las entidades no habilitadas (`weighings`, `genealogy`, `reproductionRecords`, `media`) devuelve `400 Bad Request`.
 
+> **Nota de alcance (`genealogy` / `GenealogiaAnimal` — BE-P03):** El paquete BE-P03 entrega el modelo `GenealogiaAnimal`, su migración, los endpoints de la API y la emisión automática de cambios en `CambioServidor` a través de `FarmDbContext.IsSynchronizableEntity()` (conservando `IdGenealogia`, `IdAnimal`, `IdPadre`, `IdMadre`, `VersionRegistro`, `EliminadoEn` y resolviendo `IdRancho` vía `IdAnimal`). La sincronización offline completa de `genealogy` (mapeo en `GET /api/sync/cambios` y `POST /api/sincronizacion`) **no está habilitada** y queda explícitamente como dependencia del paquete de sincronización offline.
+
 ## Pull
 
 ```http

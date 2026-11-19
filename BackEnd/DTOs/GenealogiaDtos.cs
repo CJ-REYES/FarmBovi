@@ -14,7 +14,8 @@ public sealed record ActualizarGenealogiaRequest(
     Guid? IdMadre,
     [MaxLength(500, ErrorMessage = "Las observaciones no pueden exceder 500 caracteres.")]
     string? Observaciones = null,
-    long? VersionRegistro = null);
+    [Range(1, long.MaxValue, ErrorMessage = "La versión del registro (versionRegistro) es obligatoria y debe ser mayor que cero.")]
+    long VersionRegistro = 0);
 
 public sealed record AnimalResumenGenealogiaDto(
     Guid IdAnimal,

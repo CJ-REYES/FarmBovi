@@ -49,16 +49,29 @@ public sealed class GenealogiaController(GenealogiaService genealogia) : Control
     }
 
     [HttpDelete("{idAnimal:guid}")]
-    public async Task<IActionResult> Eliminar(Guid idAnimal, CancellationToken ct)
+    public async Task<IActionResult> Eliminar(
+        Guid idAnimal,
+        [FromQuery] long? versionRegistro = null,
+        CancellationToken ct = default)
     {
         if (RanchAccessService.GetUserId(User) is not { } userId)
             return Unauthorized();
 
-        var result = await genealogia.EliminarAsync(idAnimal, userId, ct);
+        var expectedVersion = versionRegistro ?? ParseIfMatchVersion();
+        var result = await genealogia.EliminarAsync(idAnimal, userId, ct, expectedVersion);
         if (result.Status == GenealogiaOperationStatus.Success)
             return NoContent();
 
         return ToActionResult(result);
+    }
+
+    private long? ParseIfMatchVersion()
+    {
+        var raw = Request?.Headers.IfMatch.FirstOrDefault()?.Trim().Trim('"');
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+
+        return long.TryParse(raw, out var version) ? version : 0;
     }
 
     [HttpGet("{idAnimal:guid}/padres")]
