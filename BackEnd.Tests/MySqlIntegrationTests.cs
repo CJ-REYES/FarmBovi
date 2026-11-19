@@ -446,13 +446,20 @@ public sealed class MySqlIntegrationTests
             Assert.Contains(StatusCodes.Status409Conflict, insertStatuses);
 
             // 2. Actualizaciones simultáneas sobre el mismo registro: una gana (200), la otra recibe 409 por VersionRegistro.
-            using var gate = new Barrier(2);
+            var startSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var arrived = 0;
             async Task<int> ConcurrentUpdateAsync(Guid nuevoPadre, string obs)
             {
                 await using var db = MySqlTestHelper.CreateContext(connStr);
                 var service = new FarmBovi.Api.Services.GenealogiaService(db, new FarmBovi.Api.Services.RanchAccessService(db));
-                gate.SignalAndWait();
-                var res = await service.ActualizarAsync(criaId, new ActualizarGenealogiaRequest(nuevoPadre, madreId, obs), userId, CancellationToken.None);
+                if (Interlocked.Increment(ref arrived) == 2)
+                    startSignal.TrySetResult();
+                await startSignal.Task;
+                var res = await service.ActualizarAsync(
+                    criaId,
+                    new ActualizarGenealogiaRequest(nuevoPadre, madreId, obs, VersionRegistro: 1),
+                    userId,
+                    CancellationToken.None);
                 return res.Status switch
                 {
                     FarmBovi.Api.Services.GenealogiaOperationStatus.Success => StatusCodes.Status200OK,
