@@ -83,15 +83,10 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
             existente.EliminadoEn = null;
             existente.VersionRegistro += 1;
 
-            try
-            {
-                await db.SaveChangesAsync(ct);
-                return new(GenealogiaOperationStatus.Success, MapRegistro(existente));
-            }
-            catch (DbUpdateConcurrencyException)
-            {
-                return new(GenealogiaOperationStatus.Conflict, Error: ConcurrencyConflictMessage);
-            }
+            return await SaveChangesWithConflictHandlingAsync(
+                () => MapRegistro(existente),
+                ConcurrencyConflictMessage,
+                ct);
         }
 
         var nuevo = new GenealogiaAnimal
@@ -107,22 +102,15 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
         };
 
         db.GenealogiasAnimales.Add(nuevo);
-        try
-        {
-            await db.SaveChangesAsync(ct);
-            return new(GenealogiaOperationStatus.Success, MapRegistro(nuevo));
-        }
-        catch (DbUpdateConcurrencyException)
-        {
-            return new(GenealogiaOperationStatus.Conflict, Error: ConcurrencyConflictMessage);
-        }
-        catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
-        {
+        var saveResult = await SaveChangesWithConflictHandlingAsync(
+            () => MapRegistro(nuevo),
+            "El animal ya tiene un registro de genealogía activo o está siendo registrado simultáneamente.",
+            ct);
+
+        if (saveResult.Status == GenealogiaOperationStatus.Conflict)
             db.Entry(nuevo).State = EntityState.Detached;
-            return new(
-                GenealogiaOperationStatus.Conflict,
-                Error: "El animal ya tiene un registro de genealogía activo o está siendo registrado simultáneamente.");
-        }
+
+        return saveResult;
     }
 
     public async Task<GenealogiaOperationResult<GenealogiaRegistroDto>> ActualizarAsync(
@@ -154,15 +142,10 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
         existente.IdAutor = userId;
         existente.VersionRegistro += 1;
 
-        try
-        {
-            await db.SaveChangesAsync(ct);
-            return new(GenealogiaOperationStatus.Success, MapRegistro(existente));
-        }
-        catch (DbUpdateConcurrencyException)
-        {
-            return new(GenealogiaOperationStatus.Conflict, Error: ConcurrencyConflictMessage);
-        }
+        return await SaveChangesWithConflictHandlingAsync(
+            () => MapRegistro(existente),
+            ConcurrencyConflictMessage,
+            ct);
     }
 
     public async Task<GenealogiaOperationResult<bool>> EliminarAsync(
@@ -189,15 +172,10 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
         registro.IdAutor = userId;
         registro.VersionRegistro += 1;
 
-        try
-        {
-            await db.SaveChangesAsync(ct);
-            return new(GenealogiaOperationStatus.Success, true);
-        }
-        catch (DbUpdateConcurrencyException)
-        {
-            return new(GenealogiaOperationStatus.Conflict, Error: ConcurrencyConflictMessage);
-        }
+        return await SaveChangesWithConflictHandlingAsync(
+            () => true,
+            ConcurrencyConflictMessage,
+            ct);
     }
 
     public async Task<GenealogiaOperationResult<GenealogiaRegistroDto>> ObtenerPorIdAsync(
@@ -607,6 +585,26 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
             return (null, $"Las observaciones no pueden exceder {MaxObservacionesLength} caracteres.");
 
         return (normalized, null);
+    }
+
+    private async Task<GenealogiaOperationResult<T>> SaveChangesWithConflictHandlingAsync<T>(
+        Func<T> onSuccess,
+        string conflictMessage,
+        CancellationToken ct)
+    {
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            return new(GenealogiaOperationStatus.Success, onSuccess());
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return new(GenealogiaOperationStatus.Conflict, Error: conflictMessage);
+        }
+        catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
+        {
+            return new(GenealogiaOperationStatus.Conflict, Error: conflictMessage);
+        }
     }
 
     private static bool IsUniqueConstraintViolation(DbUpdateException ex)
