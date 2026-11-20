@@ -64,6 +64,7 @@ const CLIENT_ENTITY_TO_BACKEND: Partial<Record<SyncEntityName, string>> = {
   cattle: 'Animal',
   weighings: 'Pesaje',
   healthRecords: 'EventoSanitario',
+  treatments: 'Tratamiento',
   feedingRecords: 'Alimentacion',
   movements: 'MovimientoAnimal',
   alerts: 'Recordatorio'
@@ -460,6 +461,145 @@ function normalizeWeighingPayloadForBackend(
   return backendPayload;
 }
 
+function normalizeHealthEventPayloadForBackend(
+  rawPayload: unknown,
+  idRegistro: string,
+  tipoOperacion: OutboxOperationType
+): Record<string, unknown> {
+  if (tipoOperacion === 'DELETE') {
+    return { idEventoSanitario: idRegistro };
+  }
+  if (!isPlainRecord(rawPayload)) {
+    return {};
+  }
+
+  const readTextOrNull = (keys: readonly string[]): string | null | undefined => {
+    for (const key of keys) {
+      if (rawPayload[key] !== undefined) {
+        const val = rawPayload[key];
+        if (val === null) return null;
+        if (typeof val === 'string') {
+          const trimmed = val.trim();
+          return trimmed.length > 0 ? trimmed : null;
+        }
+      }
+    }
+    return undefined;
+  };
+
+  const backendPayload: Record<string, unknown> = {};
+  if (tipoOperacion === 'CREATE') {
+    backendPayload.idEventoSanitario = idRegistro;
+    const idAnimal = readTextOrNull(['idAnimal', 'cattleId']);
+    if (typeof idAnimal === 'string') {
+      backendPayload.idAnimal = idAnimal;
+    }
+  }
+
+  const tipo = readTextOrNull(['tipo']);
+  if (typeof tipo === 'string') backendPayload.tipo = tipo;
+
+  const fecha = readTextOrNull(['fecha']);
+  if (typeof fecha === 'string') backendPayload.fecha = fecha;
+
+  const sintomas = readTextOrNull(['sintomas']);
+  if (sintomas !== undefined) backendPayload.sintomas = sintomas;
+
+  const diagnostico = readTextOrNull(['diagnostico']);
+  if (diagnostico !== undefined) backendPayload.diagnostico = diagnostico;
+
+  const profesional = readTextOrNull(['profesionalDiagnostico']);
+  if (profesional !== undefined) backendPayload.profesionalDiagnostico = profesional;
+
+  const evidencia = readTextOrNull(['evidenciaDiagnosticoUri']);
+  if (evidencia !== undefined) backendPayload.evidenciaDiagnosticoUri = evidencia;
+
+  const responsable = readTextOrNull(['responsable']);
+  if (typeof responsable === 'string') {
+    backendPayload.responsable = responsable;
+  } else if (tipoOperacion === 'CREATE') {
+    backendPayload.responsable = 'Responsable de campo';
+  }
+
+  const observaciones = readTextOrNull(['observaciones', 'descripcion']);
+  if (observaciones !== undefined) backendPayload.observaciones = observaciones;
+
+  return backendPayload;
+}
+
+function normalizeTreatmentPayloadForBackend(
+  rawPayload: unknown,
+  idRegistro: string,
+  tipoOperacion: OutboxOperationType
+): Record<string, unknown> {
+  if (tipoOperacion === 'DELETE') {
+    return { idTratamiento: idRegistro };
+  }
+  if (!isPlainRecord(rawPayload)) {
+    return {};
+  }
+
+  const readTextOrNull = (keys: readonly string[]): string | null | undefined => {
+    for (const key of keys) {
+      if (rawPayload[key] !== undefined) {
+        const val = rawPayload[key];
+        if (val === null) return null;
+        if (typeof val === 'string') {
+          const trimmed = val.trim();
+          return trimmed.length > 0 ? trimmed : null;
+        }
+      }
+    }
+    return undefined;
+  };
+
+  const backendPayload: Record<string, unknown> = {};
+  if (tipoOperacion === 'CREATE') {
+    backendPayload.idTratamiento = idRegistro;
+    const idEvento = readTextOrNull(['idEventoSanitario', 'eventoSanitarioId']);
+    if (typeof idEvento === 'string') {
+      backendPayload.idEventoSanitario = idEvento;
+    }
+  }
+
+  const producto = readTextOrNull(['producto']);
+  if (typeof producto === 'string') backendPayload.producto = producto;
+
+  const rawDosis = rawPayload.dosis;
+  if (typeof rawDosis === 'number' && Number.isFinite(rawDosis)) {
+    backendPayload.dosis = rawDosis;
+  } else if (typeof rawDosis === 'string' && rawDosis.trim().length > 0) {
+    const parsed = Number(rawDosis);
+    if (Number.isFinite(parsed)) backendPayload.dosis = parsed;
+  }
+
+  const unidadDosis = readTextOrNull(['unidadDosis']);
+  if (typeof unidadDosis === 'string') backendPayload.unidadDosis = unidadDosis;
+
+  const via = readTextOrNull(['viaAdministracion']);
+  if (via !== undefined) backendPayload.viaAdministracion = via;
+
+  const frecuencia = readTextOrNull(['frecuencia']);
+  if (typeof frecuencia === 'string') backendPayload.frecuencia = frecuencia;
+
+  const fechaInicio = readTextOrNull(['fechaInicio']);
+  if (typeof fechaInicio === 'string') backendPayload.fechaInicio = fechaInicio;
+
+  const fechaFin = readTextOrNull(['fechaFin']);
+  if (fechaFin !== undefined) backendPayload.fechaFin = fechaFin;
+
+  const responsable = readTextOrNull(['responsable']);
+  if (typeof responsable === 'string') backendPayload.responsable = responsable;
+
+  const prescripcion = readTextOrNull(['prescripcionUri']);
+  if (prescripcion !== undefined) backendPayload.prescripcionUri = prescripcion;
+
+  const estado = readTextOrNull(['estado']);
+  if (typeof estado === 'string') backendPayload.estado = estado;
+
+  return backendPayload;
+}
+
 function buildBackendPushBody(dto: SyncOperationRequestDto): {
   body: Record<string, unknown>;
   deviceId: string;
@@ -484,9 +624,13 @@ function buildBackendPushBody(dto: SyncOperationRequestDto): {
             ? normalizeFeedingPayloadForBackend(dto.payload, idRegistro, dto.tipoOperacion)
             : dto.entidad === 'weighings'
               ? normalizeWeighingPayloadForBackend(dto.payload, idRegistro, dto.tipoOperacion)
-              : isPlainRecord(dto.payload)
-                ? dto.payload
-                : {};
+              : dto.entidad === 'healthRecords'
+                ? normalizeHealthEventPayloadForBackend(dto.payload, idRegistro, dto.tipoOperacion)
+                : dto.entidad === 'treatments'
+                  ? normalizeTreatmentPayloadForBackend(dto.payload, idRegistro, dto.tipoOperacion)
+                  : isPlainRecord(dto.payload)
+                    ? dto.payload
+                    : {};
 
   return {
     deviceId,

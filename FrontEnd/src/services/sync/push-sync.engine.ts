@@ -43,11 +43,12 @@ const ENTITY_SYNC_PRIORITY: Record<SyncEntityName, number> = {
   movements: 4,
   weighings: 5,
   healthRecords: 6,
-  feedingRecords: 7,
-  reproductionRecords: 8,
-  alerts: 9,
-  media: 10,
-  weighingAnalysisJobs: 11
+  treatments: 7,
+  feedingRecords: 8,
+  reproductionRecords: 9,
+  alerts: 10,
+  media: 11,
+  weighingAnalysisJobs: 12
 };
 
 /**
@@ -61,6 +62,7 @@ const BACKEND_PUSH_SUPPORTED_ENTITIES = new Set<SyncEntityName>([
   'cattle',
   'weighings',
   'healthRecords',
+  'treatments',
   'feedingRecords',
   'movements',
   'alerts'
@@ -79,6 +81,8 @@ function getEntityTable(entidad: SyncEntityName): Table<BaseLocalEntity, string>
       return db.weighings as unknown as Table<BaseLocalEntity, string>;
     case 'healthRecords':
       return db.healthRecords as unknown as Table<BaseLocalEntity, string>;
+    case 'treatments':
+      return db.treatments as unknown as Table<BaseLocalEntity, string>;
     case 'feedingRecords':
       return db.feedingRecords as unknown as Table<BaseLocalEntity, string>;
     case 'reproductionRecords':

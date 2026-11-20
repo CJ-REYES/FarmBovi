@@ -5,6 +5,7 @@ export type SyncEntityName =
   | 'cattle'
   | 'weighings'
   | 'healthRecords'
+  | 'treatments'
   | 'feedingRecords'
   | 'reproductionRecords'
   | 'lots'
@@ -112,9 +113,31 @@ export interface LocalWeighing extends BaseLocalEntity {
 export interface LocalHealthRecord extends BaseLocalEntity {
   cattleId: string;
   tipo: string;
+  /** Resumen legado sincronizado para vistas compactas (diagnóstico / síntomas / observaciones). */
   descripcion: string;
   fecha: string;
   proximaAplicacion?: string;
+  sintomas?: string | null;
+  diagnostico?: string | null;
+  profesionalDiagnostico?: string | null;
+  evidenciaDiagnosticoUri?: string | null;
+  responsable?: string;
+  observaciones?: string | null;
+}
+
+export interface LocalTreatment extends BaseLocalEntity {
+  eventoSanitarioId: string;
+  cattleId: string;
+  producto: string;
+  dosis: number;
+  unidadDosis: string;
+  viaAdministracion?: string | null;
+  frecuencia: string;
+  fechaInicio: string;
+  fechaFin?: string | null;
+  responsable: string;
+  prescripcionUri?: string | null;
+  estado: string;
 }
 
 export interface LocalFeedingRecord extends BaseLocalEntity {

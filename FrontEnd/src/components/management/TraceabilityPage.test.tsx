@@ -153,8 +153,9 @@ describe('TraceabilityPage — Historial cronológico, validaciones, CRUD y pers
     ).toBeInTheDocument();
     expect(await db.movements.count()).toBe(0);
 
-    // Seleccionar animal (prellena origen = Potrero Norte) e intentar mismo destino = Potrero Norte
-    await user.selectOptions(within(dialog).getByLabelText(/^Animal/i), ANIMAL_1);
+    // Seleccionar animal mediante el desplegable buscable (prellena origen = Potrero Norte) e intentar mismo destino = Potrero Norte
+    await user.click(within(dialog).getByRole('combobox', { name: /^Animal/i }));
+    await user.click(within(dialog).getByRole('option', { name: /MX-550/i }));
     await user.selectOptions(within(dialog).getByLabelText(/Potrero de Destino/i), LOT_NORTE);
     await user.click(within(dialog).getByRole('button', { name: /Registrar Movimiento/i }));
 
@@ -173,7 +174,8 @@ describe('TraceabilityPage — Historial cronológico, validaciones, CRUD y pers
     // 1. Registrar movimiento antiguo (febrero)
     await user.click(screen.getAllByRole('button', { name: /Registrar Movimiento/i })[0]);
     const d1 = await screen.findByRole('dialog');
-    await user.selectOptions(within(d1).getByLabelText(/^Animal/i), ANIMAL_1);
+    await user.click(within(d1).getByRole('combobox', { name: /^Animal/i }));
+    await user.click(within(d1).getByRole('option', { name: /MX-550/i }));
     const fecha1 = within(d1).getByLabelText(/Fecha y Hora/i);
     await user.clear(fecha1);
     await user.type(fecha1, '2026-02-05T08:00');
@@ -192,7 +194,8 @@ describe('TraceabilityPage — Historial cronológico, validaciones, CRUD y pers
     // 2. Registrar segundo movimiento más reciente (marzo)
     await user.click(screen.getByRole('button', { name: /Registrar Movimiento/i }));
     const d2 = await screen.findByRole('dialog');
-    await user.selectOptions(within(d2).getByLabelText(/^Animal/i), ANIMAL_1);
+    await user.click(within(d2).getByRole('combobox', { name: /^Animal/i }));
+    await user.click(within(d2).getByRole('option', { name: /MX-550/i }));
     const fecha2 = within(d2).getByLabelText(/Fecha y Hora/i);
     await user.clear(fecha2);
     await user.type(fecha2, '2026-03-10T15:30');

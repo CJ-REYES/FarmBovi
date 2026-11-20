@@ -3,6 +3,7 @@ export { RanchRepository } from './ranch.repository';
 export { CattleRepository } from './cattle.repository';
 export { WeighingRepository } from './weighing.repository';
 export { HealthRepository } from './health.repository';
+export { TreatmentRepository } from './treatment.repository';
 export { FeedingRepository } from './feeding.repository';
 export { ReproductionRepository } from './reproduction.repository';
 export { LotRepository } from './lot.repository';

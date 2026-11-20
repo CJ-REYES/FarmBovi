@@ -117,7 +117,8 @@ describe('WeighingPage — Registro de pesajes, gráfica real, último peso, rec
     // 1. Primer pesaje (320 kg el 1 feb)
     await user.click(screen.getAllByRole('button', { name: /Registrar Pesaje Oficial/i })[0]);
     const d1 = await screen.findByRole('dialog');
-    await user.selectOptions(within(d1).getByLabelText(/^Animal/i), ANIMAL_1);
+    await user.click(within(d1).getByRole('combobox', { name: /^Animal/i }));
+    await user.click(within(d1).getByRole('option', { name: /MX-850/i }));
     await user.type(within(d1).getByLabelText(/Peso Real de Báscula/i), '320');
     const fecha1 = within(d1).getByLabelText(/Fecha y Hora del Pesaje/i);
     await user.clear(fecha1);
@@ -140,7 +141,8 @@ describe('WeighingPage — Registro de pesajes, gráfica real, último peso, rec
     // 2. Segundo pesaje (340 kg el 21 feb -> +20 kg en 20 días = +1.00 kg/día)
     await user.click(screen.getAllByRole('button', { name: /Registrar Pesaje Oficial/i })[0]);
     const d2 = await screen.findByRole('dialog');
-    await user.selectOptions(within(d2).getByLabelText(/^Animal/i), ANIMAL_1);
+    await user.click(within(d2).getByRole('combobox', { name: /^Animal/i }));
+    await user.click(within(d2).getByRole('option', { name: /MX-850/i }));
     await user.type(within(d2).getByLabelText(/Peso Real de Báscula/i), '340');
     const fecha2 = within(d2).getByLabelText(/Fecha y Hora del Pesaje/i);
     await user.clear(fecha2);

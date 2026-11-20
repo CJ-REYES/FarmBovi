@@ -291,4 +291,30 @@ export function configureMigrations(db: Dexie): void {
         }
       });
     });
+
+  // v5: Incorpora almacén dedicado `treatments` alineado al contrato real `Tratamiento` (1:N con EventoSanitario)
+  db.version(5).stores({
+    ranches: 'id, localNumericId, remoteId, ranchId, nombre, estado, syncStatus, updatedAt',
+    cattle:
+      'id, localNumericId, remoteId, ranchId, arete, areteSiniiga, loteId, estado, syncStatus, updatedAt, createdAt',
+    weighings:
+      'id, localNumericId, remoteId, ranchId, cattleId, sourceAnalysisJobId, fecha, syncStatus, updatedAt',
+    healthRecords: 'id, localNumericId, remoteId, ranchId, cattleId, tipo, fecha, syncStatus, updatedAt',
+    treatments:
+      'id, localNumericId, remoteId, ranchId, eventoSanitarioId, cattleId, estado, fechaInicio, syncStatus, updatedAt',
+    feedingRecords: 'id, localNumericId, remoteId, ranchId, lotId, fecha, syncStatus, updatedAt',
+    reproductionRecords: 'id, localNumericId, remoteId, ranchId, cattleId, evento, fecha, syncStatus, updatedAt',
+    lots: 'id, localNumericId, remoteId, ranchId, nombre, estado, syncStatus, updatedAt',
+    movements: 'id, localNumericId, remoteId, ranchId, cattleId, fecha, syncStatus, updatedAt',
+    genealogy: 'id, localNumericId, remoteId, ranchId, cattleId, padreId, madreId, syncStatus, updatedAt',
+    alerts: 'id, localNumericId, remoteId, ranchId, tipo, prioridad, leida, fecha, syncStatus',
+    media:
+      'id, remoteId, ranchId, cattleId, idEntidadRelacionada, tipo, estadoArchivo, idOperacionSubida, fechaCaptura, syncStatus, updatedAt',
+    weighingAnalysisJobs:
+      'idTrabajo, idMedia, idBovino, ranchId, idPesajeConfirmado, estado, proximoIntento, fechaCreacion, actualizadoEn',
+    outbox: 'id, &idOperacion, entidad, idEntidad, tipoOperacion, estado, fechaCreacion, proximoIntento',
+    syncConflicts: 'idConflicto, idOperacion, entidad, idEntidad, tipoConflicto, estadoResolucion, fechaDeteccion',
+    syncCheckpoints: 'entidad, cursorOpaco, actualizadoEn',
+    syncMetadata: 'entityName'
+  });
 }

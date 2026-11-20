@@ -1,4 +1,4 @@
-import { useState, useRef, type FormEvent } from 'react';
+import { useState, useRef, useMemo, type FormEvent } from 'react';
 import { AlertCircle, Info, Loader2, Save, WifiOff, X } from 'lucide-react';
 import type { Cattle, LotOption } from '../../types/cattle';
 import type { FeedingInput, FeedingRecord, FeedingTargetType } from '../../types/feeding';
@@ -11,6 +11,7 @@ import {
   FeedingValidationError,
   type FeedingMutationResult
 } from '../../services/feeding.service';
+import AnimalSelectField from '../shared/AnimalSelectField';
 
 export interface FeedingFormModalProps {
   mode: 'create' | 'edit';
@@ -85,6 +86,17 @@ export default function FeedingFormModal({
   const [fieldErrors, setFieldErrors] = useState<FeedingValidationErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+
+  const animalOptions = useMemo(
+    () =>
+      animals.map((animal) => ({
+        id: animal.id,
+        arete: animal.arete,
+        raza: animal.raza,
+        extraLabel: `(${animal.estado})`
+      })),
+    [animals]
+  );
 
   const clearFieldError = (field: keyof FeedingValidationErrors) => {
     setFieldErrors((prev) => {
@@ -287,43 +299,26 @@ export default function FeedingFormModal({
                 )}
               </div>
             ) : (
-              <div className="space-y-1.5">
-                <label
-                  htmlFor="feeding-animal"
-                  className="block text-[13px] font-semibold text-brand-slate"
-                >
-                  Animal <span className="text-status-error">*</span>
-                </label>
-                <select
-                  id="feeding-animal"
-                  name="idAnimal"
-                  required
-                  value={formData.idAnimal ?? ''}
-                  onChange={(e) => {
-                    setFormData((prev) => ({
-                      ...prev,
-                      idAnimal: e.target.value || null,
-                      idLote: null
-                    }));
-                    clearFieldError('target');
-                    clearFieldError('idAnimal');
-                  }}
-                  aria-invalid={Boolean(fieldErrors.target || fieldErrors.idAnimal)}
-                  className="w-full min-h-[44px] px-3 bg-surface-white border border-border-light rounded-md text-[14px] text-brand-slate outline-none focus:border-brand-primary"
-                >
-                  <option value="">Selecciona un animal</option>
-                  {animals.map((animal) => (
-                    <option key={animal.id} value={animal.id}>
-                      {animal.arete} — {animal.raza} ({animal.estado})
-                    </option>
-                  ))}
-                </select>
-                {(fieldErrors.idAnimal || fieldErrors.target) && (
-                  <p role="alert" className="text-[12px] text-status-error font-medium">
-                    {fieldErrors.idAnimal || fieldErrors.target}
-                  </p>
-                )}
-              </div>
+              <AnimalSelectField
+                id="feeding-animal"
+                name="idAnimal"
+                label="Animal"
+                required
+                value={formData.idAnimal ?? ''}
+                options={animalOptions}
+                placeholder="Selecciona un animal"
+                error={fieldErrors.idAnimal || fieldErrors.target}
+                selectClassName="w-full min-h-[44px] px-3 bg-surface-white border border-border-light rounded-md text-[14px] text-left flex items-center justify-between gap-2 outline-none focus:border-brand-primary cursor-pointer"
+                onChange={(animalId) => {
+                  setFormData((prev) => ({
+                    ...prev,
+                    idAnimal: animalId || null,
+                    idLote: null
+                  }));
+                  clearFieldError('target');
+                  clearFieldError('idAnimal');
+                }}
+              />
             )}
 
             <p className="text-[11px] text-brand-slate/60 flex items-start gap-1">

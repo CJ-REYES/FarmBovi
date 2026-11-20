@@ -13,6 +13,12 @@ import type {
   BackendAlimentacionDto,
   BackendAlimentacionPayload
 } from '../types/feeding';
+import type {
+  BackendEventoSanitarioDto,
+  BackendEventoSanitarioPayload,
+  BackendTratamientoDto,
+  BackendTratamientoPayload
+} from '../types/health';
 
 export const API_BASE_URL = (
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ||
@@ -425,6 +431,90 @@ export const feedingApi = {
 
   async remove(id: string): Promise<void> {
     await apiRequest<unknown>(`${BACKEND_ROUTES.ALIMENTACION}/${id}`, {
+      method: 'DELETE',
+      allowEmptyResponse: true
+    });
+  }
+};
+
+export const healthEventsApi = {
+  async list(incluirEliminados = false): Promise<BackendEventoSanitarioDto[]> {
+    const query = incluirEliminados ? '?incluirEliminados=true' : '';
+    const res = await apiRequest<BackendEventoSanitarioDto[]>(
+      `${BACKEND_ROUTES.EVENTOS_SANITARIOS}${query}`,
+      { method: 'GET' }
+    );
+    return Array.isArray(res.data) ? res.data : [];
+  },
+
+  async getById(id: string): Promise<BackendEventoSanitarioDto> {
+    const res = await apiRequest<BackendEventoSanitarioDto>(
+      `${BACKEND_ROUTES.EVENTOS_SANITARIOS}/${id}`,
+      { method: 'GET' }
+    );
+    return res.data;
+  },
+
+  async create(input: BackendEventoSanitarioPayload): Promise<BackendEventoSanitarioDto> {
+    const res = await apiRequest<BackendEventoSanitarioDto>(BACKEND_ROUTES.EVENTOS_SANITARIOS, {
+      method: 'POST',
+      body: input
+    });
+    return res.data;
+  },
+
+  async update(id: string, input: BackendEventoSanitarioPayload): Promise<void> {
+    await apiRequest<unknown>(`${BACKEND_ROUTES.EVENTOS_SANITARIOS}/${id}`, {
+      method: 'PUT',
+      body: input,
+      allowEmptyResponse: true
+    });
+  },
+
+  async remove(id: string): Promise<void> {
+    await apiRequest<unknown>(`${BACKEND_ROUTES.EVENTOS_SANITARIOS}/${id}`, {
+      method: 'DELETE',
+      allowEmptyResponse: true
+    });
+  }
+};
+
+export const treatmentsApi = {
+  async list(incluirEliminados = false): Promise<BackendTratamientoDto[]> {
+    const query = incluirEliminados ? '?incluirEliminados=true' : '';
+    const res = await apiRequest<BackendTratamientoDto[]>(
+      `${BACKEND_ROUTES.TRATAMIENTOS}${query}`,
+      { method: 'GET' }
+    );
+    return Array.isArray(res.data) ? res.data : [];
+  },
+
+  async getById(id: string): Promise<BackendTratamientoDto> {
+    const res = await apiRequest<BackendTratamientoDto>(
+      `${BACKEND_ROUTES.TRATAMIENTOS}/${id}`,
+      { method: 'GET' }
+    );
+    return res.data;
+  },
+
+  async create(input: BackendTratamientoPayload): Promise<BackendTratamientoDto> {
+    const res = await apiRequest<BackendTratamientoDto>(BACKEND_ROUTES.TRATAMIENTOS, {
+      method: 'POST',
+      body: input
+    });
+    return res.data;
+  },
+
+  async update(id: string, input: BackendTratamientoPayload): Promise<void> {
+    await apiRequest<unknown>(`${BACKEND_ROUTES.TRATAMIENTOS}/${id}`, {
+      method: 'PUT',
+      body: input,
+      allowEmptyResponse: true
+    });
+  },
+
+  async remove(id: string): Promise<void> {
+    await apiRequest<unknown>(`${BACKEND_ROUTES.TRATAMIENTOS}/${id}`, {
       method: 'DELETE',
       allowEmptyResponse: true
     });

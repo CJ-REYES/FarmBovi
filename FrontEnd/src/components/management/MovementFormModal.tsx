@@ -17,6 +17,7 @@ import {
   MovementValidationError,
   type MovementMutationResult
 } from '../../services/movement.service';
+import AnimalSelectField from '../shared/AnimalSelectField';
 
 export interface MovementFormModalProps {
   mode: 'create' | 'edit';
@@ -112,6 +113,22 @@ export default function MovementFormModal({
   }, [lots, selectedAnimal]);
 
   const lotNameById = useMemo(() => new Map(lots.map((l) => [l.id, l.nombre])), [lots]);
+
+  const animalOptions = useMemo(
+    () =>
+      animals.map((animal) => {
+        const lotLabel = animal.idLote
+          ? lotNameById.get(animal.idLote) || 'Potrero asignado'
+          : 'Sin potrero';
+        return {
+          id: animal.id,
+          arete: animal.arete,
+          raza: animal.raza,
+          extraLabel: `(${lotLabel} · ${animal.estado})`
+        };
+      }),
+    [animals, lotNameById]
+  );
 
   const clearFieldError = (field: keyof MovementValidationErrors) => {
     setFieldErrors((prev) => {
@@ -261,46 +278,23 @@ export default function MovementFormModal({
 
           {/* Animal + Tipo */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label
-                htmlFor="movement-animal"
-                className="block text-[13px] font-semibold text-brand-slate"
-              >
-                Animal <span className="text-status-error">*</span>
-              </label>
-              <select
-                id="movement-animal"
-                name="idAnimal"
-                required
-                disabled={isEditMode}
-                value={formData.idAnimal}
-                onChange={(e) => handleAnimalChange(e.target.value)}
-                aria-invalid={Boolean(fieldErrors.idAnimal)}
-                className="w-full min-h-[44px] px-3 bg-surface-app border border-border-light rounded-md text-[14px] text-brand-slate outline-none focus:border-brand-primary disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                <option value="">Selecciona un animal</option>
-                {animals.map((animal) => {
-                  const lotLabel = animal.idLote
-                    ? lotNameById.get(animal.idLote) || 'Potrero asignado'
-                    : 'Sin potrero';
-                  return (
-                    <option key={animal.id} value={animal.id}>
-                      {animal.arete} — {animal.raza} ({lotLabel} · {animal.estado})
-                    </option>
-                  );
-                })}
-              </select>
-              {isEditMode && (
-                <p className="text-[11px] text-brand-slate/55">
-                  El animal asociado no se cambia después de registrar el movimiento.
-                </p>
-              )}
-              {fieldErrors.idAnimal && (
-                <p role="alert" className="text-[12px] text-status-error font-medium">
-                  {fieldErrors.idAnimal}
-                </p>
-              )}
-            </div>
+            <AnimalSelectField
+              id="movement-animal"
+              name="idAnimal"
+              label="Animal"
+              required
+              disabled={isEditMode}
+              value={formData.idAnimal}
+              options={animalOptions}
+              placeholder="Selecciona un animal"
+              helperText={
+                isEditMode
+                  ? 'El animal asociado no se cambia después de registrar el movimiento.'
+                  : undefined
+              }
+              error={fieldErrors.idAnimal}
+              onChange={handleAnimalChange}
+            />
 
             <div className="space-y-1.5">
               <label

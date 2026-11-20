@@ -8,6 +8,7 @@ import type {
   LocalFeedingRecord,
   LocalGenealogy,
   LocalHealthRecord,
+  LocalTreatment,
   LocalLot,
   LocalMedia,
   LocalMovement,
@@ -97,6 +98,8 @@ export function getSyncEntityTable(
       return db.weighings as unknown as Table<BaseLocalEntity, string>;
     case 'healthRecords':
       return db.healthRecords as unknown as Table<BaseLocalEntity, string>;
+    case 'treatments':
+      return db.treatments as unknown as Table<BaseLocalEntity, string>;
     case 'feedingRecords':
       return db.feedingRecords as unknown as Table<BaseLocalEntity, string>;
     case 'reproductionRecords':
@@ -248,12 +251,23 @@ export async function mapRemoteChangeToLocalEntity(
     }
 
     case 'healthRecords': {
-      const rawCattleId = readString(data, ['cattleId', 'animalId', 'bovinoId']);
-      const tipo = readString(data, ['tipo', 'type']);
-      const descripcion = readString(data, ['descripcion', 'description']);
+      const existingHealth = existing as LocalHealthRecord | undefined;
+      const rawCattleId = readString(data, ['idAnimal', 'cattleId', 'animalId', 'bovinoId']);
+      const tipo = readString(data, ['tipo', 'type'], existingHealth?.tipo);
+      const sintomas = readString(data, ['sintomas'], existingHealth?.sintomas ?? undefined) ?? null;
+      const diagnostico =
+        readString(data, ['diagnostico'], existingHealth?.diagnostico ?? undefined) ?? null;
+      const observaciones =
+        readString(data, ['observaciones'], existingHealth?.observaciones ?? undefined) ?? null;
+      const descripcion =
+        readString(
+          data,
+          ['descripcion', 'description', 'diagnostico', 'sintomas', 'observaciones'],
+          existingHealth?.descripcion ?? tipo ?? ''
+        ) ?? '';
       const fecha = readString(data, ['fecha', 'date'], change.actualizadoEnServidor);
 
-      if (!rawCattleId || !tipo || !descripcion || !fecha) {
+      if (!rawCattleId || !tipo || !fecha) {
         throw new Error(
           `Registro remoto de salud inválido (remoteId=${String(change.remoteId)}).`
         );
@@ -268,11 +282,89 @@ export async function mapRemoteChangeToLocalEntity(
         ...baseFields,
         cattleId,
         tipo,
-        descripcion,
+        descripcion: descripcion || tipo,
         fecha,
-        proximaAplicacion: readString(data, ['proximaAplicacion', 'nextApplicationDate'])
+        proximaAplicacion: readString(data, ['proximaAplicacion', 'nextApplicationDate']),
+        sintomas,
+        diagnostico,
+        profesionalDiagnostico:
+          readString(
+            data,
+            ['profesionalDiagnostico'],
+            existingHealth?.profesionalDiagnostico ?? undefined
+          ) ?? null,
+        evidenciaDiagnosticoUri:
+          readString(
+            data,
+            ['evidenciaDiagnosticoUri'],
+            existingHealth?.evidenciaDiagnosticoUri ?? undefined
+          ) ?? null,
+        responsable: readString(data, ['responsable'], existingHealth?.responsable ?? 'No especificado'),
+        observaciones
       };
       return healthRecord;
+    }
+
+    case 'treatments': {
+      const existingTreatment = existing as LocalTreatment | undefined;
+      const rawEventId = readString(
+        data,
+        ['idEventoSanitario', 'eventoSanitarioId'],
+        existingTreatment?.eventoSanitarioId
+      );
+      const producto = readString(data, ['producto'], existingTreatment?.producto);
+      const dosis = readNumber(data, ['dosis']) ?? existingTreatment?.dosis;
+      const unidadDosis = readString(data, ['unidadDosis'], existingTreatment?.unidadDosis ?? 'mL');
+      const frecuencia = readString(data, ['frecuencia'], existingTreatment?.frecuencia ?? 'Diaria');
+      const fechaInicio = readString(
+        data,
+        ['fechaInicio'],
+        existingTreatment?.fechaInicio ?? change.actualizadoEnServidor
+      );
+      const responsable = readString(
+        data,
+        ['responsable'],
+        existingTreatment?.responsable ?? 'No especificado'
+      );
+      const estado = readString(data, ['estado'], existingTreatment?.estado ?? 'Pendiente');
+
+      if (!rawEventId || !producto || dosis === undefined || dosis <= 0 || !fechaInicio) {
+        throw new Error(
+          `Registro remoto de tratamiento inválido (remoteId=${String(change.remoteId)}).`
+        );
+      }
+
+      const eventoSanitarioId = await resolveLocalForeignUuid(
+        db.healthRecords as unknown as Table<BaseLocalEntity, string>,
+        rawEventId
+      );
+      const parentEvent = await db.healthRecords.get(eventoSanitarioId);
+      const rawCattleId = readString(
+        data,
+        ['idAnimal', 'cattleId'],
+        parentEvent?.cattleId ?? existingTreatment?.cattleId ?? ''
+      );
+
+      const treatmentRecord: LocalTreatment = {
+        ...baseFields,
+        eventoSanitarioId,
+        cattleId: rawCattleId || '',
+        producto,
+        dosis,
+        unidadDosis: unidadDosis || 'mL',
+        viaAdministracion:
+          readString(data, ['viaAdministracion'], existingTreatment?.viaAdministracion ?? undefined) ??
+          null,
+        frecuencia: frecuencia || 'Diaria',
+        fechaInicio,
+        fechaFin: readString(data, ['fechaFin'], existingTreatment?.fechaFin ?? undefined) ?? null,
+        responsable: responsable || 'No especificado',
+        prescripcionUri:
+          readString(data, ['prescripcionUri'], existingTreatment?.prescripcionUri ?? undefined) ??
+          null,
+        estado: estado || 'Pendiente'
+      };
+      return treatmentRecord;
     }
 
     case 'feedingRecords': {

@@ -1,4 +1,4 @@
-import { useState, useRef, type FormEvent } from 'react';
+import { useState, useRef, useMemo, type FormEvent } from 'react';
 import { AlertCircle, Info, Loader2, Save, WifiOff, X } from 'lucide-react';
 import type { Cattle } from '../../types/cattle';
 import type { Weighing, WeighingInput } from '../../types/weighing';
@@ -11,6 +11,7 @@ import {
   WeighingValidationError,
   type WeighingMutationResult
 } from '../../services/weighing.service';
+import AnimalSelectField from '../shared/AnimalSelectField';
 
 export interface WeighingFormModalProps {
   mode: 'create' | 'edit';
@@ -74,6 +75,20 @@ export default function WeighingFormModal({
   const [fieldErrors, setFieldErrors] = useState<WeighingValidationErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+
+  const animalOptions = useMemo(
+    () =>
+      animals.map((animal) => {
+        const lastKg = lastWeightByAnimal?.get(animal.id);
+        return {
+          id: animal.id,
+          arete: animal.arete,
+          raza: animal.raza,
+          extraLabel: lastKg !== undefined ? `(Último: ${lastKg.toFixed(1)} kg)` : undefined
+        };
+      }),
+    [animals, lastWeightByAnimal]
+  );
 
   const clearFieldError = (field: keyof WeighingValidationErrors) => {
     setFieldErrors((prev) => {
@@ -173,49 +188,27 @@ export default function WeighingFormModal({
             </div>
           )}
 
-          {/* Animal */}
-          <div className="space-y-1.5">
-            <label
-              htmlFor="weighing-animal"
-              className="block text-[13px] font-semibold text-brand-slate"
-            >
-              Animal <span className="text-status-error">*</span>
-            </label>
-            <select
-              id="weighing-animal"
-              name="idAnimal"
-              required
-              disabled={isEditMode}
-              value={formData.idAnimal}
-              onChange={(e) => {
-                setFormData((prev) => ({ ...prev, idAnimal: e.target.value }));
-                clearFieldError('idAnimal');
-              }}
-              aria-invalid={Boolean(fieldErrors.idAnimal)}
-              className="w-full min-h-[44px] px-3 bg-surface-app border border-border-light rounded-md text-[14px] text-brand-slate outline-none focus:border-brand-primary disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              <option value="">Selecciona un animal</option>
-              {animals.map((animal) => {
-                const lastKg = lastWeightByAnimal?.get(animal.id);
-                return (
-                  <option key={animal.id} value={animal.id}>
-                    {animal.arete} — {animal.raza}
-                    {lastKg !== undefined ? ` (Último: ${lastKg.toFixed(1)} kg)` : ''}
-                  </option>
-                );
-              })}
-            </select>
-            {isEditMode && (
-              <p className="text-[11px] text-brand-slate/55">
-                El animal asociado no se modifica al editar un pesaje.
-              </p>
-            )}
-            {fieldErrors.idAnimal && (
-              <p role="alert" className="text-[12px] text-status-error font-medium">
-                {fieldErrors.idAnimal}
-              </p>
-            )}
-          </div>
+          {/* Animal con buscador por arete */}
+          <AnimalSelectField
+            id="weighing-animal"
+            name="idAnimal"
+            label="Animal"
+            required
+            disabled={isEditMode}
+            value={formData.idAnimal}
+            options={animalOptions}
+            placeholder="Selecciona un animal"
+            helperText={
+              isEditMode
+                ? 'El animal asociado no se modifica al editar un pesaje.'
+                : undefined
+            }
+            error={fieldErrors.idAnimal}
+            onChange={(animalId) => {
+              setFormData((prev) => ({ ...prev, idAnimal: animalId }));
+              clearFieldError('idAnimal');
+            }}
+          />
 
           {/* Peso + Fecha */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

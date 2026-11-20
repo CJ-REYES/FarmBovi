@@ -166,10 +166,8 @@ describe('FeedingPage — Flujo CRUD completo, XOR lote/animal, validaciones y r
     const d2 = await screen.findByRole('dialog');
 
     await user.click(within(d2).getByText('Animal Individual'));
-    await user.selectOptions(
-      within(d2).getByRole('combobox', { name: /Animal/i }),
-      ANIMAL_1
-    );
+    await user.click(within(d2).getByRole('combobox', { name: /^Animal/i }));
+    await user.click(within(d2).getByRole('option', { name: /MX-600/i }));
     await user.type(within(d2).getByLabelText(/^Alimento/i), 'Suplemento Mineral');
     await user.type(within(d2).getByLabelText(/^Ración/i), 'Refuerzo individual');
     await user.type(within(d2).getByLabelText(/^Cantidad/i), '250');

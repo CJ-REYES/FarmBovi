@@ -4,6 +4,7 @@ import type {
   LocalCattle,
   LocalWeighing,
   LocalHealthRecord,
+  LocalTreatment,
   LocalFeedingRecord,
   LocalReproductionRecord,
   LocalLot,
@@ -24,6 +25,7 @@ export class FarmBoviLocalDB extends Dexie {
   cattle!: Table<LocalCattle, string>;
   weighings!: Table<LocalWeighing, string>;
   healthRecords!: Table<LocalHealthRecord, string>;
+  treatments!: Table<LocalTreatment, string>;
   feedingRecords!: Table<LocalFeedingRecord, string>;
   reproductionRecords!: Table<LocalReproductionRecord, string>;
   lots!: Table<LocalLot, string>;
