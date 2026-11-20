@@ -19,6 +19,10 @@ import type {
   BackendTratamientoDto,
   BackendTratamientoPayload
 } from '../types/health';
+import type {
+  BackendRecordatorioDto,
+  BackendRecordatorioPayload
+} from '../types/alert';
 
 export const API_BASE_URL = (
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ||
@@ -515,6 +519,48 @@ export const treatmentsApi = {
 
   async remove(id: string): Promise<void> {
     await apiRequest<unknown>(`${BACKEND_ROUTES.TRATAMIENTOS}/${id}`, {
+      method: 'DELETE',
+      allowEmptyResponse: true
+    });
+  }
+};
+
+export const remindersApi = {
+  async list(incluirEliminados = false): Promise<BackendRecordatorioDto[]> {
+    const query = incluirEliminados ? '?incluirEliminados=true' : '';
+    const res = await apiRequest<BackendRecordatorioDto[]>(
+      `${BACKEND_ROUTES.RECORDATORIOS}${query}`,
+      { method: 'GET' }
+    );
+    return Array.isArray(res.data) ? res.data : [];
+  },
+
+  async getById(id: string): Promise<BackendRecordatorioDto> {
+    const res = await apiRequest<BackendRecordatorioDto>(
+      `${BACKEND_ROUTES.RECORDATORIOS}/${id}`,
+      { method: 'GET' }
+    );
+    return res.data;
+  },
+
+  async create(input: BackendRecordatorioPayload): Promise<BackendRecordatorioDto> {
+    const res = await apiRequest<BackendRecordatorioDto>(BACKEND_ROUTES.RECORDATORIOS, {
+      method: 'POST',
+      body: input
+    });
+    return res.data;
+  },
+
+  async update(id: string, input: BackendRecordatorioPayload): Promise<void> {
+    await apiRequest<unknown>(`${BACKEND_ROUTES.RECORDATORIOS}/${id}`, {
+      method: 'PUT',
+      body: input,
+      allowEmptyResponse: true
+    });
+  },
+
+  async remove(id: string): Promise<void> {
+    await apiRequest<unknown>(`${BACKEND_ROUTES.RECORDATORIOS}/${id}`, {
       method: 'DELETE',
       allowEmptyResponse: true
     });

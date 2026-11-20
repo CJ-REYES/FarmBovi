@@ -527,22 +527,43 @@ export async function mapRemoteChangeToLocalEntity(
     }
 
     case 'alerts': {
-      const tipo = readString(data, ['tipo', 'type'], 'General') ?? 'General';
-      const prioridad = readString(data, ['prioridad', 'priority'], 'Media') ?? 'Media';
-      const mensaje = readString(data, ['mensaje', 'message']);
-      const fecha = readString(data, ['fecha', 'date'], change.actualizadoEnServidor);
+      const existingAlert = existing as LocalAlert | undefined;
+      const tipo = readString(data, ['tipo', 'type'], existingAlert?.tipo ?? 'General') ?? 'General';
+      const prioridad =
+        readString(data, ['prioridad', 'priority'], existingAlert?.prioridad ?? 'Media') ?? 'Media';
+      const mensaje = readString(data, ['descripcion', 'mensaje', 'message']);
+      const fecha = readString(
+        data,
+        ['fechaProgramada', 'fecha', 'date'],
+        change.actualizadoEnServidor
+      );
 
       if (!mensaje || !fecha) {
         throw new Error(`Registro remoto de alerta inválido (remoteId=${String(change.remoteId)}).`);
       }
+
+      const leida = readBoolean(data, ['leida', 'read'], existingAlert?.leida ?? false);
+      const rawEstado = readString(data, ['estado']);
+      const estado = rawEstado ?? (leida ? 'Completado' : existingAlert?.estado ?? 'Pendiente');
 
       const alertRecord: LocalAlert = {
         ...baseFields,
         tipo,
         prioridad,
         mensaje,
-        leida: readBoolean(data, ['leida', 'read'], false),
-        fecha
+        leida: estado.toLowerCase() === 'completado' || leida,
+        fecha,
+        cattleId: readString(data, ['idAnimal', 'cattleId']) ?? existingAlert?.cattleId ?? null,
+        lotId: readString(data, ['idLote', 'lotId']) ?? existingAlert?.lotId ?? null,
+        treatmentId:
+          readString(data, ['idTratamiento', 'treatmentId']) ?? existingAlert?.treatmentId ?? null,
+        responsableId:
+          readString(data, ['idResponsable', 'responsableId']) ??
+          existingAlert?.responsableId ??
+          null,
+        estado,
+        fechaCompletado:
+          readString(data, ['fechaCompletado']) ?? existingAlert?.fechaCompletado ?? null
       };
       return alertRecord;
     }

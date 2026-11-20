@@ -200,9 +200,24 @@ export interface LocalGenealogy extends BaseLocalEntity {
 export interface LocalAlert extends BaseLocalEntity {
   tipo: string;
   prioridad: string;
+  /** Alias sincronizado con `descripcion` en Backend `Recordatorio`. */
   mensaje: string;
+  /** Alias sincronizado con `estado === 'Completado'`. */
   leida: boolean;
+  /** Alias sincronizado con `fechaProgramada` en Backend `Recordatorio`. */
   fecha: string;
+  /** Animal asociado opcional (`idAnimal` en `Recordatorio`, excluyente con `lotId`). */
+  cattleId?: string | null;
+  /** Lote/potrero asociado opcional (`idLote` en `Recordatorio`, excluyente con `cattleId`). */
+  lotId?: string | null;
+  /** Tratamiento vinculado opcional (`idTratamiento` en `Recordatorio`). */
+  treatmentId?: string | null;
+  /** Usuario responsable opcional (`idResponsable` en `Recordatorio`). */
+  responsableId?: string | null;
+  /** Estado real del recordatorio (`Pendiente` | `En curso` | `Completado` | `Cancelado`). */
+  estado?: string;
+  /** Fecha/hora de completado (`fechaCompletado` en `Recordatorio`). */
+  fechaCompletado?: string | null;
 }
 
 export interface LocalMedia extends BaseLocalEntity {
