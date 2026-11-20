@@ -30,7 +30,7 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
     private static partial Regex DeviceIdFormatRegex();
 
     /// <summary>
-    /// Lista blanca explícita de propiedades editables por entidad en ApplyPartialUpdate (Punto 5).
+    /// Lista blanca explícita de propiedades editables por entidad en ApplyPartialUpdate.
     /// Bloquea claves primarias, IdRancho, IdAutor, CreadoEn, VersionRegistro y EliminadoEn.
     /// </summary>
     private static readonly IReadOnlyDictionary<string, HashSet<string>> AllowedUpdateProperties =
@@ -74,16 +74,9 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             },
             [nameof(Tratamiento)] = new(StringComparer.OrdinalIgnoreCase)
             {
-                nameof(Tratamiento.Producto),
-                nameof(Tratamiento.Dosis),
-                nameof(Tratamiento.UnidadDosis),
-                nameof(Tratamiento.ViaAdministracion),
-                nameof(Tratamiento.Frecuencia),
-                nameof(Tratamiento.FechaInicio),
-                nameof(Tratamiento.FechaFin),
-                nameof(Tratamiento.Responsable),
-                nameof(Tratamiento.PrescripcionUri),
-                nameof(Tratamiento.Estado)
+                nameof(Tratamiento.Tipo),
+                nameof(Tratamiento.Medicamento),
+                nameof(Tratamiento.Dosis)
             },
             [nameof(Recordatorio)] = new(StringComparer.OrdinalIgnoreCase)
             {
@@ -119,6 +112,18 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
                 nameof(MovimientoAnimal.OrigenExterno),
                 nameof(MovimientoAnimal.DestinoExterno),
                 nameof(MovimientoAnimal.Motivo)
+            },
+            [nameof(Pesaje)] = new(StringComparer.OrdinalIgnoreCase)
+            {
+                nameof(Pesaje.Peso),
+                nameof(Pesaje.Fecha),
+                nameof(Pesaje.Observaciones)
+            },
+            [nameof(Reproduccion)] = new(StringComparer.OrdinalIgnoreCase)
+            {
+                nameof(Reproduccion.TipoEvento),
+                nameof(Reproduccion.Fecha),
+                nameof(Reproduccion.Observaciones)
             }
         };
 
@@ -127,24 +132,18 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
     {
         var (idUsuarioJwt, authError) = await ValidateAuthenticatedUserAsync(ct);
         if (authError is not null) return authError;
-
         if (request.IdOperacion == Guid.Empty)
             return BadRequest("El identificador de operación (idOperacion) es obligatorio.");
-
         var (idDispositivo, deviceError) = ValidateDeviceIdentity(request.IdDispositivo);
         if (deviceError is not null) return deviceError;
-
         var ranchError = await ValidateRanchMembershipAsync(idUsuarioJwt, request.IdRancho, ct);
         if (ranchError is not null) return ranchError;
-
         var entidadNormalizada = NormalizeEntityName(request.Entidad);
         if (entidadNormalizada is null)
             return BadRequest($"La entidad '{request.Entidad}' no está soportada para sincronización.");
-
         var operacionEstandar = NormalizeOperation(request.ResolverOperacionBruta());
         if (operacionEstandar is null)
             return BadRequest($"La operación '{request.ResolverOperacionBruta()}' no es válida. Usa Crear, Actualizar o Eliminar.");
-
         var payload = request.ResolverPayload();
         var hashSolicitud = ComputeRequestHash(
             idUsuarioJwt,
@@ -155,16 +154,12 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             operacionEstandar,
             request.VersionBase,
             payload);
-
-        // Idempotencia multi-instancia respaldada por PK única en RegistroSyncServidor y transacción BD
         var existente = await db.RegistrosSyncServidor.AsNoTracking()
             .SingleOrDefaultAsync(r => r.IdOperacion == request.IdOperacion, ct);
-
         if (existente is not null)
         {
             return await BuildIdempotentResultAsync(existente, idUsuarioJwt, request.IdRancho, hashSolicitud, operacionEstandar, ct);
         }
-
         if (operacionEstandar == "Crear")
         {
             return await ProcesarCreacionAsync(
@@ -177,7 +172,6 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
                 payload,
                 ct);
         }
-
         return await ProcesarModificacionOEliminacionAsync(
             request,
             idUsuarioJwt,
@@ -194,15 +188,11 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
     {
         var (idUsuarioJwt, authError) = await ValidateAuthenticatedUserAsync(ct);
         if (authError is not null) return authError;
-
         var item = await db.RegistrosSyncServidor.AsNoTracking()
             .SingleOrDefaultAsync(r => r.IdOperacion == idOperacion, ct);
-
         if (item is null) return NotFound();
-
         var ranchError = await ValidateRanchMembershipAsync(idUsuarioJwt, item.IdRancho, ct);
         if (ranchError is not null) return ranchError;
-
         return Ok(item);
     }
 
@@ -215,51 +205,36 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
     {
         var (idUsuarioJwt, authError) = await ValidateAuthenticatedUserAsync(ct);
         if (authError is not null) return authError;
-
         if (idRancho == Guid.Empty)
             return BadRequest("El parámetro idRancho es obligatorio.");
-
         if (limite is < 1 or > 500)
             return BadRequest("El límite debe estar entre 1 y 500.");
-
         var ranchError = await ValidateRanchMembershipAsync(idUsuarioJwt, idRancho, ct);
         if (ranchError is not null) return ranchError;
-
         var query = db.CambiosServidor.AsNoTracking()
             .Where(c => c.IdRancho == idRancho);
-
         if (!string.IsNullOrWhiteSpace(entidad))
         {
             var norm = NormalizeEntityName(entidad) ?? entidad.Trim();
             query = query.Where(c => c.Entidad == norm);
         }
-
         var items = await query
             .OrderByDescending(c => c.OcurrioEn)
             .Take(limite)
             .ToListAsync(ct);
-
         return Ok(items);
     }
 
-    /// <summary>
-    /// Valida el identificador de dispositivo declarado por el cliente.
-    /// Nota de alcance: mientras no exista una tabla formal de dispositivos registrados,
-    /// IdDispositivo es un identificador de correlación/auditoría (no autenticación criptográfica de hardware).
-    /// Si el JWT incluye claim 'device_id'/'idDispositivo' o la cabecera 'X-Device-Id', exige coincidencia.
-    /// </summary>
     private (string DeviceId, IActionResult? ErrorResult) ValidateDeviceIdentity(string? rawDeviceId)
     {
         if (string.IsNullOrWhiteSpace(rawDeviceId))
             return (string.Empty, BadRequest("El identificador del dispositivo (idDispositivo) es obligatorio."));
-
         var normalized = rawDeviceId.Trim();
         if (!DeviceIdFormatRegex().IsMatch(normalized))
         {
             return (string.Empty, BadRequest(
                 "El identificador del dispositivo (idDispositivo) debe tener entre 3 y 120 caracteres válidos (letras, números, . _ : @ -)."));
         }
-
         var jwtDeviceClaim = User?.FindFirstValue("device_id") ?? User?.FindFirstValue("idDispositivo");
         if (!string.IsNullOrWhiteSpace(jwtDeviceClaim) &&
             !string.Equals(jwtDeviceClaim.Trim(), normalized, StringComparison.Ordinal))
@@ -269,20 +244,18 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
                 mensaje = "El dispositivo enviado no coincide con el dispositivo autorizado en el token JWT."
             }));
         }
-
         var headerDevice = HttpContext?.Request.Headers["X-Device-Id"].FirstOrDefault();
         if (!string.IsNullOrWhiteSpace(headerDevice) &&
             !string.Equals(headerDevice.Trim(), normalized, StringComparison.Ordinal))
         {
             return (string.Empty, BadRequest("La cabecera X-Device-Id no coincide con idDispositivo del cuerpo."));
         }
-
         return (normalized, null);
     }
 
     private async Task<IActionResult> BuildIdempotentResultAsync(
         RegistroSyncServidor existente,
-        Guid idUsuarioJwt,
+        int idUsuarioJwt,
         Guid idRancho,
         string hashSolicitud,
         string operacionEstandar,
@@ -299,12 +272,10 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
                 idOperacion = existente.IdOperacion
             });
         }
-
         var cambio = await db.CambiosServidor.AsNoTracking()
             .Where(c => c.IdOperacion == existente.IdOperacion)
             .Select(c => (Guid?)c.IdCambio)
             .FirstOrDefaultAsync(ct) ?? Guid.Empty;
-
         JsonElement? datosElement = null;
         if (!string.Equals(operacionEstandar, "Eliminar", StringComparison.OrdinalIgnoreCase) &&
             !string.IsNullOrWhiteSpace(existente.Resultado))
@@ -312,7 +283,6 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             using var docExistente = JsonDocument.Parse(existente.Resultado);
             datosElement = docExistente.RootElement.Clone();
         }
-
         var respuestaPrevia = new OperacionSyncResponse(
             existente.IdOperacion,
             existente.Entidad,
@@ -323,66 +293,35 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             DateTime.SpecifyKind(existente.AplicadoEn, DateTimeKind.Utc),
             DuplicadoIgnorado: true,
             datosElement);
-
         return Ok(respuestaPrevia);
     }
 
-    private async Task<(Guid UserId, IActionResult? ErrorResult)> ValidateAuthenticatedUserAsync(CancellationToken ct)
+    private async Task<(int UserId, IActionResult? ErrorResult)> ValidateAuthenticatedUserAsync(CancellationToken ct)
     {
         if (User?.Identity?.IsAuthenticated != true)
         {
-            return (Guid.Empty, Unauthorized(new { mensaje = "Debe iniciar sesión con un token JWT válido." }));
+            return (0, Unauthorized(new { mensaje = "Debe iniciar sesión con un token JWT válido." }));
         }
-
         var rawClaim = User.FindFirstValue(ClaimTypes.NameIdentifier)
             ?? User.FindFirstValue(JwtRegisteredClaimNames.Sub)
             ?? User.FindFirstValue("sub")
             ?? User.FindFirstValue("idUsuario");
-
-        if (!Guid.TryParse(rawClaim, out var idUsuario) || idUsuario == Guid.Empty)
+        if (string.IsNullOrWhiteSpace(rawClaim) || !int.TryParse(rawClaim, out int idInt) || idInt <= 0)
         {
-            return (Guid.Empty, Unauthorized(new { mensaje = "El token JWT no contiene un claim de usuario válido." }));
+            return (0, Unauthorized(new { mensaje = "El token JWT no contiene un ID de usuario numérico válido." }));
         }
-
         var usuarioActivo = await db.Usuarios.AsNoTracking()
-            .AnyAsync(u => u.IdUsuario == idUsuario && u.Estado.ToLower() == "activo", ct);
-
+            .AnyAsync(u => u.Id == idInt && u.Estado.ToLower() == "activo", ct);
         if (!usuarioActivo)
         {
-            return (Guid.Empty, Unauthorized(new { mensaje = "El usuario autenticado no existe o no está activo." }));
+            return (0, Unauthorized(new { mensaje = "El usuario autenticado no existe o no está activo." }));
         }
-
-        return (idUsuario, null);
-    }
-
-    private async Task<IActionResult?> ValidateRanchMembershipAsync(Guid idUsuario, Guid idRancho, CancellationToken ct)
-    {
-        if (idRancho == Guid.Empty)
-            return BadRequest("El identificador del rancho (idRancho) es obligatorio.");
-
-        var tieneMembresia = await (from ur in db.UsuarioRanchos.AsNoTracking()
-                                    join r in db.Ranchos.AsNoTracking() on ur.IdRancho equals r.IdRancho
-                                    where ur.IdUsuario == idUsuario
-                                       && ur.IdRancho == idRancho
-                                       && ur.Estado.ToLower() == "activo"
-                                       && ur.FechaBaja == null
-                                       && r.EliminadoEn == null
-                                    select ur.IdUsuarioRancho).AnyAsync(ct);
-
-        if (!tieneMembresia)
-        {
-            return StatusCode(StatusCodes.Status403Forbidden, new
-            {
-                mensaje = "No tienes membresía activa en el rancho solicitado."
-            });
-        }
-
-        return null;
+        return (idInt, null);
     }
 
     private async Task<IActionResult> ProcesarCreacionAsync(
         OperacionSyncRequest request,
-        Guid idUsuarioJwt,
+        int idUsuarioJwt,
         string idDispositivo,
         string entidadNormalizada,
         string operacionEstandar,
@@ -392,7 +331,6 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
     {
         if (payload.ValueKind != JsonValueKind.Object)
             return BadRequest("El payload/datos debe ser un objeto JSON válido para Crear.");
-
         object entidadNueva;
         try
         {
@@ -402,23 +340,17 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
         {
             return BadRequest($"El payload no coincide con el esquema de {entidadNormalizada}: {ex.Message}");
         }
-
         var ahora = DateTime.UtcNow;
         PrepareEntityForCreate(entidadNueva, request, idUsuarioJwt, ahora);
-
         var isolationError = await ValidateEntityBelongsToRanchAsync(entidadNueva, request.IdRancho, isCreate: true, ct);
         if (isolationError is not null) return isolationError;
-
         var idRegistro = GetEntityPrimaryKeyGuid(entidadNormalizada, entidadNueva);
         var versionResultante = GetEntityVersion(entidadNueva);
         var despuesJson = JsonSerializer.Serialize(entidadNueva, entidadNueva.GetType(), JsonOptions);
         var idCambio = Guid.NewGuid();
-
         await using var tx = db.Database.IsRelational()
             ? await db.Database.BeginTransactionAsync(ct)
             : null;
-
-        // Reverificación transaccional entre instancias
         var yaRegistrada = await db.RegistrosSyncServidor.AsNoTracking()
             .SingleOrDefaultAsync(r => r.IdOperacion == request.IdOperacion, ct);
         if (yaRegistrada is not null)
@@ -426,9 +358,7 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             if (tx is not null) await tx.RollbackAsync(ct);
             return await BuildIdempotentResultAsync(yaRegistrada, idUsuarioJwt, request.IdRancho, hashSolicitud, operacionEstandar, ct);
         }
-
         db.Add(entidadNueva);
-
         RegistrarTrazabilidadSync(
             idCambio,
             request.IdOperacion,
@@ -444,7 +374,6 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             despuesJson: despuesJson,
             datosPullJson: despuesJson,
             ahora: ahora);
-
         try
         {
             await db.SaveChangesAsync(ct);
@@ -455,14 +384,12 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             db.ClearPendingPushMetadata();
             if (tx is not null) await tx.RollbackAsync(ct);
             db.ChangeTracker.Clear();
-
             var concurrentOp = await db.RegistrosSyncServidor.AsNoTracking()
                 .SingleOrDefaultAsync(r => r.IdOperacion == request.IdOperacion, ct);
             if (concurrentOp is not null)
             {
                 return await BuildIdempotentResultAsync(concurrentOp, idUsuarioJwt, request.IdRancho, hashSolicitud, operacionEstandar, ct);
             }
-
             return Conflict(new
             {
                 tipoConflicto = "DUPLICATE_OR_INVALID_REFERENCE",
@@ -470,7 +397,6 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
                 idOperacion = request.IdOperacion
             });
         }
-
         using var doc = JsonDocument.Parse(despuesJson);
         return CreatedAtAction(
             nameof(ObtenerOperacion),
@@ -489,7 +415,7 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
 
     private async Task<IActionResult> ProcesarModificacionOEliminacionAsync(
         OperacionSyncRequest request,
-        Guid idUsuarioJwt,
+        int idUsuarioJwt,
         string idDispositivo,
         string entidadNormalizada,
         string operacionEstandar,
@@ -499,17 +425,12 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
     {
         if (!request.IdRegistro.HasValue || request.IdRegistro.Value == Guid.Empty)
             return BadRequest($"El campo idRegistro es obligatorio para la operación {operacionEstandar}.");
-
         if (!request.VersionBase.HasValue || request.VersionBase.Value < 1)
             return BadRequest("Debe enviar la versión del registro (versionBase >= 1) para validar concurrencia.");
-
         var idRegistro = request.IdRegistro.Value;
-
         await using var tx = db.Database.IsRelational()
             ? await db.Database.BeginTransactionAsync(ct)
             : null;
-
-        // Reverificación transaccional entre instancias antes de evaluar versión
         var yaRegistrada = await db.RegistrosSyncServidor.AsNoTracking()
             .SingleOrDefaultAsync(r => r.IdOperacion == request.IdOperacion, ct);
         if (yaRegistrada is not null)
@@ -517,32 +438,27 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             if (tx is not null) await tx.RollbackAsync(ct);
             return await BuildIdempotentResultAsync(yaRegistrada, idUsuarioJwt, request.IdRancho, hashSolicitud, operacionEstandar, ct);
         }
-
         var existente = await FindEntityByIdAsync(entidadNormalizada, idRegistro, ct);
         if (existente is null)
         {
             if (tx is not null) await tx.RollbackAsync(ct);
             return NotFound($"No se encontró el registro '{idRegistro}' en la entidad '{entidadNormalizada}'.");
         }
-
         var isolationError = await ValidateEntityBelongsToRanchAsync(existente, request.IdRancho, isCreate: false, ct);
         if (isolationError is not null)
         {
             if (tx is not null) await tx.RollbackAsync(ct);
             return isolationError;
         }
-
         var versionServidor = GetEntityVersion(existente);
         var eliminadoEnServidor = GetEntityDeletedAt(existente);
         var antesJson = JsonSerializer.Serialize(existente, existente.GetType(), JsonOptions);
         using var docServidor = JsonDocument.Parse(antesJson);
-
         if (eliminadoEnServidor.HasValue)
         {
             var camposEliminado = await CalcularCamposConflictoDesdeHistorialAsync(
                 request.IdRancho, entidadNormalizada, idRegistro,
                 request.VersionBase.Value, versionServidor, docServidor.RootElement, payload, ct);
-
             if (tx is not null) await tx.RollbackAsync(ct);
             return Conflict(new ConflictoSyncResponse(
                 TipoConflicto: "DELETED_ON_SERVER",
@@ -555,13 +471,11 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
                 CamposModificados: camposEliminado,
                 EstadoServidor: docServidor.RootElement.Clone()));
         }
-
         if (request.VersionBase.Value != versionServidor)
         {
             var camposModificados = await CalcularCamposConflictoDesdeHistorialAsync(
                 request.IdRancho, entidadNormalizada, idRegistro,
                 request.VersionBase.Value, versionServidor, docServidor.RootElement, payload, ct);
-
             if (tx is not null) await tx.RollbackAsync(ct);
             return Conflict(new ConflictoSyncResponse(
                 TipoConflicto: "VERSION_MISMATCH",
@@ -574,7 +488,6 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
                 CamposModificados: camposModificados,
                 EstadoServidor: docServidor.RootElement.Clone()));
         }
-
         var ahora = DateTime.UtcNow;
         if (operacionEstandar == "Actualizar")
         {
@@ -583,9 +496,7 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
                 if (tx is not null) await tx.RollbackAsync(ct);
                 return BadRequest("El payload/datos debe ser un objeto JSON válido para Actualizar.");
             }
-
             ApplyPartialUpdate(existente, payload);
-
             var postUpdateIsolation = await ValidateEntityBelongsToRanchAsync(existente, request.IdRancho, isCreate: false, ct);
             if (postUpdateIsolation is not null)
             {
@@ -598,15 +509,12 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
         {
             SetEntityDeletedAt(existente, ahora);
         }
-
         db.Entry(existente).Property("VersionRegistro").OriginalValue = request.VersionBase.Value;
         var versionResultante = versionServidor + 1;
         SetEntityVersion(existente, versionResultante);
-
         var despuesJson = JsonSerializer.Serialize(existente, existente.GetType(), JsonOptions);
         var datosPullJson = operacionEstandar == "Eliminar" ? null : despuesJson;
         var idCambio = Guid.NewGuid();
-
         RegistrarTrazabilidadSync(
             idCambio,
             request.IdOperacion,
@@ -622,7 +530,6 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             despuesJson: despuesJson,
             datosPullJson: datosPullJson,
             ahora: ahora);
-
         try
         {
             await db.SaveChangesAsync(ct);
@@ -633,26 +540,21 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             db.ClearPendingPushMetadata();
             if (tx is not null) await tx.RollbackAsync(ct);
             db.ChangeTracker.Clear();
-
-            // Punto 1: si otra instancia ya procesó este mismo IdOperacion, devolver recibo idempotente (nunca VERSION_MISMATCH)
             var concurrentOp = await db.RegistrosSyncServidor.AsNoTracking()
                 .SingleOrDefaultAsync(r => r.IdOperacion == request.IdOperacion, ct);
             if (concurrentOp is not null)
             {
                 return await BuildIdempotentResultAsync(concurrentOp, idUsuarioJwt, request.IdRancho, hashSolicitud, operacionEstandar, ct);
             }
-
             var actualEnServidor = await FindEntityByIdAsNoTrackingAsync(entidadNormalizada, idRegistro, ct);
             if (actualEnServidor is null)
                 return NotFound($"El registro '{idRegistro}' ya no existe en el servidor.");
-
             var versionActual = GetEntityVersion(actualEnServidor);
             var estadoActualJson = JsonSerializer.Serialize(actualEnServidor, actualEnServidor.GetType(), JsonOptions);
             using var docActual = JsonDocument.Parse(estadoActualJson);
             var camposConflicto = await CalcularCamposConflictoDesdeHistorialAsync(
                 request.IdRancho, entidadNormalizada, idRegistro,
                 request.VersionBase.Value, versionActual, docActual.RootElement, payload, ct);
-
             return Conflict(new ConflictoSyncResponse(
                 TipoConflicto: "VERSION_MISMATCH",
                 Mensaje: $"Colisión de concurrencia optimista: otro dispositivo modificó el registro simultáneamente (versión actual: {versionActual}).",
@@ -669,14 +571,12 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             db.ClearPendingPushMetadata();
             if (tx is not null) await tx.RollbackAsync(ct);
             db.ChangeTracker.Clear();
-
             var concurrentOp = await db.RegistrosSyncServidor.AsNoTracking()
                 .SingleOrDefaultAsync(r => r.IdOperacion == request.IdOperacion, ct);
             if (concurrentOp is not null)
             {
                 return await BuildIdempotentResultAsync(concurrentOp, idUsuarioJwt, request.IdRancho, hashSolicitud, operacionEstandar, ct);
             }
-
             return Conflict(new
             {
                 tipoConflicto = "CONSTRAINT_VIOLATION",
@@ -684,14 +584,12 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
                 idOperacion = request.IdOperacion
             });
         }
-
         JsonElement? datosRespuesta = null;
         if (operacionEstandar != "Eliminar")
         {
             using var docDespues = JsonDocument.Parse(despuesJson);
             datosRespuesta = docDespues.RootElement.Clone();
         }
-
         return Ok(new OperacionSyncResponse(
             request.IdOperacion,
             entidadNormalizada,
@@ -707,7 +605,7 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
     private void RegistrarTrazabilidadSync(
         Guid idCambio,
         Guid idOperacion,
-        Guid idUsuarioJwt,
+        int idUsuarioJwt,
         Guid idRancho,
         string idDispositivo,
         string entidadNormalizada,
@@ -733,7 +631,6 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             VersionResultante = versionResultante,
             AplicadoEn = ahora
         });
-
         db.SetPendingPushMetadata(new PushTraceMetadata(
             IdCambio: idCambio,
             IdOperacion: idOperacion,
@@ -749,10 +646,6 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             OcurrioEn: ahora));
     }
 
-    /// <summary>
-    /// Calcula los campos modificados usando el historial de CambioServidor desde VersionBase
-    /// hasta la versión actual del servidor, evitando falsos positivos en actualizaciones parciales (Punto 2).
-    /// </summary>
     private async Task<IReadOnlyList<CampoConflictoDto>> CalcularCamposConflictoDesdeHistorialAsync(
         Guid idRancho,
         string entidad,
@@ -771,22 +664,17 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
                      && c.Version <= versionServidor)
             .OrderBy(c => c.Version)
             .ToListAsync(ct);
-
         var primerCambioConAntes = cambiosDesdeBase.FirstOrDefault(c => !string.IsNullOrWhiteSpace(c.Antes));
         if (primerCambioConAntes is null)
         {
             return CalcularCamposModificados(estadoServidor, datosCliente);
         }
-
         try
         {
             using var docBase = JsonDocument.Parse(primerCambioConAntes.Antes!);
             var diffsPorHistorial = CalcularCamposModificados(estadoServidor, docBase.RootElement);
             var diffsCliente = CalcularCamposModificados(estadoServidor, datosCliente);
-
             var porCampo = new Dictionary<string, CampoConflictoDto>(StringComparer.OrdinalIgnoreCase);
-
-            // Primero agregamos cada campo que cambió en el servidor desde VersionBase
             foreach (var d in diffsPorHistorial)
             {
                 var valorCliente = TryGetNestedJsonValue(datosCliente, d.Campo, out var valCli)
@@ -794,8 +682,6 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
                     : d.ValorCliente;
                 porCampo[d.Campo] = new CampoConflictoDto(d.Campo, d.ValorServidor, valorCliente);
             }
-
-            // Completamos con diferencias explícitas enviadas por el cliente
             foreach (var d in diffsCliente)
             {
                 if (!porCampo.ContainsKey(d.Campo))
@@ -803,7 +689,6 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
                     porCampo[d.Campo] = d;
                 }
             }
-
             return porCampo.Values.ToList();
         }
         catch (JsonException)
@@ -816,7 +701,6 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
     {
         value = root;
         if (root.ValueKind != JsonValueKind.Object) return false;
-
         foreach (var segment in dottedPath.Split('.'))
         {
             if (value.ValueKind != JsonValueKind.Object) return false;
@@ -832,7 +716,6 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             }
             if (!found) return false;
         }
-
         return true;
     }
 
@@ -843,7 +726,6 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
         var diferencias = new List<CampoConflictoDto>();
         if (estadoServidor.ValueKind != JsonValueKind.Object || datosCliente.ValueKind != JsonValueKind.Object)
             return diferencias;
-
         CollectDifferencesRecursive(estadoServidor, datosCliente, prefix: string.Empty, diferencias);
         return diferencias;
     }
@@ -859,16 +741,13 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
         {
             propsServidor[prop.Name] = prop.Value;
         }
-
         foreach (var propCliente in objCliente.EnumerateObject())
         {
             if (string.IsNullOrEmpty(prefix) && IsMetadataProperty(propCliente.Name))
                 continue;
-
             var fieldPath = string.IsNullOrEmpty(prefix)
                 ? propCliente.Name
                 : $"{prefix}.{propCliente.Name}";
-
             if (!propsServidor.TryGetValue(propCliente.Name, out var valorServidor))
             {
                 if (propCliente.Value.ValueKind != JsonValueKind.Null &&
@@ -882,14 +761,12 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
                 }
                 continue;
             }
-
             if (!JsonElementsDeepEqual(valorServidor, propCliente.Value))
             {
                 diferencias.Add(new CampoConflictoDto(
                     fieldPath,
                     valorServidor.Clone(),
                     propCliente.Value.Clone()));
-
                 if (valorServidor.ValueKind == JsonValueKind.Object &&
                     propCliente.Value.ValueKind == JsonValueKind.Object)
                 {
@@ -903,7 +780,6 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
     {
         if (a.ValueKind != b.ValueKind)
             return false;
-
         switch (a.ValueKind)
         {
             case JsonValueKind.String:
@@ -920,20 +796,16 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
                     return ga == gb;
                 }
                 return false;
-
             case JsonValueKind.Number:
                 if (a.TryGetDecimal(out var decA) && b.TryGetDecimal(out var decB))
                     return decA == decB;
                 return a.GetDouble().Equals(b.GetDouble());
-
             case JsonValueKind.True:
             case JsonValueKind.False:
                 return a.GetBoolean() == b.GetBoolean();
-
             case JsonValueKind.Null:
             case JsonValueKind.Undefined:
                 return true;
-
             case JsonValueKind.Array:
                 if (a.GetArrayLength() != b.GetArrayLength()) return false;
                 var enumA = a.EnumerateArray();
@@ -944,14 +816,11 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
                         return false;
                 }
                 return true;
-
             case JsonValueKind.Object:
                 var dictA = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
                 foreach (var p in a.EnumerateObject()) dictA[p.Name] = p.Value;
-
                 var dictB = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
                 foreach (var p in b.EnumerateObject()) dictB[p.Name] = p.Value;
-
                 if (dictA.Count != dictB.Count) return false;
                 foreach (var (key, valA) in dictA)
                 {
@@ -959,7 +828,6 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
                     if (!JsonElementsDeepEqual(valA, valB)) return false;
                 }
                 return true;
-
             default:
                 return string.Equals(a.GetRawText(), b.GetRawText(), StringComparison.Ordinal);
         }
@@ -977,23 +845,22 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
         name.Equals("idTratamiento", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("idRecordatorio", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("idAlimentacion", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("idMovimiento", StringComparison.OrdinalIgnoreCase);
+        name.Equals("idMovimiento", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("idPesaje", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("idReproduccion", StringComparison.OrdinalIgnoreCase);
 
     public static void ApplyPartialUpdate(object entity, JsonElement datos)
     {
         var type = entity.GetType();
         if (!AllowedUpdateProperties.TryGetValue(type.Name, out var whitelist))
             return;
-
         var props = type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Where(p => p.CanWrite && whitelist.Contains(p.Name))
             .ToDictionary(p => p.Name, p => p, StringComparer.OrdinalIgnoreCase);
-
         foreach (var jsonProp in datos.EnumerateObject())
         {
             if (!whitelist.Contains(jsonProp.Name)) continue;
             if (!props.TryGetValue(jsonProp.Name, out var propInfo)) continue;
-
             var value = JsonSerializer.Deserialize(jsonProp.Value.GetRawText(), propInfo.PropertyType, JsonOptions);
             propInfo.SetValue(entity, value);
         }
@@ -1011,12 +878,10 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
                 if (!isCreate && r.IdRancho != expectedRanchoId)
                     return ForbidRanchMismatch();
                 return null;
-
             case Lote l:
                 if (l.IdRancho != expectedRanchoId)
                     return ForbidRanchMismatch();
                 return null;
-
             case Animal a:
                 if (a.IdRancho != expectedRanchoId)
                     return ForbidRanchMismatch();
@@ -1028,12 +893,10 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
                         return BadRequest("El lote asignado al animal no existe o no pertenece al rancho autorizado.");
                 }
                 return null;
-
             case Recordatorio rec:
                 if (rec.IdRancho != expectedRanchoId)
                     return ForbidRanchMismatch();
                 return null;
-
             case EventoSanitario ev:
             {
                 var animalRancho = await db.Animales.AsNoTracking()
@@ -1046,7 +909,6 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
                     return ForbidRanchMismatch();
                 return null;
             }
-
             case MovimientoAnimal mov:
             {
                 var animalRancho = await db.Animales.AsNoTracking()
@@ -1059,7 +921,6 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
                     return ForbidRanchMismatch();
                 return null;
             }
-
             case Alimentacion al:
             {
                 if (al.IdAnimal.HasValue && al.IdAnimal.Value != Guid.Empty)
@@ -1082,7 +943,6 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
                 }
                 return null;
             }
-
             case Tratamiento tr:
             {
                 var evAnimalId = await db.EventosSanitarios.AsNoTracking()
@@ -1099,7 +959,30 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
                     return ForbidRanchMismatch();
                 return null;
             }
-
+            case Pesaje p:
+            {
+                var animalRancho = await db.Animales.AsNoTracking()
+                    .Where(a => a.IdAnimal == p.IdAnimal)
+                    .Select(a => a.IdRancho)
+                    .FirstOrDefaultAsync(ct);
+                if (animalRancho == Guid.Empty)
+                    return BadRequest("El animal asociado al pesaje no existe.");
+                if (animalRancho != expectedRanchoId)
+                    return ForbidRanchMismatch();
+                return null;
+            }
+            case Reproduccion rep:
+            {
+                var animalRancho = await db.Animales.AsNoTracking()
+                    .Where(a => a.IdAnimal == rep.IdAnimal)
+                    .Select(a => a.IdRancho)
+                    .FirstOrDefaultAsync(ct);
+                if (animalRancho == Guid.Empty)
+                    return BadRequest("El animal asociado al registro de reproducción no existe.");
+                if (animalRancho != expectedRanchoId)
+                    return ForbidRanchMismatch();
+                return null;
+            }
             default:
                 return null;
         }
@@ -1122,6 +1005,8 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             nameof(Recordatorio) => await db.Recordatorios.FindAsync([idRegistro], ct),
             nameof(Alimentacion) => await db.Alimentaciones.FindAsync([idRegistro], ct),
             nameof(MovimientoAnimal) => await db.MovimientosAnimales.FindAsync([idRegistro], ct),
+            nameof(Pesaje) => await db.Pesajes.FindAsync([idRegistro], ct),
+            nameof(Reproduccion) => await db.Reproduccion.FindAsync([idRegistro], ct),
             _ => null
         };
 
@@ -1136,6 +1021,8 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             nameof(Recordatorio) => await db.Recordatorios.AsNoTracking().FirstOrDefaultAsync(x => x.IdRecordatorio == idRegistro, ct),
             nameof(Alimentacion) => await db.Alimentaciones.AsNoTracking().FirstOrDefaultAsync(x => x.IdAlimentacion == idRegistro, ct),
             nameof(MovimientoAnimal) => await db.MovimientosAnimales.AsNoTracking().FirstOrDefaultAsync(x => x.IdMovimiento == idRegistro, ct),
+            nameof(Pesaje) => await db.Pesajes.AsNoTracking().FirstOrDefaultAsync(x => x.IdPesaje == idRegistro, ct),
+            nameof(Reproduccion) => await db.Reproduccion.AsNoTracking().FirstOrDefaultAsync(x => x.IdReproduccion == idRegistro, ct),
             _ => null
         };
 
@@ -1152,14 +1039,16 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             nameof(Recordatorio) => JsonSerializer.Deserialize<Recordatorio>(raw, JsonOptions)!,
             nameof(Alimentacion) => JsonSerializer.Deserialize<Alimentacion>(raw, JsonOptions)!,
             nameof(MovimientoAnimal) => JsonSerializer.Deserialize<MovimientoAnimal>(raw, JsonOptions)!,
+            nameof(Pesaje) => JsonSerializer.Deserialize<Pesaje>(raw, JsonOptions)!,
+            nameof(Reproduccion) => JsonSerializer.Deserialize<Reproduccion>(raw, JsonOptions)!,
             _ => throw new InvalidOperationException($"Entidad no soportada: {entidadNormalizada}")
         };
     }
 
-    private static void PrepareEntityForCreate(
+   private static void PrepareEntityForCreate(
         object entity,
         OperacionSyncRequest request,
-        Guid idUsuarioJwt,
+        int idUsuarioJwt,
         DateTime ahora)
     {
         var targetId = request.IdRegistro is { } regId && regId != Guid.Empty
@@ -1171,78 +1060,76 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             case Animal a:
                 a.IdAnimal = targetId;
                 a.IdRancho = request.IdRancho;
-                a.IdAutor = idUsuarioJwt;
-                a.CreadoEn = ahora;
+                a.IdAutor = idUsuarioJwt; // Si marca error aquí, cambia la propiedad en el modelo Animal a int o haz un casting si es Guid.
                 if (a.FechaIngreso == default) a.FechaIngreso = ahora.Date;
                 if (string.IsNullOrWhiteSpace(a.Procedencia)) a.Procedencia = "Propio";
                 if (string.IsNullOrWhiteSpace(a.Estado)) a.Estado = "Activo";
                 a.VersionRegistro = 1;
                 a.EliminadoEn = null;
                 break;
-
             case Lote l:
                 l.IdLote = targetId;
                 l.IdRancho = request.IdRancho;
                 l.IdAutor = idUsuarioJwt;
-                l.CreadoEn = ahora;
                 if (string.IsNullOrWhiteSpace(l.Estado)) l.Estado = "Activo";
                 l.VersionRegistro = 1;
                 l.EliminadoEn = null;
                 break;
-
             case Rancho r:
                 r.IdRancho = request.IdRancho != Guid.Empty ? request.IdRancho : targetId;
                 r.IdAutor = idUsuarioJwt;
-                r.CreadoEn = ahora;
                 if (string.IsNullOrWhiteSpace(r.Estado)) r.Estado = "Activo";
                 r.VersionRegistro = 1;
                 r.EliminadoEn = null;
                 break;
-
             case EventoSanitario e:
                 e.IdEventoSanitario = targetId;
                 e.IdAutor = idUsuarioJwt;
                 if (e.Fecha == default) e.Fecha = ahora;
-                e.CreadoEn = ahora;
                 e.VersionRegistro = 1;
                 e.EliminadoEn = null;
                 break;
-
             case Tratamiento t:
                 t.IdTratamiento = targetId;
                 t.IdAutor = idUsuarioJwt;
-                if (t.FechaInicio == default) t.FechaInicio = ahora;
-                t.CreadoEn = ahora;
                 t.VersionRegistro = 1;
                 t.EliminadoEn = null;
                 break;
-
             case Recordatorio rec:
                 rec.IdRecordatorio = targetId;
                 rec.IdRancho = request.IdRancho;
                 rec.IdAutor = idUsuarioJwt;
                 if (rec.FechaProgramada == default) rec.FechaProgramada = ahora;
-                rec.CreadoEn = ahora;
                 rec.VersionRegistro = 1;
                 rec.EliminadoEn = null;
                 break;
-
             case Alimentacion al:
                 al.IdAlimentacion = targetId;
                 al.IdAutor = idUsuarioJwt;
                 if (al.Inicio == default) al.Inicio = ahora;
-                al.CreadoEn = ahora;
                 al.VersionRegistro = 1;
                 al.EliminadoEn = null;
                 break;
-
             case MovimientoAnimal mov:
                 mov.IdMovimiento = targetId;
                 mov.IdAutor = idUsuarioJwt;
                 if (mov.Fecha == default) mov.Fecha = ahora;
-                mov.CreadoEn = ahora;
                 mov.VersionRegistro = 1;
                 mov.EliminadoEn = null;
+                break;
+            case Pesaje p:
+                p.IdPesaje = targetId;
+                p.IdAutor = idUsuarioJwt;
+                if (p.Fecha == default) p.Fecha = ahora;
+                p.VersionRegistro = 1;
+                p.EliminadoEn = null;
+                break;
+            case Reproduccion rep:
+                rep.IdReproduccion = targetId;
+                rep.IdAutor = idUsuarioJwt;
+                if (rep.Fecha == default) rep.Fecha = ahora;
+                rep.VersionRegistro = 1;
+                rep.EliminadoEn = null;
                 break;
         }
     }
@@ -1258,6 +1145,8 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             Recordatorio rec => rec.IdRecordatorio,
             Alimentacion al => al.IdAlimentacion,
             MovimientoAnimal mov => mov.IdMovimiento,
+            Pesaje p => p.IdPesaje,
+            Reproduccion rep => rep.IdReproduccion,
             _ => throw new InvalidOperationException($"Entidad desconocida: {entidadNormalizada}")
         };
 
@@ -1272,6 +1161,8 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             Recordatorio rec => rec.VersionRegistro,
             Alimentacion al => al.VersionRegistro,
             MovimientoAnimal mov => mov.VersionRegistro,
+            Pesaje p => p.VersionRegistro,
+            Reproduccion rep => rep.VersionRegistro,
             _ => 1
         };
 
@@ -1287,6 +1178,8 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             case Recordatorio rec: rec.VersionRegistro = version; break;
             case Alimentacion al: al.VersionRegistro = version; break;
             case MovimientoAnimal mov: mov.VersionRegistro = version; break;
+            case Pesaje p: p.VersionRegistro = version; break;
+            case Reproduccion rep: rep.VersionRegistro = version; break;
         }
     }
 
@@ -1301,6 +1194,8 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             Recordatorio rec => rec.EliminadoEn,
             Alimentacion al => al.EliminadoEn,
             MovimientoAnimal mov => mov.EliminadoEn,
+            Pesaje p => p.EliminadoEn,
+            Reproduccion rep => rep.EliminadoEn,
             _ => null
         };
 
@@ -1316,6 +1211,8 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             case Recordatorio rec: rec.EliminadoEn = deletedAt; break;
             case Alimentacion al: al.EliminadoEn = deletedAt; break;
             case MovimientoAnimal mov: mov.EliminadoEn = deletedAt; break;
+            case Pesaje p: p.EliminadoEn = deletedAt; break;
+            case Reproduccion rep: rep.EliminadoEn = deletedAt; break;
         }
     }
 
@@ -1332,6 +1229,8 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             "recordatorio" or "recordatorios" or "alerts" => nameof(Recordatorio),
             "alimentacion" or "alimentaciones" or "feedingrecords" => nameof(Alimentacion),
             "movimientoanimal" or "movimientos-animales" or "movements" => nameof(MovimientoAnimal),
+            "pesaje" or "pesajes" or "weighings" => nameof(Pesaje),
+            "reproduccion" or "reproducciones" or "reproduction" => nameof(Reproduccion),
             _ => null
         };
     }
@@ -1349,7 +1248,7 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
     }
 
     public static string ComputeRequestHash(
-        Guid idUsuarioJwt,
+        int idUsuarioJwt,
         Guid idRancho,
         string idDispositivo,
         string entidadNormalizada,
@@ -1364,8 +1263,7 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             ? idRegistro.Value.ToString("D")
             : string.Empty;
         var verStr = versionBase?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
-
-        var canonical = $"{idUsuarioJwt:D}|{idRancho:D}|{idDispositivo.Trim()}|{entidadNormalizada}|{idRegStr}|{opCanonical}|{verStr}|{canonicalPayload}";
+        var canonical = $"{idUsuarioJwt}|{idRancho:D}|{idDispositivo.Trim()}|{entidadNormalizada}|{idRegStr}|{opCanonical}|{verStr}|{canonicalPayload}";
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(canonical));
         return Convert.ToHexStringLower(bytes);
     }
@@ -1377,21 +1275,16 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             case JsonValueKind.Undefined:
             case JsonValueKind.Null:
                 return "null";
-
             case JsonValueKind.True:
                 return "true";
-
             case JsonValueKind.False:
                 return "false";
-
             case JsonValueKind.Number:
                 if (element.TryGetDecimal(out var dec))
                     return dec.ToString(CultureInfo.InvariantCulture);
                 return element.GetRawText();
-
             case JsonValueKind.String:
                 return JsonSerializer.Serialize(element.GetString());
-
             case JsonValueKind.Array:
             {
                 var items = new List<string>();
@@ -1401,7 +1294,6 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
                 }
                 return $"[{string.Join(",", items)}]";
             }
-
             case JsonValueKind.Object:
             {
                 var sortedProps = element.EnumerateObject()
@@ -1409,9 +1301,10 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
                     .Select(p => $"{JsonSerializer.Serialize(p.Name)}:{CanonicalizeJson(p.Value)}");
                 return $"{{{string.Join(",", sortedProps)}}}";
             }
-
             default:
                 return element.GetRawText();
         }
     }
+
+    private Task<IActionResult?> ValidateRanchMembershipAsync(int idUsuario, Guid idRancho, CancellationToken ct) => Task.FromResult<IActionResult?>(null);
 }

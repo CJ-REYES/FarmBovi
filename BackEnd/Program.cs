@@ -63,6 +63,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             NameClaimType = ClaimTypes.Name
         };
     });
+
 // Política global: todo endpoint exige JWT salvo los marcados explícitamente con [AllowAnonymous].
 builder.Services.AddAuthorization(options =>
 {
@@ -98,7 +99,19 @@ if (app.Environment.IsDevelopment())
     app.UseDeveloperExceptionPage();
 
     await using var scope = app.Services.CreateAsyncScope();
-    await scope.ServiceProvider.GetRequiredService<FarmDbContext>().Database.MigrateAsync();
+    var dbContext = scope.ServiceProvider.GetRequiredService<FarmDbContext>();
+    
+    // 1. Aplica migraciones automáticamente al iniciar
+    await dbContext.Database.MigrateAsync();
+
+    // 2. Genera un hash criptográfico válido con PasswordHasher y lo actualiza directamente en la BD
+    var hasher = new Microsoft.AspNetCore.Identity.PasswordHasher<object>();
+    var hashedPassword = hasher.HashPassword(new object(), "miPassword123");
+
+    await dbContext.Database.ExecuteSqlRawAsync(
+        "UPDATE usuario SET Contrasena = {0} WHERE Correo = 'prueba@farmbovi.com';", 
+        hashedPassword
+    );
 
     app.UseSwagger();
     app.UseSwaggerUI();
@@ -131,6 +144,7 @@ app.UseCors("Frontend");
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers().RequireAuthorization();
+
 // Excepción pública: sonda de salud para despliegue/monitoreo (no expone datos de negocio).
 app.MapHealthChecks("/health").AllowAnonymous();
 

@@ -1,39 +1,118 @@
 using FarmBovi.Api.Data;
 using FarmBovi.Api.Models;
 using FarmBovi.Api.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
+using System.IdentityModel.Tokens.Jwt;
 
 namespace FarmBovi.Api.Controllers;
 
+[Authorize]
 [ApiController]
-[RanchScope(RanchResource.Tratamiento)]
 [Route("api/tratamientos")]
 public sealed class TratamientosController(FarmDbContext db, FarmDomainValidationService validator) : ControllerBase
 {
-    [HttpGet]
-    public Task<List<Tratamiento>> GetAll([FromServices] RanchAccessService access, [FromQuery] bool incluirEliminados = false, CancellationToken ct = default)
+    private int? GetCurrentUserId()
     {
+        var rawClaim = User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? User.FindFirstValue(JwtRegisteredClaimNames.Sub)
+            ?? User.FindFirstValue("sub")
+            ?? User.FindFirstValue("idUsuario");
+
+        if (!string.IsNullOrWhiteSpace(rawClaim) && int.TryParse(rawClaim, out var userId) && userId > 0)
+            return userId;
+
+        return null;
+    }
+
+    private async Task<bool> UserHasAccessToRanchoAsync(int userId, Guid idRancho, CancellationToken ct)
+    {
+        return await db.UsuarioRanchos
+            .AnyAsync(ur => ur.IdUsuario == userId && ur.IdRancho == idRancho, ct);
+    }
+
+    private async Task<bool> UserHasAccessToTratamientoAsync(int userId, Tratamiento item, CancellationToken ct)
+    {
+        var idRancho = await db.EventosSanitarios
+            .Where(e => e.IdEventoSanitario == item.IdEventoSanitario)
+            .Join(db.Animales, e => e.IdAnimal, a => a.IdAnimal, (e, a) => (Guid?)a.IdRancho)
+            .FirstOrDefaultAsync(ct);
+
+        if (!idRancho.HasValue) return false;
+        return await UserHasAccessToRanchoAsync(userId, idRancho.Value, ct);
+    }
+
+    [HttpGet]
+    public async Task<ActionResult<List<Tratamiento>>> GetAll([FromQuery] Guid? idRancho, [FromQuery] bool incluirEliminados = false, CancellationToken ct = default)
+    {
+        var userId = GetCurrentUserId();
+        if (userId == null) return Unauthorized();
+
+        var ranchosAutorizadosIds = await db.UsuarioRanchos
+            .Where(ur => ur.IdUsuario == userId.Value)
+            .Select(ur => ur.IdRancho)
+            .ToListAsync(ct);
+
         var query = db.Tratamientos.AsNoTracking();
         if (!incluirEliminados)
             query = query.Where(t => t.EliminadoEn == null);
 
-        // Solo registros de ranchos donde el usuario tiene membresía activa.
-        var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
-        query = query.Where(x => db.EventosSanitarios.Any(e => e.IdEventoSanitario == x.IdEventoSanitario && db.Animales.Any(a => a.IdAnimal == e.IdAnimal && ranchIds.Contains(a.IdRancho))));
+        // Filtrar tratamientos cuyos eventos sanitarios y animales pertenezcan a los ranchos autorizados
+        query = query.Where(t => db.EventosSanitarios
+            .Any(e => e.IdEventoSanitario == t.IdEventoSanitario && 
+                      db.Animales.Any(a => a.IdAnimal == e.IdAnimal && ranchosAutorizadosIds.Contains(a.IdRancho))));
 
-        return query.ToListAsync(ct);
+        if (idRancho.HasValue && idRancho.Value != Guid.Empty)
+        {
+            if (!ranchosAutorizadosIds.Contains(idRancho.Value))
+            {
+                return Forbid();
+            }
+            query = query.Where(t => db.EventosSanitarios
+                .Any(e => e.IdEventoSanitario == t.IdEventoSanitario && 
+                          db.Animales.Any(a => a.IdAnimal == e.IdAnimal && a.IdRancho == idRancho.Value)));
+        }
+
+        var lista = await query.ToListAsync(ct);
+        return Ok(lista);
     }
 
     [HttpGet("{id:guid}")]
-    public async Task<ActionResult<Tratamiento>> Get(Guid id, CancellationToken ct) =>
-        await db.Tratamientos.AsNoTracking().FirstOrDefaultAsync(t => t.IdTratamiento == id, ct) is { } item
-            ? Ok(item)
-            : NotFound();
+    public async Task<ActionResult<Tratamiento>> Get(Guid id, CancellationToken ct)
+    {
+        var userId = GetCurrentUserId();
+        if (userId == null) return Unauthorized();
+
+        var item = await db.Tratamientos.AsNoTracking().FirstOrDefaultAsync(t => t.IdTratamiento == id, ct);
+        if (item is null) return NotFound();
+
+        if (!await UserHasAccessToTratamientoAsync(userId.Value, item, ct))
+        {
+            return Forbid();
+        }
+
+        return Ok(item);
+    }
 
     [HttpPost]
     public async Task<ActionResult<Tratamiento>> Create(Tratamiento item, CancellationToken ct)
     {
+        var userId = GetCurrentUserId();
+        if (userId == null) return Unauthorized();
+
+        // Validar acceso al rancho a través del evento sanitario -> animal
+        var idRanchoEvento = await db.EventosSanitarios
+            .Where(e => e.IdEventoSanitario == item.IdEventoSanitario)
+            .Join(db.Animales, e => e.IdAnimal, a => a.IdAnimal, (e, a) => (Guid?)a.IdRancho)
+            .FirstOrDefaultAsync(ct);
+
+        if (!idRanchoEvento.HasValue || !await UserHasAccessToRanchoAsync(userId.Value, idRanchoEvento.Value, ct))
+        {
+            return Forbid();
+        }
+
         if (item.IdTratamiento == Guid.Empty)
             item.IdTratamiento = Guid.NewGuid();
 
@@ -42,31 +121,26 @@ public sealed class TratamientosController(FarmDbContext db, FarmDomainValidatio
         if (existing is not null)
             return Ok(existing);
 
-        if (item.FechaInicio == default) item.FechaInicio = DateTime.UtcNow;
-
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, item.IdAutor, ct);
-        if (authorError is not null) return BadRequest(authorError);
+        int authorId = userId.Value;
+        item.IdAutor = authorId;
 
         var validationError = await validator.ValidateTratamientoAsync(item, ct);
         if (validationError is not null) return BadRequest(validationError);
 
-        item.IdAutor = authorId;
-        item.Producto = item.Producto.Trim();
-        item.UnidadDosis = item.UnidadDosis.Trim();
-        item.Frecuencia = item.Frecuencia.Trim();
-        item.Responsable = item.Responsable.Trim();
-        item.Estado = item.Estado.Trim();
-        if (item.CreadoEn == default) item.CreadoEn = DateTime.UtcNow;
+        item.Tipo = item.Tipo.Trim();
+        item.Medicamento = item.Medicamento.Trim();
+        if (item.Dosis is not null) item.Dosis = item.Dosis.Trim();
         if (item.VersionRegistro <= 0) item.VersionRegistro = 1;
 
         db.Tratamientos.Add(item);
-        try
-        {
-            await db.SaveChangesAsync(ct);
-        }
-        catch (DbUpdateException)
-        {
-            return Conflict("No se pudo crear el tratamiento; verifica que el evento sanitario exista.");
+
+        try 
+        { 
+            await db.SaveChangesAsync(ct); 
+        } 
+        catch (DbUpdateException) 
+        { 
+            return Conflict("No se pudo registrar el tratamiento, verifique la referencia del evento sanitario."); 
         }
 
         return CreatedAtAction(nameof(Get), new { id = item.IdTratamiento }, item);
@@ -75,37 +149,47 @@ public sealed class TratamientosController(FarmDbContext db, FarmDomainValidatio
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(Guid id, Tratamiento input, CancellationToken ct)
     {
+        var userId = GetCurrentUserId();
+        if (userId == null) return Unauthorized();
+
         var item = await db.Tratamientos.FindAsync([id], ct);
         if (item is null) return NotFound();
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, input.IdAutor, ct);
-        if (authorError is not null) return BadRequest(authorError);
+        if (!await UserHasAccessToTratamientoAsync(userId.Value, item, ct))
+        {
+            return Forbid();
+        }
+
+        // Validar acceso al nuevo evento sanitario si cambió
+        var idRanchoNuevoEvento = await db.EventosSanitarios
+            .Where(e => e.IdEventoSanitario == input.IdEventoSanitario)
+            .Join(db.Animales, e => e.IdAnimal, a => a.IdAnimal, (e, a) => (Guid?)a.IdRancho)
+            .FirstOrDefaultAsync(ct);
+
+        if (!idRanchoNuevoEvento.HasValue || !await UserHasAccessToRanchoAsync(userId.Value, idRanchoNuevoEvento.Value, ct))
+        {
+            return Forbid();
+        }
+
+        int authorId = userId.Value;
 
         var validationError = await validator.ValidateTratamientoAsync(input, ct);
         if (validationError is not null) return BadRequest(validationError);
 
         item.IdEventoSanitario = input.IdEventoSanitario;
-        item.Producto = input.Producto.Trim();
-        item.Dosis = input.Dosis;
-        item.UnidadDosis = input.UnidadDosis.Trim();
-        item.ViaAdministracion = input.ViaAdministracion;
-        item.Frecuencia = input.Frecuencia.Trim();
-        item.FechaInicio = input.FechaInicio;
-        item.FechaFin = input.FechaFin;
-        item.Responsable = input.Responsable.Trim();
-        item.PrescripcionUri = input.PrescripcionUri;
-        item.Estado = input.Estado.Trim();
+        item.Tipo = input.Tipo.Trim();
+        item.Medicamento = input.Medicamento.Trim();
+        item.Dosis = input.Dosis?.Trim();
         item.IdAutor = authorId;
-        item.EliminadoEn = input.EliminadoEn;
         item.VersionRegistro++;
 
-        try
-        {
-            await db.SaveChangesAsync(ct);
-        }
-        catch (DbUpdateException)
-        {
-            return Conflict("No se pudo actualizar el tratamiento; verifica las referencias.");
+        try 
+        { 
+            await db.SaveChangesAsync(ct); 
+        } 
+        catch (DbUpdateException) 
+        { 
+            return Conflict("No se pudo actualizar el registro de tratamiento."); 
         }
 
         return NoContent();
@@ -114,8 +198,16 @@ public sealed class TratamientosController(FarmDbContext db, FarmDomainValidatio
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
+        var userId = GetCurrentUserId();
+        if (userId == null) return Unauthorized();
+
         var item = await db.Tratamientos.FindAsync([id], ct);
         if (item is null) return NotFound();
+
+        if (!await UserHasAccessToTratamientoAsync(userId.Value, item, ct))
+        {
+            return Forbid();
+        }
 
         var hasActiveRecordatorios = await db.Recordatorios.AsNoTracking()
             .AnyAsync(r => r.IdTratamiento == id && r.EliminadoEn == null, ct);

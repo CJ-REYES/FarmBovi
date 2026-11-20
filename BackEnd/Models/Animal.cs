@@ -14,7 +14,7 @@ public sealed class Animal
     public string Estado { get; set; } = string.Empty;
     public DateTime? FechaSalida { get; set; }
     public string? Observaciones { get; set; }
-    public Guid IdAutor { get; set; }
+    public int IdAutor { get; set; }
     public DateTime CreadoEn { get; set; } = DateTime.UtcNow;
     public long VersionRegistro { get; set; } = 1;
     public DateTime? EliminadoEn { get; set; }

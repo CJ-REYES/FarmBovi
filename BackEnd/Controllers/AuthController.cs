@@ -15,7 +15,7 @@ namespace FarmBovi.Api.Controllers;
 public sealed record LoginRequest([Required, EmailAddress, StringLength(254)] string Correo,
     [Required, StringLength(200, MinimumLength = 8)] string Contrasena);
 
-public sealed record LoginResponse(string Token, DateTime ExpiraEn, Guid IdUsuario, string Nombre,
+public sealed record LoginResponse(string Token, DateTime ExpiraEn, int IdUsuario, string Nombre,
     IReadOnlyList<LoginRancho> Ranchos);
 
 public sealed record LoginRancho(Guid IdRancho, string Nombre, string Rol);
@@ -52,8 +52,8 @@ public sealed class AuthController(FarmDbContext db, IConfiguration configuratio
         var expiration = now.AddMinutes(minutes);
         var claims = new[]
         {
-            new Claim(JwtRegisteredClaimNames.Sub, usuario.IdUsuario.ToString()),
-            new Claim(ClaimTypes.NameIdentifier, usuario.IdUsuario.ToString()),
+            new Claim(JwtRegisteredClaimNames.Sub, usuario.Id.ToString()),
+            new Claim(ClaimTypes.NameIdentifier, usuario.Id.ToString()),
             new Claim(ClaimTypes.Name, usuario.Nombre),
             new Claim(JwtRegisteredClaimNames.Email, usuario.Correo),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
@@ -62,12 +62,12 @@ public sealed class AuthController(FarmDbContext db, IConfiguration configuratio
         var token = new JwtSecurityToken(issuer, audience, claims, now, expiration, credentials);
         var ranchos = await (from ur in db.UsuarioRanchos.AsNoTracking()
                              join r in db.Ranchos.AsNoTracking() on ur.IdRancho equals r.IdRancho
-                             where ur.IdUsuario == usuario.IdUsuario && ur.FechaBaja == null &&
+                             where ur.IdUsuario == usuario.Id && ur.FechaBaja == null &&
                                    ur.Estado.ToLower() == "activo" && r.EliminadoEn == null
                              orderby r.Nombre
                              select new LoginRancho(r.IdRancho, r.Nombre, ur.Rol)).ToListAsync(ct);
 
         return Ok(new LoginResponse(new JwtSecurityTokenHandler().WriteToken(token), expiration,
-            usuario.IdUsuario, usuario.Nombre, ranchos));
+            usuario.Id, usuario.Nombre, ranchos));
     }
 }

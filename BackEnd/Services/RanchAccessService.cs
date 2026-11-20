@@ -14,42 +14,42 @@ public sealed class RanchAccessService(FarmDbContext db)
     /// <summary>Roles (comparados en minúsculas) con permisos de administración sobre un rancho.</summary>
     public static readonly string[] AdminRoles = ["admin", "administrador", "propietario"];
 
-    public static Guid? GetUserId(ClaimsPrincipal user)
+   public static int? GetUserId(ClaimsPrincipal user)
     {
         var text = user.FindFirstValue(ClaimTypes.NameIdentifier) ?? user.FindFirstValue("sub");
-        return Guid.TryParse(text, out var id) && id != Guid.Empty ? id : null;
+        return int.TryParse(text, out var id) && id > 0 ? id : null;
     }
 
     /// <summary>Ranchos donde el usuario tiene una membresía activa.</summary>
-    public IQueryable<Guid> ActiveRanchIds(Guid userId) =>
+    public IQueryable<Guid> ActiveRanchIds(int userId) =>
         from ur in db.UsuarioRanchos.AsNoTracking()
-        join u in db.Usuarios.AsNoTracking() on ur.IdUsuario equals u.IdUsuario
+        join u in db.Usuarios.AsNoTracking() on ur.IdUsuario equals u.Id
         join r in db.Ranchos.AsNoTracking() on ur.IdRancho equals r.IdRancho
         where ur.IdUsuario == userId && ur.FechaBaja == null && ur.Estado.ToLower() == "activo" &&
               u.Estado.ToLower() == "activo" && r.EliminadoEn == null
         select ur.IdRancho;
 
     /// <summary>Ranchos donde el usuario es administrador activo.</summary>
-    public IQueryable<Guid> AdminRanchIds(Guid userId) =>
+    public IQueryable<Guid> AdminRanchIds(int userId) =>
         from ur in db.UsuarioRanchos.AsNoTracking()
-        join u in db.Usuarios.AsNoTracking() on ur.IdUsuario equals u.IdUsuario
+        join u in db.Usuarios.AsNoTracking() on ur.IdUsuario equals u.Id
         join r in db.Ranchos.AsNoTracking() on ur.IdRancho equals r.IdRancho
         where ur.IdUsuario == userId && ur.FechaBaja == null && ur.Estado.ToLower() == "activo" &&
               u.Estado.ToLower() == "activo" && r.EliminadoEn == null &&
               AdminRoles.Contains(ur.Rol.ToLower())
         select ur.IdRancho;
 
-    public Task<bool> CanAccessAsync(Guid userId, Guid ranchId, CancellationToken ct) =>
+    public Task<bool> CanAccessAsync(int userId, Guid ranchId, CancellationToken ct) =>
         ActiveRanchIds(userId).AnyAsync(id => id == ranchId, ct);
 
-    public Task<bool> IsAdminAsync(Guid userId, Guid ranchId, CancellationToken ct) =>
+    public Task<bool> IsAdminAsync(int userId, Guid ranchId, CancellationToken ct) =>
         AdminRanchIds(userId).AnyAsync(id => id == ranchId, ct);
 
-    public Task<bool> IsAdminOfAnyAsync(Guid userId, CancellationToken ct) =>
+    public Task<bool> IsAdminOfAnyAsync(int userId, CancellationToken ct) =>
         AdminRanchIds(userId).AnyAsync(ct);
 
     /// <summary>Ranchos activos (no dados de baja) a los que pertenece un usuario objetivo.</summary>
-    public IQueryable<Guid> MembershipRanchIds(Guid userId) =>
+    public IQueryable<Guid> MembershipRanchIds(int userId) =>
         db.UsuarioRanchos.AsNoTracking()
             .Where(ur => ur.IdUsuario == userId && ur.FechaBaja == null)
             .Select(ur => ur.IdRancho);
@@ -59,7 +59,7 @@ public sealed class RanchAccessService(FarmDbContext db)
     /// administrador de todos los ranchos donde el objetivo tiene membresía. Un usuario sin ranchos
     /// solo puede ser administrado por quien sea administrador de algún rancho.
     /// </summary>
-    public async Task<bool> CanManageUserAsync(Guid adminId, Guid targetId, CancellationToken ct)
+    public async Task<bool> CanManageUserAsync(int adminId, int targetId, CancellationToken ct)
     {
         var adminRanchIds = await AdminRanchIds(adminId).Distinct().ToListAsync(ct);
         if (adminRanchIds.Count == 0) return false;
@@ -68,7 +68,7 @@ public sealed class RanchAccessService(FarmDbContext db)
     }
 
     /// <summary>Puede ver a otro usuario si comparte al menos un rancho donde el solicitante es administrador.</summary>
-    public async Task<bool> CanViewUserAsync(Guid requesterId, Guid targetId, CancellationToken ct)
+    public async Task<bool> CanViewUserAsync(int requesterId, int targetId, CancellationToken ct)
     {
         if (requesterId == targetId) return true;
         if (await CanManageUserAsync(requesterId, targetId, ct)) return true;

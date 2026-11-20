@@ -46,7 +46,11 @@ public sealed class RanchScopeFilter(RanchScopeAttribute options, RanchAccessSer
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {
         var ct = context.HttpContext.RequestAborted;
-        if (RanchAccessService.GetUserId(context.HttpContext.User) is not { } userId)
+        
+        // Obtenemos el ID de usuario del token. Si tu método GetUserId en RanchAccessService 
+        // devuelve int?, esto validará correctamente el entero.
+        var userIdValue = RanchAccessService.GetUserId(context.HttpContext.User);
+        if (userIdValue is not { } userId)
         {
             context.Result = new UnauthorizedResult();
             return;
