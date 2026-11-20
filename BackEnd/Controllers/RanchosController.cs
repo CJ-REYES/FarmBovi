@@ -46,7 +46,8 @@ public sealed class RanchosController(FarmDbContext db, FarmDomainValidationServ
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
-    public async Task<ActionResult<RanchoResponseDto>> Create(RanchoCreateDto dto, CancellationToken ct)
+    public async Task<ActionResult<RanchoResponseDto>> Create(
+        [FromServices] RanchAccessService access, RanchoCreateDto dto, CancellationToken ct)
     {
         var id = dto.IdRancho ?? Guid.NewGuid();
 
@@ -91,6 +92,20 @@ public sealed class RanchosController(FarmDbContext db, FarmDomainValidationServ
         }
         catch (DbUpdateException)
         {
+            var collision = await db.Ranchos.AsNoTracking().FirstOrDefaultAsync(r => r.IdRancho == id, ct);
+            if (collision is not null)
+            {
+                var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
+                if (ranchIds.Contains(collision.IdRancho))
+                {
+                    return MatchesRancho(collision, dto)
+                        ? Ok(ToResponseDto(collision))
+                        : this.ConflictProblem("Ya existe un rancho con el identificador proporcionado y contenido diferente.");
+                }
+
+                return this.ConflictProblem("Conflicto con un recurso existente.");
+            }
+
             return this.ConflictProblem("No se pudo crear el rancho.");
         }
 

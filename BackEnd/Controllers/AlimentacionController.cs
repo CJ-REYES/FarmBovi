@@ -46,7 +46,8 @@ public sealed class AlimentacionController(FarmDbContext db, FarmDomainValidatio
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
-    public async Task<ActionResult<AlimentacionResponseDto>> Create(AlimentacionCreateDto dto, CancellationToken ct)
+    public async Task<ActionResult<AlimentacionResponseDto>> Create(
+        [FromServices] RanchAccessService access, AlimentacionCreateDto dto, CancellationToken ct)
     {
         var id = dto.IdAlimentacion ?? Guid.NewGuid();
 
@@ -91,6 +92,22 @@ public sealed class AlimentacionController(FarmDbContext db, FarmDomainValidatio
         }
         catch (DbUpdateException)
         {
+            var collision = await db.Alimentaciones.AsNoTracking().FirstOrDefaultAsync(a => a.IdAlimentacion == id, ct);
+            if (collision is not null)
+            {
+                var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
+                var belongsToRanch = (collision.IdAnimal != null && db.Animales.Any(a => a.IdAnimal == collision.IdAnimal && ranchIds.Contains(a.IdRancho))) ||
+                                     (collision.IdAnimal == null && collision.IdLote != null && db.Lotes.Any(l => l.IdLote == collision.IdLote && ranchIds.Contains(l.IdRancho)));
+                if (belongsToRanch)
+                {
+                    return MatchesAlimentacion(collision, dto)
+                        ? Ok(ToResponseDto(collision))
+                        : this.ConflictProblem("Ya existe un registro de alimentación con el identificador proporcionado y contenido diferente.");
+                }
+
+                return this.ConflictProblem("Conflicto con un recurso existente.");
+            }
+
             return this.ConflictProblem("No se pudo registrar la alimentación; verifica las referencias.");
         }
 

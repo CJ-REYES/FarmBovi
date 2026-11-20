@@ -46,7 +46,8 @@ public sealed class LotesController(FarmDbContext db, FarmDomainValidationServic
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
-    public async Task<ActionResult<LoteResponseDto>> Create(LoteCreateDto dto, CancellationToken ct)
+    public async Task<ActionResult<LoteResponseDto>> Create(
+        [FromServices] RanchAccessService access, LoteCreateDto dto, CancellationToken ct)
     {
         var id = dto.IdLote ?? Guid.NewGuid();
 
@@ -83,6 +84,20 @@ public sealed class LotesController(FarmDbContext db, FarmDomainValidationServic
         }
         catch (DbUpdateException)
         {
+            var collision = await db.Lotes.AsNoTracking().FirstOrDefaultAsync(l => l.IdLote == id, ct);
+            if (collision is not null)
+            {
+                var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
+                if (ranchIds.Contains(collision.IdRancho))
+                {
+                    return MatchesLote(collision, dto)
+                        ? Ok(ToResponseDto(collision))
+                        : this.ConflictProblem("Ya existe un lote con el identificador proporcionado y contenido diferente.");
+                }
+
+                return this.ConflictProblem("Conflicto con un recurso existente.");
+            }
+
             return this.ConflictProblem("Ya existe el nombre de lote en ese rancho o el rancho no existe.");
         }
 
@@ -100,6 +115,9 @@ public sealed class LotesController(FarmDbContext db, FarmDomainValidationServic
     {
         var item = await db.Lotes.FindAsync([id], ct);
         if (item is null) return this.NotFoundProblem("El lote solicitado no existe.");
+
+        if (dto.IdRancho != item.IdRancho)
+            return this.ValidationError("No se permite transferir un lote a otro rancho mediante actualización directa.", nameof(dto.IdRancho));
 
         var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
         if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));

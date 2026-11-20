@@ -46,7 +46,8 @@ public sealed class TratamientosController(FarmDbContext db, FarmDomainValidatio
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
-    public async Task<ActionResult<TratamientoResponseDto>> Create(TratamientoCreateDto dto, CancellationToken ct)
+    public async Task<ActionResult<TratamientoResponseDto>> Create(
+        [FromServices] RanchAccessService access, TratamientoCreateDto dto, CancellationToken ct)
     {
         var id = dto.IdTratamiento ?? Guid.NewGuid();
 
@@ -90,6 +91,21 @@ public sealed class TratamientosController(FarmDbContext db, FarmDomainValidatio
         }
         catch (DbUpdateException)
         {
+            var collision = await db.Tratamientos.AsNoTracking().FirstOrDefaultAsync(t => t.IdTratamiento == id, ct);
+            if (collision is not null)
+            {
+                var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
+                var belongsToRanch = db.EventosSanitarios.Any(e => e.IdEventoSanitario == collision.IdEventoSanitario && db.Animales.Any(a => a.IdAnimal == e.IdAnimal && ranchIds.Contains(a.IdRancho)));
+                if (belongsToRanch)
+                {
+                    return MatchesTratamiento(collision, dto)
+                        ? Ok(ToResponseDto(collision))
+                        : this.ConflictProblem("Ya existe un tratamiento con el identificador proporcionado y contenido diferente.");
+                }
+
+                return this.ConflictProblem("Conflicto con un recurso existente.");
+            }
+
             return this.ConflictProblem("No se pudo crear el tratamiento; verifica que el evento sanitario exista.");
         }
 
@@ -107,6 +123,9 @@ public sealed class TratamientosController(FarmDbContext db, FarmDomainValidatio
     {
         var item = await db.Tratamientos.FindAsync([id], ct);
         if (item is null) return this.NotFoundProblem("El tratamiento solicitado no existe.");
+
+        if (dto.IdEventoSanitario != item.IdEventoSanitario)
+            return this.ValidationError("No se permite cambiar el evento sanitario asociado a un tratamiento.", nameof(dto.IdEventoSanitario));
 
         var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
         if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));

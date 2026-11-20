@@ -46,7 +46,8 @@ public sealed class EventosSanitariosController(FarmDbContext db, FarmDomainVali
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
-    public async Task<ActionResult<EventoSanitarioResponseDto>> Create(EventoSanitarioCreateDto dto, CancellationToken ct)
+    public async Task<ActionResult<EventoSanitarioResponseDto>> Create(
+        [FromServices] RanchAccessService access, EventoSanitarioCreateDto dto, CancellationToken ct)
     {
         var id = dto.IdEventoSanitario ?? Guid.NewGuid();
 
@@ -88,6 +89,21 @@ public sealed class EventosSanitariosController(FarmDbContext db, FarmDomainVali
         }
         catch (DbUpdateException)
         {
+            var collision = await db.EventosSanitarios.AsNoTracking().FirstOrDefaultAsync(e => e.IdEventoSanitario == id, ct);
+            if (collision is not null)
+            {
+                var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
+                var belongsToRanch = db.Animales.Any(a => a.IdAnimal == collision.IdAnimal && ranchIds.Contains(a.IdRancho));
+                if (belongsToRanch)
+                {
+                    return MatchesEventoSanitario(collision, dto)
+                        ? Ok(ToResponseDto(collision))
+                        : this.ConflictProblem("Ya existe un evento sanitario con el identificador proporcionado y contenido diferente.");
+                }
+
+                return this.ConflictProblem("Conflicto con un recurso existente.");
+            }
+
             return this.ConflictProblem("No se pudo crear el evento sanitario; verifica que el animal exista.");
         }
 
@@ -105,6 +121,9 @@ public sealed class EventosSanitariosController(FarmDbContext db, FarmDomainVali
     {
         var item = await db.EventosSanitarios.FindAsync([id], ct);
         if (item is null) return this.NotFoundProblem("El evento sanitario solicitado no existe.");
+
+        if (dto.IdAnimal != item.IdAnimal)
+            return this.ValidationError("No se permite cambiar el animal asociado a un evento sanitario.", nameof(dto.IdAnimal));
 
         var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
         if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));

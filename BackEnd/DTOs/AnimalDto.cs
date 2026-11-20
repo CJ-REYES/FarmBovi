@@ -63,8 +63,8 @@ public sealed class AnimalCreateDto : IValidatableObject
 
 public sealed class AnimalUpdateDto : IValidatableObject
 {
-    [Required, NotEmptyGuid]
-    public Guid IdRancho { get; set; }
+    [NotEmptyGuid(AllowNull = true)]
+    public Guid? IdRancho { get; set; }
 
     [NotEmptyGuid(AllowNull = true)]
     public Guid? IdLote { get; set; }

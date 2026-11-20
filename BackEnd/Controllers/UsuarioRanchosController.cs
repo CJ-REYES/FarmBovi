@@ -44,7 +44,8 @@ public sealed class UsuarioRanchosController(FarmDbContext db) : ControllerBase
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
-    public async Task<ActionResult<UsuarioRanchoResponseDto>> Create(UsuarioRanchoCreateDto dto, CancellationToken ct)
+    public async Task<ActionResult<UsuarioRanchoResponseDto>> Create(
+        [FromServices] RanchAccessService access, UsuarioRanchoCreateDto dto, CancellationToken ct)
     {
         var id = dto.IdUsuarioRancho ?? Guid.NewGuid();
 
@@ -80,6 +81,21 @@ public sealed class UsuarioRanchosController(FarmDbContext db) : ControllerBase
         }
         catch (DbUpdateException)
         {
+            var collision = await db.UsuarioRanchos.AsNoTracking().FirstOrDefaultAsync(ur => ur.IdUsuarioRancho == id, ct);
+            if (collision is not null)
+            {
+                var userId = RanchAccessService.GetUserId(User) ?? Guid.Empty;
+                var adminRanchIds = access.AdminRanchIds(userId);
+                if (collision.IdUsuario == userId || adminRanchIds.Contains(collision.IdRancho))
+                {
+                    return MatchesUsuarioRancho(collision, dto)
+                        ? Ok(ToResponseDto(collision))
+                        : this.ConflictProblem("Ya existe una asignación con el identificador proporcionado y contenido diferente.");
+                }
+
+                return this.ConflictProblem("Conflicto con un recurso existente.");
+            }
+
             return this.ConflictProblem("La asignación ya existe o el usuario/rancho no existen.");
         }
 
@@ -97,6 +113,12 @@ public sealed class UsuarioRanchosController(FarmDbContext db) : ControllerBase
     {
         var item = await db.UsuarioRanchos.FindAsync([id], ct);
         if (item is null) return this.NotFoundProblem("La asignación usuario-rancho solicitada no existe.");
+
+        if (dto.IdUsuario != item.IdUsuario)
+            return this.ValidationError("No se permite cambiar el usuario de una asignación usuario-rancho.", nameof(dto.IdUsuario));
+
+        if (dto.IdRancho != item.IdRancho)
+            return this.ValidationError("No se permite cambiar el rancho de una asignación usuario-rancho.", nameof(dto.IdRancho));
 
         var userExists = await db.Usuarios.AsNoTracking().AnyAsync(u => u.IdUsuario == dto.IdUsuario, ct);
         if (!userExists) return this.ValidationError("El usuario especificado no existe.", nameof(dto.IdUsuario));

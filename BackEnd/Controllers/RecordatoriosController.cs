@@ -46,7 +46,8 @@ public sealed class RecordatoriosController(FarmDbContext db, FarmDomainValidati
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
-    public async Task<ActionResult<RecordatorioResponseDto>> Create(RecordatorioCreateDto dto, CancellationToken ct)
+    public async Task<ActionResult<RecordatorioResponseDto>> Create(
+        [FromServices] RanchAccessService access, RecordatorioCreateDto dto, CancellationToken ct)
     {
         var id = dto.IdRecordatorio ?? Guid.NewGuid();
 
@@ -92,6 +93,20 @@ public sealed class RecordatoriosController(FarmDbContext db, FarmDomainValidati
         }
         catch (DbUpdateException)
         {
+            var collision = await db.Recordatorios.AsNoTracking().FirstOrDefaultAsync(r => r.IdRecordatorio == id, ct);
+            if (collision is not null)
+            {
+                var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
+                if (ranchIds.Contains(collision.IdRancho))
+                {
+                    return MatchesRecordatorio(collision, dto)
+                        ? Ok(ToResponseDto(collision))
+                        : this.ConflictProblem("Ya existe un recordatorio con el identificador proporcionado y contenido diferente.");
+                }
+
+                return this.ConflictProblem("Conflicto con un recurso existente.");
+            }
+
             return this.ConflictProblem("No se pudo crear el recordatorio; verifica que el rancho y las referencias existan.");
         }
 
@@ -181,17 +196,36 @@ public sealed class RecordatoriosController(FarmDbContext db, FarmDomainValidati
         return NoContent();
     }
 
-    private static bool MatchesRecordatorio(Recordatorio existing, RecordatorioCreateDto dto) =>
-        existing.IdRancho == dto.IdRancho &&
-        existing.IdAnimal == dto.IdAnimal &&
-        existing.IdLote == dto.IdLote &&
-        existing.IdTratamiento == dto.IdTratamiento &&
-        existing.IdResponsable == dto.IdResponsable &&
-        ApiProblemResults.SameText(existing.Tipo, dto.Tipo) &&
-        ApiProblemResults.SameText(existing.Descripcion, dto.Descripcion) &&
-        ApiProblemResults.SameUtcInstant(existing.FechaProgramada, dto.FechaProgramada) &&
-        ApiProblemResults.SameText(existing.Estado, dto.Estado) &&
-        ApiProblemResults.SameUtcInstant(existing.FechaCompletado, dto.FechaCompletado);
+    private static bool MatchesRecordatorio(Recordatorio existing, RecordatorioCreateDto dto)
+    {
+        if (existing.IdRancho != dto.IdRancho ||
+            existing.IdAnimal != dto.IdAnimal ||
+            existing.IdLote != dto.IdLote ||
+            existing.IdTratamiento != dto.IdTratamiento ||
+            existing.IdResponsable != dto.IdResponsable ||
+            !ApiProblemResults.SameText(existing.Tipo, dto.Tipo) ||
+            !ApiProblemResults.SameText(existing.Descripcion, dto.Descripcion) ||
+            !ApiProblemResults.SameUtcInstant(existing.FechaProgramada, dto.FechaProgramada) ||
+            !ApiProblemResults.SameText(existing.Estado, dto.Estado))
+        {
+            return false;
+        }
+
+        if (dto.FechaCompletado.HasValue)
+        {
+            return ApiProblemResults.SameUtcInstant(existing.FechaCompletado, dto.FechaCompletado);
+        }
+
+        // Si el cliente no envió FechaCompletado:
+        // Si el estado es "Completado", el servidor asigna fecha de completado automáticamente;
+        // por tanto, que existing tenga una fecha generada es una coincidencia legítima.
+        if (string.Equals(dto.Estado.Trim(), "Completado", StringComparison.OrdinalIgnoreCase))
+        {
+            return existing.FechaCompletado.HasValue;
+        }
+
+        return !existing.FechaCompletado.HasValue;
+    }
 
     private static RecordatorioResponseDto ToResponseDto(Recordatorio r) => new()
     {

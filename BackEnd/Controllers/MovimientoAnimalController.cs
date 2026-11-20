@@ -46,7 +46,8 @@ public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValid
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
-    public async Task<ActionResult<MovimientoAnimalResponseDto>> Create(MovimientoAnimalCreateDto dto, CancellationToken ct)
+    public async Task<ActionResult<MovimientoAnimalResponseDto>> Create(
+        [FromServices] RanchAccessService access, MovimientoAnimalCreateDto dto, CancellationToken ct)
     {
         var id = dto.IdMovimiento ?? Guid.NewGuid();
 
@@ -112,6 +113,22 @@ public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValid
         catch (DbUpdateException)
         {
             await tx.RollbackAsync(ct);
+
+            var collision = await db.MovimientosAnimales.AsNoTracking().FirstOrDefaultAsync(m => m.IdMovimiento == id, ct);
+            if (collision is not null)
+            {
+                var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
+                var belongsToRanch = db.Animales.Any(a => a.IdAnimal == collision.IdAnimal && ranchIds.Contains(a.IdRancho));
+                if (belongsToRanch)
+                {
+                    return MatchesMovimiento(collision, dto)
+                        ? Ok(ToResponseDto(collision))
+                        : this.ConflictProblem("Ya existe un movimiento con el identificador proporcionado y contenido diferente.");
+                }
+
+                return this.ConflictProblem("Conflicto con un recurso existente.");
+            }
+
             return this.ConflictProblem("No se pudo registrar el movimiento; verifica las referencias.");
         }
 
@@ -131,6 +148,9 @@ public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValid
 
         var item = await db.MovimientosAnimales.FindAsync([id], ct);
         if (item is null) return this.NotFoundProblem("El movimiento de animal solicitado no existe.");
+
+        if (dto.IdAnimal != item.IdAnimal)
+            return this.ValidationError("No se permite cambiar el animal asociado a un movimiento.", nameof(dto.IdAnimal));
 
         var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
         if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));

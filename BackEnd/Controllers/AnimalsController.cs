@@ -46,7 +46,8 @@ public sealed class AnimalsController(FarmDbContext db, FarmDomainValidationServ
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
-    public async Task<ActionResult<AnimalResponseDto>> Create(AnimalCreateDto dto, CancellationToken ct)
+    public async Task<ActionResult<AnimalResponseDto>> Create(
+        [FromServices] RanchAccessService access, AnimalCreateDto dto, CancellationToken ct)
     {
         var id = dto.IdAnimal ?? Guid.NewGuid();
 
@@ -108,9 +109,24 @@ public sealed class AnimalsController(FarmDbContext db, FarmDomainValidationServ
             await db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
         }
-        catch (DbUpdateException)
+        catch (Exception ex) when (ex is DbUpdateException or InvalidOperationException or ArgumentException)
         {
             await tx.RollbackAsync(ct);
+
+            var collision = await db.Animales.AsNoTracking().FirstOrDefaultAsync(a => a.IdAnimal == id, ct);
+            if (collision is not null)
+            {
+                var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
+                if (ranchIds.Contains(collision.IdRancho))
+                {
+                    return MatchesAnimal(collision, dto)
+                        ? Ok(ToResponseDto(collision))
+                        : this.ConflictProblem("Ya existe un animal con el identificador proporcionado y contenido diferente.");
+                }
+
+                return this.ConflictProblem("Conflicto con un recurso existente.");
+            }
+
             return this.ConflictProblem("El arete ya existe en este rancho o las referencias no son válidas.");
         }
 
@@ -130,6 +146,11 @@ public sealed class AnimalsController(FarmDbContext db, FarmDomainValidationServ
 
         var item = await db.Animales.FindAsync([id], ct);
         if (item is null) return this.NotFoundProblem("El animal solicitado no existe.");
+
+        if (dto.IdRancho.HasValue && dto.IdRancho.Value != item.IdRancho)
+        {
+            return this.ValidationError("No se permite transferir un animal a otro rancho mediante actualización directa; use el flujo de movimientos.", nameof(dto.IdRancho));
+        }
 
         var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
         if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
