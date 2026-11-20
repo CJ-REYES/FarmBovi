@@ -47,6 +47,26 @@ public sealed class GenealogiaTests
         return controller;
     }
 
+    private static TProblem AssertProblemStatus<TProblem>(IActionResult result, int expectedStatus)
+        where TProblem : ProblemDetails
+    {
+        var objectResult = Assert.IsAssignableFrom<ObjectResult>(result);
+        Assert.Equal(expectedStatus, objectResult.StatusCode);
+        return Assert.IsAssignableFrom<TProblem>(objectResult.Value);
+    }
+
+    private static ValidationProblemDetails AssertBadRequestProblem(IActionResult result) =>
+        AssertProblemStatus<ValidationProblemDetails>(result, StatusCodes.Status400BadRequest);
+
+    private static ProblemDetails AssertConflictProblem(IActionResult result) =>
+        AssertProblemStatus<ProblemDetails>(result, StatusCodes.Status409Conflict);
+
+    private static ProblemDetails AssertNotFoundProblem(IActionResult result) =>
+        AssertProblemStatus<ProblemDetails>(result, StatusCodes.Status404NotFound);
+
+    private static ProblemDetails AssertForbiddenProblem(IActionResult result) =>
+        AssertProblemStatus<ProblemDetails>(result, StatusCodes.Status403Forbidden);
+
     private static async Task<(Guid UserId, Guid RanchoId, Guid OtroRanchoId)> SeedBaseAsync(FarmDbContext db)
     {
         var userId = Guid.NewGuid();
@@ -169,13 +189,13 @@ public sealed class GenealogiaTests
         var controller = CreateController(db, userId);
 
         var selfFather = await controller.Registrar(new RegistrarGenealogiaRequest(toro.IdAnimal, toro.IdAnimal, vaca.IdAnimal), default);
-        Assert.IsType<BadRequestObjectResult>(selfFather);
+        AssertBadRequestProblem(selfFather);
 
         var selfMother = await controller.Registrar(new RegistrarGenealogiaRequest(vaca.IdAnimal, toro.IdAnimal, vaca.IdAnimal), default);
-        Assert.IsType<BadRequestObjectResult>(selfMother);
+        AssertBadRequestProblem(selfMother);
 
         var sameParents = await controller.Registrar(new RegistrarGenealogiaRequest(toro.IdAnimal, vaca.IdAnimal, vaca.IdAnimal), default);
-        Assert.IsType<BadRequestObjectResult>(sameParents);
+        AssertBadRequestProblem(sameParents);
     }
 
     [Fact]
@@ -198,11 +218,11 @@ public sealed class GenealogiaTests
 
         // Ciclo directo: B -> A
         var directCycle = await controller.Registrar(new RegistrarGenealogiaRequest(a.IdAnimal, b.IdAnimal, null), default);
-        Assert.IsType<BadRequestObjectResult>(directCycle);
+        AssertBadRequestProblem(directCycle);
 
         // Ciclo indirecto (3 generaciones): C -> A
         var indirectCycle = await controller.Registrar(new RegistrarGenealogiaRequest(a.IdAnimal, c.IdAnimal, null), default);
-        Assert.IsType<BadRequestObjectResult>(indirectCycle);
+        AssertBadRequestProblem(indirectCycle);
     }
 
     [Fact]
@@ -219,12 +239,13 @@ public sealed class GenealogiaTests
         var controller = CreateController(db, userId);
 
         var forbiddenParent = await controller.Registrar(new RegistrarGenealogiaRequest(animalPropio.IdAnimal, animalAjeno.IdAnimal, null), default);
-        var obj1 = Assert.IsType<ObjectResult>(forbiddenParent);
-        Assert.Equal(StatusCodes.Status403Forbidden, obj1.StatusCode);
+        var p1 = AssertForbiddenProblem(forbiddenParent);
+        Assert.DoesNotContain("AJEN-01", p1.Detail ?? string.Empty);
+        Assert.DoesNotContain(otroRanchoId.ToString(), p1.Detail ?? string.Empty);
 
         var forbiddenQuery = await controller.ObtenerPadres(animalAjeno.IdAnimal, 1, default);
-        var obj2 = Assert.IsType<ObjectResult>(forbiddenQuery);
-        Assert.Equal(StatusCodes.Status403Forbidden, obj2.StatusCode);
+        var p2 = AssertForbiddenProblem(forbiddenQuery);
+        Assert.DoesNotContain("AJEN-01", p2.Detail ?? string.Empty);
     }
 
     [Fact]
@@ -251,7 +272,7 @@ public sealed class GenealogiaTests
         Assert.Equal(m1.IdAnimal, updatedDto.IdMadre);
         Assert.Equal(2, updatedDto.VersionRegistro);
 
-        Assert.IsType<NoContentResult>(await controller.Eliminar(cria.IdAnimal, default));
+        Assert.IsType<NoContentResult>(await controller.Eliminar(cria.IdAnimal, versionRegistro: 2, ct: default));
         Assert.IsType<CreatedAtActionResult>(await controller.Registrar(new RegistrarGenealogiaRequest(cria.IdAnimal, p1.IdAnimal, m1.IdAnimal), default));
     }
 
@@ -306,10 +327,10 @@ public sealed class GenealogiaTests
         var controller = CreateController(db, userId);
 
         var padreHembra = await controller.Registrar(new RegistrarGenealogiaRequest(cria1.IdAnimal, vacaComoPadre.IdAnimal, null), default);
-        Assert.IsType<BadRequestObjectResult>(padreHembra);
+        AssertBadRequestProblem(padreHembra);
 
         var madreMacho = await controller.Registrar(new RegistrarGenealogiaRequest(cria1.IdAnimal, null, toroComoMadre.IdAnimal), default);
-        Assert.IsType<BadRequestObjectResult>(madreMacho);
+        AssertBadRequestProblem(madreMacho);
 
         // Sexo desconocido no bloquea registros incompletos.
         var unknownAllowed = await controller.Registrar(new RegistrarGenealogiaRequest(cria2.IdAnimal, sexoDesconocido.IdAnimal, null), default);
@@ -339,10 +360,10 @@ public sealed class GenealogiaTests
 
         var controller = CreateController(db, userId);
 
-        Assert.IsType<BadRequestObjectResult>(
+        AssertBadRequestProblem(
             await controller.Registrar(new RegistrarGenealogiaRequest(cria.IdAnimal, padreJoven.IdAnimal, null), default));
 
-        Assert.IsType<BadRequestObjectResult>(
+        AssertBadRequestProblem(
             await controller.Registrar(new RegistrarGenealogiaRequest(cria.IdAnimal, null, madreMismoDia.IdAnimal), default));
 
         Assert.IsType<CreatedAtActionResult>(
@@ -365,7 +386,7 @@ public sealed class GenealogiaTests
         var obs500 = "  " + new string('a', 500) + "  ";
 
         var bad501 = await controller.Registrar(new RegistrarGenealogiaRequest(cria.IdAnimal, padre.IdAnimal, null, obs501), default);
-        Assert.IsType<BadRequestObjectResult>(bad501);
+        AssertBadRequestProblem(bad501);
 
         var ok500 = await controller.Registrar(new RegistrarGenealogiaRequest(cria.IdAnimal, padre.IdAnimal, null, obs500), default);
         var created = Assert.IsType<CreatedAtActionResult>(ok500);
@@ -373,7 +394,7 @@ public sealed class GenealogiaTests
         Assert.Equal(500, dto.Observaciones?.Length);
 
         var badUpdate501 = await controller.Actualizar(cria.IdAnimal, new ActualizarGenealogiaRequest(padre.IdAnimal, null, obs501, VersionRegistro: 1), default);
-        Assert.IsType<BadRequestObjectResult>(badUpdate501);
+        AssertBadRequestProblem(badUpdate501);
     }
 
     [Fact]
@@ -429,10 +450,9 @@ public sealed class GenealogiaTests
         var fetched = Assert.IsType<GenealogiaRegistroDto>(getRes.Value);
         Assert.Equal(createdDto.IdGenealogia, fetched.IdGenealogia);
 
-        Assert.IsType<NotFoundObjectResult>(await controller.ObtenerPorId(Guid.NewGuid(), default));
+        AssertNotFoundProblem(await controller.ObtenerPorId(Guid.NewGuid(), default));
 
-        var forbidden = Assert.IsType<ObjectResult>(await controller.ObtenerPorId(relAjena.IdGenealogia, default));
-        Assert.Equal(StatusCodes.Status403Forbidden, forbidden.StatusCode);
+        AssertForbiddenProblem(await controller.ObtenerPorId(relAjena.IdGenealogia, default));
     }
 
     [Fact]
@@ -468,7 +488,7 @@ public sealed class GenealogiaTests
             Assert.IsType<OkObjectResult>(okRes);
 
             var staleRes = await c1.Actualizar(criaId, new ActualizarGenealogiaRequest(padre1Id, null, "stale", VersionRegistro: 1), default);
-            Assert.IsType<ConflictObjectResult>(staleRes);
+            AssertConflictProblem(staleRes);
         }
 
         // Conflicto optimista real de EF Core (DbUpdateConcurrencyException) entre dos servicios concurrentes.
@@ -509,7 +529,7 @@ public sealed class GenealogiaTests
         Assert.IsType<OkObjectResult>(
             await controller.Actualizar(cria.IdAnimal, new ActualizarGenealogiaRequest(padre.IdAnimal, madre.IdAnimal, "Edit", VersionRegistro: 1), default));
 
-        Assert.IsType<NoContentResult>(await controller.Eliminar(cria.IdAnimal, default));
+        Assert.IsType<NoContentResult>(await controller.Eliminar(cria.IdAnimal, versionRegistro: 2, ct: default));
 
         var cambios = await db.CambiosServidor.AsNoTracking()
             .Where(c => c.Entidad == nameof(GenealogiaAnimal) && c.IdRegistro == dto.IdGenealogia)
@@ -536,6 +556,113 @@ public sealed class GenealogiaTests
         using var deleteDoc = JsonDocument.Parse(cambios[2].Despues!);
         Assert.NotEqual(JsonValueKind.Null, deleteDoc.RootElement.GetProperty("eliminadoEn").ValueKind);
         Assert.Equal(3L, deleteDoc.RootElement.GetProperty("versionRegistro").GetInt64());
+    }
+
+    [Fact]
+    public async Task UsuarioConAccesoADosRanchos_NoPuedeCruzarParentescoNiConsultarEntreRanchos()
+    {
+        await using var db = CreateInMemoryDb(nameof(UsuarioConAccesoADosRanchos_NoPuedeCruzarParentescoNiConsultarEntreRanchos));
+        var (userId, ranchoA, ranchoB) = await SeedBaseAsync(db);
+
+        // El mismo usuario tiene membresía activa en ambos ranchos (A y B).
+        db.UsuarioRanchos.Add(new UsuarioRancho
+        {
+            IdUsuarioRancho = Guid.NewGuid(),
+            IdUsuario = userId,
+            IdRancho = ranchoB,
+            Rol = "Administrador",
+            Estado = "activo",
+            FechaAlta = DateTime.UtcNow
+        });
+
+        var padreRanchoA = NewAnimal(ranchoA, userId, "A-PAD", "Macho");
+        var criaRanchoA = NewAnimal(ranchoA, userId, "A-CRIA", "Macho");
+        // Progenitores en Rancho B con arete identificable y hasta sexo incompatible para comprobar
+        // que el aislamiento rechaza antes de validar o revelar datos de Rancho B.
+        var padreRanchoB = NewAnimal(ranchoB, userId, "B-SECRETO-PAD", "Hembra");
+        var madreRanchoB = NewAnimal(ranchoB, userId, "B-SECRETO-MAD", "Macho");
+        padreRanchoB.FechaNacimiento = new DateTime(2030, 1, 1);
+        criaRanchoA.FechaNacimiento = new DateTime(2024, 1, 1);
+
+        db.Animales.AddRange(padreRanchoA, criaRanchoA, padreRanchoB, madreRanchoB);
+        await db.SaveChangesAsync();
+
+        var controller = CreateController(db, userId);
+
+        // Intento cruzado por padre (Rancho A -> Rancho B).
+        var crossFather = await controller.Registrar(
+            new RegistrarGenealogiaRequest(criaRanchoA.IdAnimal, padreRanchoB.IdAnimal, null),
+            default);
+        var fatherProblem = AssertBadRequestProblem(crossFather);
+        Assert.DoesNotContain("B-SECRETO-PAD", fatherProblem.Detail ?? string.Empty);
+        Assert.DoesNotContain(ranchoB.ToString(), fatherProblem.Detail ?? string.Empty);
+        Assert.DoesNotContain("sexo", fatherProblem.Detail ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("fecha", fatherProblem.Detail ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+
+        // Intento cruzado por madre (Rancho A -> Rancho B).
+        var crossMother = await controller.Registrar(
+            new RegistrarGenealogiaRequest(criaRanchoA.IdAnimal, padreRanchoA.IdAnimal, madreRanchoB.IdAnimal),
+            default);
+        var motherProblem = AssertBadRequestProblem(crossMother);
+        Assert.DoesNotContain("B-SECRETO-MAD", motherProblem.Detail ?? string.Empty);
+        Assert.DoesNotContain(ranchoB.ToString(), motherProblem.Detail ?? string.Empty);
+        Assert.DoesNotContain("sexo", motherProblem.Detail ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+
+        // Si en BD existieran relaciones cruzadas entre Ranchos A y B del mismo usuario multi-rancho,
+        // las consultas deben aislarse estrictamente al rancho del animal consultado.
+        db.GenealogiasAnimales.AddRange(
+            new GenealogiaAnimal { IdAnimal = criaRanchoA.IdAnimal, IdPadre = padreRanchoB.IdAnimal, IdAutor = userId },
+            new GenealogiaAnimal { IdAnimal = padreRanchoB.IdAnimal, IdPadre = madreRanchoB.IdAnimal, IdAutor = userId });
+        await db.SaveChangesAsync();
+
+        var padresA = Assert.IsType<OkObjectResult>(await controller.ObtenerPadres(criaRanchoA.IdAnimal, profundidad: 3, default));
+        var padresPayload = Assert.IsType<PadresAnimalResponse>(padresA.Value);
+        Assert.Null(padresPayload.Padre);
+        Assert.Empty(padresPayload.Ancestros);
+
+        var descB = Assert.IsType<OkObjectResult>(await controller.ObtenerDescendientes(padreRanchoB.IdAnimal, profundidad: 3, default));
+        var descPayload = Assert.IsType<DescendientesAnimalResponse>(descB.Value);
+        Assert.Equal(0, descPayload.TotalDescendientes);
+        Assert.Empty(descPayload.Descendientes);
+    }
+
+    [Fact]
+    public async Task Eliminar_ExigeVersionObligatoriaOIfMatchYRechazaObsoleta()
+    {
+        await using var db = CreateInMemoryDb(nameof(Eliminar_ExigeVersionObligatoriaOIfMatchYRechazaObsoleta));
+        var (userId, ranchoId, _) = await SeedBaseAsync(db);
+
+        var padre = NewAnimal(ranchoId, userId, "P-DEL", "Macho");
+        var cria = NewAnimal(ranchoId, userId, "C-DEL", "Hembra");
+        db.Animales.AddRange(padre, cria);
+        await db.SaveChangesAsync();
+
+        var controller = CreateController(db, userId);
+        var created = Assert.IsType<CreatedAtActionResult>(
+            await controller.Registrar(new RegistrarGenealogiaRequest(cria.IdAnimal, padre.IdAnimal, null, "v1"), default));
+        var dto = Assert.IsType<GenealogiaRegistroDto>(created.Value);
+        Assert.Equal(1L, dto.VersionRegistro);
+
+        // 1. Versión ausente -> 400 BadRequest (ValidationProblemDetails).
+        AssertBadRequestProblem(await controller.Eliminar(cria.IdAnimal, versionRegistro: null, ct: default));
+        AssertBadRequestProblem(await controller.Eliminar(cria.IdAnimal, versionRegistro: 0, ct: default));
+
+        // 2. Versión obsoleta/incorrecta -> 409 Conflict (ProblemDetails).
+        AssertConflictProblem(await controller.Eliminar(cria.IdAnimal, versionRegistro: 99, ct: default));
+
+        // 3. Versión correcta por cabecera If-Match -> 204 NoContent, incrementa VersionRegistro y emite CambioServidor.
+        controller.HttpContext.Request.Headers.IfMatch = "\"1\"";
+        Assert.IsType<NoContentResult>(await controller.Eliminar(cria.IdAnimal, versionRegistro: null, ct: default));
+
+        var deleted = await db.GenealogiasAnimales.AsNoTracking().FirstAsync(g => g.IdAnimal == cria.IdAnimal);
+        Assert.NotNull(deleted.EliminadoEn);
+        Assert.Equal(2L, deleted.VersionRegistro);
+
+        var deleteEvent = await db.CambiosServidor.AsNoTracking()
+            .Where(c => c.Entidad == nameof(GenealogiaAnimal) && c.IdRegistro == dto.IdGenealogia && c.Operacion == "Eliminar")
+            .FirstOrDefaultAsync();
+        Assert.NotNull(deleteEvent);
+        Assert.Equal(2L, deleteEvent!.Version);
     }
 }
 
@@ -628,9 +755,30 @@ public sealed class GenealogiaApiTests : IAsyncLifetime
         var getDirect = await clientA.GetAsync(createRes.Headers.Location);
         Assert.Equal(HttpStatusCode.OK, getDirect.StatusCode);
 
-        // 403 Forbidden desde otro rancho.
+        // Reintento idempotente de POST idéntico -> 200 OK con el mismo registro; POST diferente -> 409 ProblemDetails.
+        var retrySamePost = await clientA.PostAsJsonAsync("/api/genealogia", new
+        {
+            idAnimal = _criaA,
+            idPadre = _padreA,
+            idMadre = _madreA,
+            observaciones = "Registro HTTP"
+        });
+        Assert.Equal(HttpStatusCode.OK, retrySamePost.StatusCode);
+        var retryDto = await retrySamePost.Content.ReadFromJsonAsync<GenealogiaRegistroDto>();
+        Assert.Equal(createdDto.IdGenealogia, retryDto?.IdGenealogia);
+
+        var retryDiffPost = await clientA.PostAsJsonAsync("/api/genealogia", new
+        {
+            idAnimal = _criaA,
+            idPadre = _padreA,
+            idMadre = (Guid?)null,
+            observaciones = "Cambio en POST"
+        });
+        await AssertHttpProblemAsync(retryDiffPost, HttpStatusCode.Conflict);
+
+        // 403 Forbidden desde otro rancho en formato ProblemDetails (sin propiedad "mensaje").
         var getOtherRanch = await clientB.GetAsync($"/api/genealogia/{createdDto.IdGenealogia}");
-        Assert.Equal(HttpStatusCode.Forbidden, getOtherRanch.StatusCode);
+        await AssertHttpProblemAsync(getOtherRanch, HttpStatusCode.Forbidden);
 
         // 400 BadRequest al actualizar sin enviar versionRegistro, con 0 o con negativo.
         var missingVersionPut = await clientA.PutAsJsonAsync($"/api/genealogia/{_criaA}", new
@@ -639,7 +787,7 @@ public sealed class GenealogiaApiTests : IAsyncLifetime
             idMadre = (Guid?)null,
             observaciones = "Sin versión"
         });
-        Assert.Equal(HttpStatusCode.BadRequest, missingVersionPut.StatusCode);
+        await AssertHttpValidationProblemAsync(missingVersionPut);
 
         var zeroVersionPut = await clientA.PutAsJsonAsync($"/api/genealogia/{_criaA}", new
         {
@@ -648,7 +796,7 @@ public sealed class GenealogiaApiTests : IAsyncLifetime
             observaciones = "Versión cero",
             versionRegistro = 0L
         });
-        Assert.Equal(HttpStatusCode.BadRequest, zeroVersionPut.StatusCode);
+        await AssertHttpValidationProblemAsync(zeroVersionPut);
 
         var negativeVersionPut = await clientA.PutAsJsonAsync($"/api/genealogia/{_criaA}", new
         {
@@ -657,7 +805,7 @@ public sealed class GenealogiaApiTests : IAsyncLifetime
             observaciones = "Versión negativa",
             versionRegistro = -2L
         });
-        Assert.Equal(HttpStatusCode.BadRequest, negativeVersionPut.StatusCode);
+        await AssertHttpValidationProblemAsync(negativeVersionPut);
 
         // 409 Conflict al actualizar con versión obsoleta.
         var stalePut = await clientA.PutAsJsonAsync($"/api/genealogia/{_criaA}", new
@@ -667,7 +815,7 @@ public sealed class GenealogiaApiTests : IAsyncLifetime
             observaciones = "Stale",
             versionRegistro = 99L
         });
-        Assert.Equal(HttpStatusCode.Conflict, stalePut.StatusCode);
+        await AssertHttpProblemAsync(stalePut, HttpStatusCode.Conflict);
 
         // 200 OK en PUT válido (incrementa versión a 2).
         var validPut = await clientA.PutAsJsonAsync($"/api/genealogia/{_criaA}", new
@@ -679,15 +827,60 @@ public sealed class GenealogiaApiTests : IAsyncLifetime
         });
         Assert.Equal(HttpStatusCode.OK, validPut.StatusCode);
 
-        // 409 Conflict en DELETE con versión obsoleta.
-        var staleDel = await clientA.DeleteAsync($"/api/genealogia/{_criaA}?versionRegistro=1");
-        Assert.Equal(HttpStatusCode.Conflict, staleDel.StatusCode);
+        // 400 BadRequest en DELETE sin versión o con If-Match inválido.
+        var missingVersionDel = await clientA.DeleteAsync($"/api/genealogia/{_criaA}");
+        await AssertHttpValidationProblemAsync(missingVersionDel);
 
-        // 204 NoContent en DELETE con versión vigente y 404 en GET posterior.
-        var delRes = await clientA.DeleteAsync($"/api/genealogia/{_criaA}?versionRegistro=2");
-        Assert.Equal(HttpStatusCode.NoContent, delRes.StatusCode);
+        using (var invalidIfMatchReq = new HttpRequestMessage(HttpMethod.Delete, $"/api/genealogia/{_criaA}"))
+        {
+            invalidIfMatchReq.Headers.TryAddWithoutValidation("If-Match", "\"no-es-numero\"");
+            var invalidIfMatchDel = await clientA.SendAsync(invalidIfMatchReq);
+            await AssertHttpValidationProblemAsync(invalidIfMatchDel);
+        }
+
+        // 409 Conflict en DELETE con versión obsoleta (por query y por If-Match).
+        var staleDel = await clientA.DeleteAsync($"/api/genealogia/{_criaA}?versionRegistro=1");
+        await AssertHttpProblemAsync(staleDel, HttpStatusCode.Conflict);
+
+        using (var staleIfMatchReq = new HttpRequestMessage(HttpMethod.Delete, $"/api/genealogia/{_criaA}"))
+        {
+            staleIfMatchReq.Headers.TryAddWithoutValidation("If-Match", "\"1\"");
+            var staleIfMatchDel = await clientA.SendAsync(staleIfMatchReq);
+            await AssertHttpProblemAsync(staleIfMatchDel, HttpStatusCode.Conflict);
+        }
+
+        // 204 NoContent en DELETE con If-Match válido (versión 2) y 404 ProblemDetails en GET posterior.
+        using (var validIfMatchReq = new HttpRequestMessage(HttpMethod.Delete, $"/api/genealogia/{_criaA}"))
+        {
+            validIfMatchReq.Headers.TryAddWithoutValidation("If-Match", "\"2\"");
+            var delRes = await clientA.SendAsync(validIfMatchReq);
+            Assert.Equal(HttpStatusCode.NoContent, delRes.StatusCode);
+        }
 
         var getAfterDel = await clientA.GetAsync($"/api/genealogia/{createdDto.IdGenealogia}");
-        Assert.Equal(HttpStatusCode.NotFound, getAfterDel.StatusCode);
+        await AssertHttpProblemAsync(getAfterDel, HttpStatusCode.NotFound);
+    }
+
+    private static async Task AssertHttpValidationProblemAsync(HttpResponseMessage response)
+    {
+        var doc = await AssertHttpProblemCoreAsync(response, HttpStatusCode.BadRequest);
+        Assert.True(doc.RootElement.TryGetProperty("errors", out _));
+    }
+
+    private static async Task AssertHttpProblemAsync(HttpResponseMessage response, HttpStatusCode expectedStatus) =>
+        await AssertHttpProblemCoreAsync(response, expectedStatus);
+
+    private static async Task<JsonDocument> AssertHttpProblemCoreAsync(HttpResponseMessage response, HttpStatusCode expectedStatus)
+    {
+        Assert.Equal(expectedStatus, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+
+        var body = await response.Content.ReadAsStringAsync();
+        var doc = JsonDocument.Parse(body);
+        var root = doc.RootElement;
+        Assert.Equal((int)expectedStatus, root.GetProperty("status").GetInt32());
+        Assert.True(root.TryGetProperty("title", out _));
+        Assert.False(root.TryGetProperty("mensaje", out _));
+        return doc;
     }
 }

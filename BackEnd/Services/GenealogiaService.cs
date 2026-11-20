@@ -18,7 +18,8 @@ public enum GenealogiaOperationStatus
 public sealed record GenealogiaOperationResult<T>(
     GenealogiaOperationStatus Status,
     T? Data = default,
-    string? Error = null);
+    string? Error = null,
+    bool IsIdempotent = false);
 
 public sealed class GenealogiaService(FarmDbContext db, RanchAccessService access)
 {
@@ -67,9 +68,12 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
 
         if (existente is not null && existente.EliminadoEn is null)
         {
+            if (MatchesPayload(existente, request.IdPadre, request.IdMadre, observaciones))
+                return new(GenealogiaOperationStatus.Success, MapRegistro(existente), IsIdempotent: true);
+
             return new(
                 GenealogiaOperationStatus.Conflict,
-                Error: "El animal ya tiene un registro de genealogía activo. Use PUT /api/genealogia/{idAnimal} para actualizarlo.");
+                Error: "El animal ya tiene un registro de genealogía activo con un parentesco o detalle diferente.");
         }
 
         var ahora = DateTime.UtcNow;
@@ -83,10 +87,16 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
             existente.EliminadoEn = null;
             existente.VersionRegistro += 1;
 
-            return await SaveChangesWithConflictHandlingAsync(
-                () => MapRegistro(existente),
-                ConcurrencyConflictMessage,
-                ct);
+            try
+            {
+                await db.SaveChangesAsync(ct);
+                return new(GenealogiaOperationStatus.Success, MapRegistro(existente));
+            }
+            catch (DbUpdateException ex) when (ex is DbUpdateConcurrencyException || IsUniqueConstraintViolation(ex))
+            {
+                db.Entry(existente).State = EntityState.Detached;
+                return await ResolveRegisterConflictAsync(request.IdAnimal, request.IdPadre, request.IdMadre, observaciones, ct);
+            }
         }
 
         var nuevo = new GenealogiaAnimal
@@ -102,15 +112,16 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
         };
 
         db.GenealogiasAnimales.Add(nuevo);
-        var saveResult = await SaveChangesWithConflictHandlingAsync(
-            () => MapRegistro(nuevo),
-            "El animal ya tiene un registro de genealogía activo o está siendo registrado simultáneamente.",
-            ct);
-
-        if (saveResult.Status == GenealogiaOperationStatus.Conflict)
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            return new(GenealogiaOperationStatus.Success, MapRegistro(nuevo));
+        }
+        catch (DbUpdateException ex) when (ex is DbUpdateConcurrencyException || IsUniqueConstraintViolation(ex))
+        {
             db.Entry(nuevo).State = EntityState.Detached;
-
-        return saveResult;
+            return await ResolveRegisterConflictAsync(request.IdAnimal, request.IdPadre, request.IdMadre, observaciones, ct);
+        }
     }
 
     public async Task<GenealogiaOperationResult<GenealogiaRegistroDto>> ActualizarAsync(
@@ -131,10 +142,23 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
             return new(validation.Status, Error: validation.Error);
 
         var existente = await db.GenealogiasAnimales
-            .FirstOrDefaultAsync(g => g.IdAnimal == idAnimal && g.EliminadoEn == null, ct);
+            .FirstOrDefaultAsync(g => g.IdAnimal == idAnimal, ct);
 
         if (existente is null)
             return new(GenealogiaOperationStatus.NotFound, Error: "No existe un registro de genealogía activo para este animal.");
+
+        if (existente.EliminadoEn is not null)
+        {
+            return request.VersionRegistro < existente.VersionRegistro
+                ? new(GenealogiaOperationStatus.Conflict, Error: ConcurrencyConflictMessage)
+                : new(GenealogiaOperationStatus.NotFound, Error: "No existe un registro de genealogía activo para este animal.");
+        }
+
+        if (existente.VersionRegistro == request.VersionRegistro + 1 &&
+            MatchesPayload(existente, request.IdPadre, request.IdMadre, observaciones))
+        {
+            return new(GenealogiaOperationStatus.Success, MapRegistro(existente), IsIdempotent: true);
+        }
 
         if (existente.VersionRegistro != request.VersionRegistro)
             return new(GenealogiaOperationStatus.Conflict, Error: ConcurrencyConflictMessage);
@@ -145,10 +169,32 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
         existente.IdAutor = userId;
         existente.VersionRegistro += 1;
 
-        return await SaveChangesWithConflictHandlingAsync(
-            () => MapRegistro(existente),
-            ConcurrencyConflictMessage,
-            ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            return new(GenealogiaOperationStatus.Success, MapRegistro(existente));
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            db.Entry(existente).State = EntityState.Detached;
+            var confirmed = await db.GenealogiasAnimales.AsNoTracking()
+                .FirstOrDefaultAsync(g => g.IdAnimal == idAnimal, ct);
+
+            if (confirmed is not null &&
+                confirmed.EliminadoEn is null &&
+                confirmed.VersionRegistro == request.VersionRegistro + 1 &&
+                MatchesPayload(confirmed, request.IdPadre, request.IdMadre, observaciones))
+            {
+                return new(GenealogiaOperationStatus.Success, MapRegistro(confirmed), IsIdempotent: true);
+            }
+
+            return new(GenealogiaOperationStatus.Conflict, Error: ConcurrencyConflictMessage);
+        }
+        catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
+        {
+            db.Entry(existente).State = EntityState.Detached;
+            return new(GenealogiaOperationStatus.Conflict, Error: ConcurrencyConflictMessage);
+        }
     }
 
     public async Task<GenealogiaOperationResult<bool>> EliminarAsync(
@@ -157,8 +203,8 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
         CancellationToken ct,
         long? expectedVersion = null)
     {
-        if (expectedVersion is <= 0)
-            return new(GenealogiaOperationStatus.BadRequest, Error: "La versión del registro (versionRegistro) debe ser mayor que cero.");
+        if (expectedVersion is null || expectedVersion <= 0)
+            return new(GenealogiaOperationStatus.BadRequest, Error: "La versión del registro (versionRegistro o cabecera If-Match) es obligatoria y debe ser mayor que cero.");
 
         var animal = await db.Animales.AsNoTracking()
             .FirstOrDefaultAsync(a => a.IdAnimal == idAnimal && a.EliminadoEn == null, ct);
@@ -167,25 +213,56 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
             return new(GenealogiaOperationStatus.NotFound, Error: "El animal especificado no existe.");
 
         if (!await access.CanAccessAsync(userId, animal.IdRancho, ct))
-            return new(GenealogiaOperationStatus.Forbidden, Error: "No tienes permisos sobre el rancho de este animal.");
+            return new(GenealogiaOperationStatus.Forbidden, Error: "No tienes permisos sobre el rancho de este registro.");
 
         var registro = await db.GenealogiasAnimales
-            .FirstOrDefaultAsync(g => g.IdAnimal == idAnimal && g.EliminadoEn == null, ct);
+            .FirstOrDefaultAsync(g => g.IdAnimal == idAnimal, ct);
 
         if (registro is null)
             return new(GenealogiaOperationStatus.NotFound, Error: "El animal no tiene genealogía activa registrada.");
 
-        if (expectedVersion is { } version && registro.VersionRegistro != version)
+        if (registro.EliminadoEn is not null)
+        {
+            if (expectedVersion.Value == registro.VersionRegistro - 1)
+                return new(GenealogiaOperationStatus.Success, true, IsIdempotent: true);
+
+            return expectedVersion.Value < registro.VersionRegistro - 1
+                ? new(GenealogiaOperationStatus.Conflict, Error: ConcurrencyConflictMessage)
+                : new(GenealogiaOperationStatus.NotFound, Error: "El animal no tiene genealogía activa registrada.");
+        }
+
+        if (registro.VersionRegistro != expectedVersion.Value)
             return new(GenealogiaOperationStatus.Conflict, Error: ConcurrencyConflictMessage);
 
         registro.EliminadoEn = DateTime.UtcNow;
         registro.IdAutor = userId;
         registro.VersionRegistro += 1;
 
-        return await SaveChangesWithConflictHandlingAsync(
-            () => true,
-            ConcurrencyConflictMessage,
-            ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            return new(GenealogiaOperationStatus.Success, true);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            db.Entry(registro).State = EntityState.Detached;
+            var confirmed = await db.GenealogiasAnimales.AsNoTracking()
+                .FirstOrDefaultAsync(g => g.IdAnimal == idAnimal, ct);
+
+            if (confirmed is not null &&
+                confirmed.EliminadoEn is not null &&
+                confirmed.VersionRegistro == expectedVersion.Value + 1)
+            {
+                return new(GenealogiaOperationStatus.Success, true, IsIdempotent: true);
+            }
+
+            return new(GenealogiaOperationStatus.Conflict, Error: ConcurrencyConflictMessage);
+        }
+        catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
+        {
+            db.Entry(registro).State = EntityState.Detached;
+            return new(GenealogiaOperationStatus.Conflict, Error: ConcurrencyConflictMessage);
+        }
     }
 
     public async Task<GenealogiaOperationResult<GenealogiaRegistroDto>> ObtenerPorIdAsync(
@@ -207,7 +284,7 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
             return new(GenealogiaOperationStatus.NotFound, Error: "El registro de genealogía especificado no existe.");
 
         if (!await access.CanAccessAsync(userId, item.IdRancho, ct))
-            return new(GenealogiaOperationStatus.Forbidden, Error: "No tienes permisos sobre el rancho de este animal.");
+            return new(GenealogiaOperationStatus.Forbidden, Error: "No tienes permisos sobre el rancho de este registro.");
 
         return new(GenealogiaOperationStatus.Success, MapRegistro(item.Rel));
     }
@@ -228,9 +305,11 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
             return new(GenealogiaOperationStatus.NotFound, Error: "El animal especificado no existe.");
 
         if (!await access.CanAccessAsync(userId, animal.IdRancho, ct))
-            return new(GenealogiaOperationStatus.Forbidden, Error: "No tienes permisos sobre el rancho de este animal.");
+            return new(GenealogiaOperationStatus.Forbidden, Error: "No tienes permisos sobre el rancho de este registro.");
 
-        var activeRanchIds = await access.ActiveRanchIds(userId).ToListAsync(ct);
+        // Aislamiento estricto: la consulta permanece únicamente dentro del rancho del animal consultado,
+        // aunque el usuario tenga membresía en múltiples ranchos.
+        var ranchoId = animal.IdRancho;
 
         AnimalResumenGenealogiaDto? padreDirecto = null;
         AnimalResumenGenealogiaDto? madreDirecta = null;
@@ -247,7 +326,7 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
                 join a in db.Animales.AsNoTracking() on g.IdAnimal equals a.IdAnimal
                 where g.EliminadoEn == null
                       && a.EliminadoEn == null
-                      && activeRanchIds.Contains(a.IdRancho)
+                      && a.IdRancho == ranchoId
                       && frontier.Contains(g.IdAnimal)
                 select g
             ).ToListAsync(ct);
@@ -266,7 +345,7 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
                 ? new Dictionary<Guid, Animal>()
                 : await db.Animales.AsNoTracking()
                     .Where(a => a.EliminadoEn == null
-                                && activeRanchIds.Contains(a.IdRancho)
+                                && a.IdRancho == ranchoId
                                 && parentIds.Contains(a.IdAnimal))
                     .ToDictionaryAsync(a => a.IdAnimal, ct);
 
@@ -337,9 +416,9 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
             return new(GenealogiaOperationStatus.NotFound, Error: "El animal especificado no existe.");
 
         if (!await access.CanAccessAsync(userId, animal.IdRancho, ct))
-            return new(GenealogiaOperationStatus.Forbidden, Error: "No tienes permisos sobre el rancho de este animal.");
+            return new(GenealogiaOperationStatus.Forbidden, Error: "No tienes permisos sobre el rancho de este registro.");
 
-        var activeRanchIds = await access.ActiveRanchIds(userId).ToListAsync(ct);
+        var ranchoId = animal.IdRancho;
 
         var descendientes = new List<DescendienteGenealogicoDto>();
         var visited = new HashSet<Guid> { idAnimal };
@@ -352,7 +431,7 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
                 join a in db.Animales.AsNoTracking() on g.IdAnimal equals a.IdAnimal
                 where g.EliminadoEn == null
                       && a.EliminadoEn == null
-                      && activeRanchIds.Contains(a.IdRancho)
+                      && a.IdRancho == ranchoId
                       && ((g.IdPadre != null && frontier.Contains(g.IdPadre.Value))
                           || (g.IdMadre != null && frontier.Contains(g.IdMadre.Value)))
                 select new { Rel = g, Child = a }
@@ -450,7 +529,7 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
             return new(GenealogiaOperationStatus.BadRequest, Error: "El animal descendiente especificado no existe o está eliminado.");
 
         if (!await access.CanAccessAsync(userId, animal.IdRancho, ct))
-            return new(GenealogiaOperationStatus.Forbidden, Error: "No tienes permisos sobre el rancho del animal descendiente.");
+            return new(GenealogiaOperationStatus.Forbidden, Error: "No tienes permisos sobre el rancho de este registro.");
 
         if (idPadre is { } padreId)
         {
@@ -460,7 +539,10 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
                 return new(GenealogiaOperationStatus.BadRequest, Error: "El padre especificado no existe o está eliminado.");
 
             if (!await access.CanAccessAsync(userId, padre.IdRancho, ct))
-                return new(GenealogiaOperationStatus.Forbidden, Error: "No tienes permisos sobre el rancho del padre especificado.");
+                return new(GenealogiaOperationStatus.Forbidden, Error: "No tienes permisos sobre el rancho de este registro.");
+
+            if (padre.IdRancho != animal.IdRancho)
+                return new(GenealogiaOperationStatus.BadRequest, Error: "La relación genealógica debe mantenerse dentro del mismo rancho del animal.");
 
             if (!IsValidFatherSex(padre.Sexo))
                 return new(GenealogiaOperationStatus.BadRequest, Error: "El padre especificado debe ser de sexo macho.");
@@ -484,7 +566,10 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
                 return new(GenealogiaOperationStatus.BadRequest, Error: "La madre especificada no existe o está eliminada.");
 
             if (!await access.CanAccessAsync(userId, madre.IdRancho, ct))
-                return new(GenealogiaOperationStatus.Forbidden, Error: "No tienes permisos sobre el rancho de la madre especificada.");
+                return new(GenealogiaOperationStatus.Forbidden, Error: "No tienes permisos sobre el rancho de este registro.");
+
+            if (madre.IdRancho != animal.IdRancho)
+                return new(GenealogiaOperationStatus.BadRequest, Error: "La relación genealógica debe mantenerse dentro del mismo rancho del animal.");
 
             if (!IsValidMotherSex(madre.Sexo))
                 return new(GenealogiaOperationStatus.BadRequest, Error: "La madre especificada debe ser de sexo hembra.");
@@ -498,10 +583,8 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
             }
         }
 
-        var activeRanchIds = await access.ActiveRanchIds(userId).ToListAsync(ct);
-
-        // Tarea 10: evitar ciclos genealógicos (idAnimal no puede ser ancestro de idPadre ni de idMadre).
-        if (await CreatesCycleAsync(idAnimal, idPadre, idMadre, activeRanchIds, ct))
+        // Tarea 10: evitar ciclos genealógicos dentro del rancho (idAnimal no puede ser ancestro de idPadre ni de idMadre).
+        if (await CreatesCycleAsync(idAnimal, idPadre, idMadre, animal.IdRancho, ct))
         {
             return new(
                 GenealogiaOperationStatus.BadRequest,
@@ -515,7 +598,7 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
         Guid idAnimal,
         Guid? idPadre,
         Guid? idMadre,
-        IReadOnlyCollection<Guid> activeRanchIds,
+        Guid idRancho,
         CancellationToken ct)
     {
         var visited = new HashSet<Guid>();
@@ -536,7 +619,7 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
                 join a in db.Animales.AsNoTracking() on g.IdAnimal equals a.IdAnimal
                 where g.EliminadoEn == null
                       && a.EliminadoEn == null
-                      && activeRanchIds.Contains(a.IdRancho)
+                      && a.IdRancho == idRancho
                       && frontier.Contains(g.IdAnimal)
                 select new { g.IdPadre, g.IdMadre }
             ).ToListAsync(ct);
@@ -597,25 +680,36 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
         return (normalized, null);
     }
 
-    private async Task<GenealogiaOperationResult<T>> SaveChangesWithConflictHandlingAsync<T>(
-        Func<T> onSuccess,
-        string conflictMessage,
+    private async Task<GenealogiaOperationResult<GenealogiaRegistroDto>> ResolveRegisterConflictAsync(
+        Guid idAnimal,
+        Guid? idPadre,
+        Guid? idMadre,
+        string? observaciones,
         CancellationToken ct)
     {
-        try
+        var confirmed = await db.GenealogiasAnimales.AsNoTracking()
+            .FirstOrDefaultAsync(g => g.IdAnimal == idAnimal, ct);
+
+        if (confirmed is not null &&
+            confirmed.EliminadoEn is null &&
+            MatchesPayload(confirmed, idPadre, idMadre, observaciones))
         {
-            await db.SaveChangesAsync(ct);
-            return new(GenealogiaOperationStatus.Success, onSuccess());
+            return new(GenealogiaOperationStatus.Success, MapRegistro(confirmed), IsIdempotent: true);
         }
-        catch (DbUpdateConcurrencyException)
-        {
-            return new(GenealogiaOperationStatus.Conflict, Error: conflictMessage);
-        }
-        catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
-        {
-            return new(GenealogiaOperationStatus.Conflict, Error: conflictMessage);
-        }
+
+        return new(
+            GenealogiaOperationStatus.Conflict,
+            Error: "El animal ya tiene un registro de genealogía activo o está siendo registrado simultáneamente con datos diferentes.");
     }
+
+    private static bool MatchesPayload(
+        GenealogiaAnimal existing,
+        Guid? idPadre,
+        Guid? idMadre,
+        string? observaciones) =>
+        existing.IdPadre == idPadre
+        && existing.IdMadre == idMadre
+        && string.Equals(existing.Observaciones?.Trim(), observaciones, StringComparison.Ordinal);
 
     private static bool IsUniqueConstraintViolation(DbUpdateException ex)
     {

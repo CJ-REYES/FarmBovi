@@ -426,26 +426,98 @@ public sealed class MySqlIntegrationTests
                 await seedDb.SaveChangesAsync();
             }
 
-            // 1. Inserciones simultáneas sobre el mismo animal: una gana (201), la otra recibe 409 por índice único en IdAnimal.
-            async Task<int> ConcurrentInsertAsync(Guid padreId)
+            // Helper de mapeo HTTP para ProblemDetails y respuestas de GenealogiaController.
+            static int ToHttpStatus(IActionResult res) => res switch
+            {
+                CreatedAtActionResult => StatusCodes.Status201Created,
+                OkObjectResult => StatusCodes.Status200OK,
+                NoContentResult => StatusCodes.Status204NoContent,
+                ObjectResult obj when obj.StatusCode is { } code => code,
+                _ => throw new InvalidOperationException($"Respuesta inesperada: {res.GetType().Name}")
+            };
+
+            // 1A. Dos inserciones simultáneas con el mismo animal y el MISMO parentesco:
+            // una crea (201), la otra responde idempotente (200) sin duplicar fila ni CambioServidor.
+            var sameInsertGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var sameInsertArrived = 0;
+            async Task<(int Status, Guid IdGenealogia)> ConcurrentSameInsertAsync()
             {
                 await using var db = MySqlTestHelper.CreateContext(connStr);
                 var controller = new GenealogiaController(new FarmBovi.Api.Services.GenealogiaService(db, new FarmBovi.Api.Services.RanchAccessService(db)));
                 AttachJwtUser(controller, userId);
-                var res = await controller.Registrar(new RegistrarGenealogiaRequest(criaId, padreId, madreId, "Concurrente"), CancellationToken.None);
-                return res switch
-                {
-                    CreatedAtActionResult => StatusCodes.Status201Created,
-                    ConflictObjectResult => StatusCodes.Status409Conflict,
-                    _ => throw new InvalidOperationException($"Respuesta inesperada: {res.GetType().Name}")
-                };
+                if (Interlocked.Increment(ref sameInsertArrived) == 2)
+                    sameInsertGate.TrySetResult();
+                await sameInsertGate.Task;
+
+                var res = await controller.Registrar(new RegistrarGenealogiaRequest(criaId, padre1Id, madreId, "Mismo"), CancellationToken.None);
+                var status = ToHttpStatus(res);
+                var dto = Assert.IsType<GenealogiaRegistroDto>(((ObjectResult)res).Value);
+                return (status, dto.IdGenealogia);
             }
 
-            var insertStatuses = await Task.WhenAll(ConcurrentInsertAsync(padre1Id), ConcurrentInsertAsync(padre2Id));
-            Assert.Contains(StatusCodes.Status201Created, insertStatuses);
-            Assert.Contains(StatusCodes.Status409Conflict, insertStatuses);
+            var sameResults = await Task.WhenAll(ConcurrentSameInsertAsync(), ConcurrentSameInsertAsync());
+            Assert.Contains(sameResults, r => r.Status == StatusCodes.Status201Created);
+            Assert.Contains(sameResults, r => r.Status == StatusCodes.Status200OK);
+            Assert.Equal(sameResults[0].IdGenealogia, sameResults[1].IdGenealogia);
 
-            // 2. Actualizaciones simultáneas sobre el mismo registro: una gana (200), la otra recibe 409 por VersionRegistro.
+            await using (var checkDb = MySqlTestHelper.CreateContext(connStr))
+            {
+                Assert.Equal(1, await checkDb.GenealogiasAnimales.CountAsync(g => g.IdAnimal == criaId));
+                Assert.Equal(1, await checkDb.CambiosServidor.CountAsync(c => c.Entidad == nameof(GenealogiaAnimal) && c.IdRegistro == sameResults[0].IdGenealogia));
+            }
+
+            // Reintento explícito de POST ya procesado: mismo contenido -> 200 idempotente; contenido distinto -> 409.
+            await using (var retryDb = MySqlTestHelper.CreateContext(connStr))
+            {
+                var c = new GenealogiaController(new FarmBovi.Api.Services.GenealogiaService(retryDb, new FarmBovi.Api.Services.RanchAccessService(retryDb)));
+                AttachJwtUser(c, userId);
+                Assert.Equal(StatusCodes.Status200OK, ToHttpStatus(await c.Registrar(new RegistrarGenealogiaRequest(criaId, padre1Id, madreId, "Mismo"), CancellationToken.None)));
+                Assert.Equal(StatusCodes.Status409Conflict, ToHttpStatus(await c.Registrar(new RegistrarGenealogiaRequest(criaId, padre2Id, madreId, "Distinto"), CancellationToken.None)));
+            }
+
+            // Eliminar (v1 -> v2) y probar reintento idempotente de DELETE + reutilización de registro eliminado (v2 -> v3).
+            await using (var delDb = MySqlTestHelper.CreateContext(connStr))
+            {
+                var c = new GenealogiaController(new FarmBovi.Api.Services.GenealogiaService(delDb, new FarmBovi.Api.Services.RanchAccessService(delDb)));
+                AttachJwtUser(c, userId);
+                Assert.Equal(StatusCodes.Status204NoContent, ToHttpStatus(await c.Eliminar(criaId, versionRegistro: 1, CancellationToken.None)));
+                // Reintento de DELETE ya procesado desde versión 1 -> 204 idempotente sin nuevo CambioServidor.
+                Assert.Equal(StatusCodes.Status204NoContent, ToHttpStatus(await c.Eliminar(criaId, versionRegistro: 1, CancellationToken.None)));
+            }
+
+            // 1B. Dos inserciones/reutilizaciones simultáneas con el mismo animal y parentescos DIFERENTES:
+            // una aplica (201) y la otra recibe 409 Conflict por conflicto de datos diferentes.
+            var diffInsertGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var diffInsertArrived = 0;
+            async Task<int> ConcurrentDifferentInsertAsync(Guid padreId, string obs)
+            {
+                await using var db = MySqlTestHelper.CreateContext(connStr);
+                var controller = new GenealogiaController(new FarmBovi.Api.Services.GenealogiaService(db, new FarmBovi.Api.Services.RanchAccessService(db)));
+                AttachJwtUser(controller, userId);
+                if (Interlocked.Increment(ref diffInsertArrived) == 2)
+                    diffInsertGate.TrySetResult();
+                await diffInsertGate.Task;
+
+                return ToHttpStatus(await controller.Registrar(new RegistrarGenealogiaRequest(criaId, padreId, madreId, obs), CancellationToken.None));
+            }
+
+            var diffStatuses = await Task.WhenAll(
+                ConcurrentDifferentInsertAsync(padre1Id, "Concurrente A"),
+                ConcurrentDifferentInsertAsync(padre2Id, "Concurrente B"));
+            Assert.Contains(StatusCodes.Status201Created, diffStatuses);
+            Assert.Contains(StatusCodes.Status409Conflict, diffStatuses);
+
+            // Confirmar versión resultante tras reactivación (v3) y limpiar antes de pruebas de actualización/eliminación.
+            long versionActiva;
+            await using (var vDb = MySqlTestHelper.CreateContext(connStr))
+            {
+                var row = await vDb.GenealogiasAnimales.AsNoTracking().FirstAsync(g => g.IdAnimal == criaId);
+                Assert.Null(row.EliminadoEn);
+                versionActiva = row.VersionRegistro;
+                Assert.Equal(3L, versionActiva);
+            }
+
+            // 2. Actualizaciones simultáneas desde dos contextos independientes: una gana (200), otra 409.
             var startSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var arrived = 0;
             async Task<int> ConcurrentUpdateAsync(Guid nuevoPadre, string obs)
@@ -457,7 +529,7 @@ public sealed class MySqlIntegrationTests
                 await startSignal.Task;
                 var res = await service.ActualizarAsync(
                     criaId,
-                    new ActualizarGenealogiaRequest(nuevoPadre, madreId, obs, VersionRegistro: 1),
+                    new ActualizarGenealogiaRequest(nuevoPadre, madreId, obs, VersionRegistro: versionActiva),
                     userId,
                     CancellationToken.None);
                 return res.Status switch
@@ -474,15 +546,58 @@ public sealed class MySqlIntegrationTests
             Assert.Contains(StatusCodes.Status200OK, updateStatuses);
             Assert.Contains(StatusCodes.Status409Conflict, updateStatuses);
 
-            // 3. Verificar integridad y CambioServidor en MySQL real.
+            // Reintento de PUT ya procesado con su versión previa y mismo payload ganador -> 200 idempotente sin incrementar versión.
+            await using (var retryPutDb = MySqlTestHelper.CreateContext(connStr))
+            {
+                var ganador = await retryPutDb.GenealogiasAnimales.AsNoTracking().FirstAsync(g => g.IdAnimal == criaId);
+                Assert.Equal(4L, ganador.VersionRegistro);
+                var controller = new GenealogiaController(new FarmBovi.Api.Services.GenealogiaService(retryPutDb, new FarmBovi.Api.Services.RanchAccessService(retryPutDb)));
+                AttachJwtUser(controller, userId);
+                var retryPutStatus = ToHttpStatus(await controller.Actualizar(
+                    criaId,
+                    new ActualizarGenealogiaRequest(ganador.IdPadre, ganador.IdMadre, ganador.Observaciones, VersionRegistro: 3),
+                    CancellationToken.None));
+                Assert.Equal(StatusCodes.Status200OK, retryPutStatus);
+                Assert.Equal(4L, (await retryPutDb.GenealogiasAnimales.AsNoTracking().FirstAsync(g => g.IdAnimal == criaId)).VersionRegistro);
+            }
+
+            // 3. Eliminación simultánea contra una actualización en dos contextos independientes: uno gana (200 o 204), el otro recibe 409.
+            var raceGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var raceArrived = 0;
+            async Task<int> RaceUpdateAsync()
+            {
+                await using var db = MySqlTestHelper.CreateContext(connStr);
+                var controller = new GenealogiaController(new FarmBovi.Api.Services.GenealogiaService(db, new FarmBovi.Api.Services.RanchAccessService(db)));
+                AttachJwtUser(controller, userId);
+                if (Interlocked.Increment(ref raceArrived) == 2)
+                    raceGate.TrySetResult();
+                await raceGate.Task;
+                return ToHttpStatus(await controller.Actualizar(criaId, new ActualizarGenealogiaRequest(padre2Id, madreId, "Carrera Update vs Delete", VersionRegistro: 4), CancellationToken.None));
+            }
+            async Task<int> RaceDeleteAsync()
+            {
+                await using var db = MySqlTestHelper.CreateContext(connStr);
+                var controller = new GenealogiaController(new FarmBovi.Api.Services.GenealogiaService(db, new FarmBovi.Api.Services.RanchAccessService(db)));
+                AttachJwtUser(controller, userId);
+                if (Interlocked.Increment(ref raceArrived) == 2)
+                    raceGate.TrySetResult();
+                await raceGate.Task;
+                return ToHttpStatus(await controller.Eliminar(criaId, versionRegistro: 4, CancellationToken.None));
+            }
+
+            var raceStatuses = await Task.WhenAll(RaceUpdateAsync(), RaceDeleteAsync());
+            Assert.Contains(StatusCodes.Status409Conflict, raceStatuses);
+            Assert.Contains(raceStatuses, s => s is StatusCodes.Status200OK or StatusCodes.Status204NoContent);
+
+            // 4. Verificar integridad y emisiones de CambioServidor en MySQL real (Crear -> Eliminar -> Actualizar/Reactivar -> Actualizar -> Eliminar/Actualizar).
             await using var verifyDb = MySqlTestHelper.CreateContext(connStr);
             Assert.Equal(1, await verifyDb.GenealogiasAnimales.CountAsync(g => g.IdAnimal == criaId));
             var cambios = await verifyDb.CambiosServidor.AsNoTracking()
-                .Where(c => c.Entidad == nameof(GenealogiaAnimal))
+                .Where(c => c.Entidad == nameof(GenealogiaAnimal) && c.IdRegistro == sameResults[0].IdGenealogia)
                 .OrderBy(c => c.Version)
                 .ToListAsync();
-            Assert.Equal(2, cambios.Count);
-            Assert.Equal(["Crear", "Actualizar"], cambios.Select(c => c.Operacion).ToArray());
+            Assert.Equal(5, cambios.Count);
+            Assert.Equal(new[] { 1L, 2L, 3L, 4L, 5L }, cambios.Select(c => c.Version).ToArray());
         }
         finally
         {
@@ -541,18 +656,37 @@ public sealed class MySqlIntegrationTests
             var okRes = await controller1.Actualizar(criaId, new ActualizarGenealogiaRequest(padre1Id, madreId, "Modificacion Contexto 1", VersionRegistro: reg1.VersionRegistro), CancellationToken.None);
             Assert.IsType<OkObjectResult>(okRes);
 
-            // 3. El contexto 2 mantiene reg2 rastreado con VersionRegistro = 1 (la validación previa pasa, pero SaveChangesAsync colisiona en BD) y la API devuelve HTTP 409.
+            // 3. El contexto 2 mantiene reg2 rastreado con VersionRegistro = 1 (la validación previa pasa, pero SaveChangesAsync colisiona en BD) y la API devuelve HTTP 409 (ProblemDetails).
             var controller2 = new GenealogiaController(new FarmBovi.Api.Services.GenealogiaService(db2, new FarmBovi.Api.Services.RanchAccessService(db2)));
             AttachJwtUser(controller2, userId);
             var conflictRes = await controller2.Actualizar(criaId, new ActualizarGenealogiaRequest(padre2Id, madreId, "Modificacion Contexto 2", VersionRegistro: reg2.VersionRegistro), CancellationToken.None);
-            Assert.IsType<ConflictObjectResult>(conflictRes);
+            var conflictObj = Assert.IsAssignableFrom<ObjectResult>(conflictRes);
+            Assert.Equal(StatusCodes.Status409Conflict, conflictObj.StatusCode);
+            Assert.IsAssignableFrom<ProblemDetails>(conflictObj.Value);
 
-            // 4. Comprobar en un tercer contexto que EF Core lanza DbUpdateConcurrencyException ante token obsoleto y que solo persistió la modificación del contexto 1.
+            // 4. Comprobar también el caso determinístico de eliminación (contexto 1 elimina v=2->3) vs actualización con versión obsoleta (contexto 2 intenta PUT con v=2 -> 409).
+            await using (var delCtx = MySqlTestHelper.CreateContext(connStr))
+            {
+                var delCtrl = new GenealogiaController(new FarmBovi.Api.Services.GenealogiaService(delCtx, new FarmBovi.Api.Services.RanchAccessService(delCtx)));
+                AttachJwtUser(delCtrl, userId);
+                Assert.IsType<NoContentResult>(await delCtrl.Eliminar(criaId, versionRegistro: 2, CancellationToken.None));
+            }
+            await using (var stalePutAfterDelCtx = MySqlTestHelper.CreateContext(connStr))
+            {
+                var staleCtrl = new GenealogiaController(new FarmBovi.Api.Services.GenealogiaService(stalePutAfterDelCtx, new FarmBovi.Api.Services.RanchAccessService(stalePutAfterDelCtx)));
+                AttachJwtUser(staleCtrl, userId);
+                var staleAfterDelRes = await staleCtrl.Actualizar(criaId, new ActualizarGenealogiaRequest(padre2Id, madreId, "Update tras Delete", VersionRegistro: 2), CancellationToken.None);
+                var staleAfterDelObj = Assert.IsAssignableFrom<ObjectResult>(staleAfterDelRes);
+                Assert.Equal(StatusCodes.Status409Conflict, staleAfterDelObj.StatusCode);
+            }
+
+            // 5. Comprobar en un tercer contexto que EF Core lanza DbUpdateConcurrencyException ante token obsoleto y que solo persistió la modificación esperada.
             await using var db3 = MySqlTestHelper.CreateContext(connStr);
             var reg3 = await db3.GenealogiasAnimales.FirstAsync(g => g.IdAnimal == criaId);
             Assert.Equal("Modificacion Contexto 1", reg3.Observaciones);
             Assert.Equal(padre1Id, reg3.IdPadre);
-            Assert.Equal(2L, reg3.VersionRegistro);
+            Assert.Equal(3L, reg3.VersionRegistro);
+            Assert.NotNull(reg3.EliminadoEn);
 
             db3.Entry(reg3).Property(x => x.VersionRegistro).OriginalValue = 1L;
             reg3.Observaciones = "Forzar DbUpdateConcurrencyException";
