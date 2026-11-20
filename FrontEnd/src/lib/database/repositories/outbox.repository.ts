@@ -15,6 +15,8 @@ export interface CreateOutboxOperationInput {
   tipoOperacion: OutboxOperationType;
   versionBase?: number | string | null;
   payload: unknown;
+  idRancho?: string | null;
+  idDispositivo?: string | null;
 }
 
 export interface MarkConflictInput {
@@ -28,6 +30,36 @@ export interface MarkConflictInput {
 export const MAX_TRANSIENT_PUSH_RETRIES = 8;
 export const MAX_PUSH_RETRY_ATTEMPTS = MAX_TRANSIENT_PUSH_RETRIES;
 
+const OUTBOX_DEVICE_KEY = 'farmbovi_device_id';
+let fallbackOutboxDeviceId: string | null = null;
+
+function resolveOutboxDeviceId(): string {
+  if (typeof window !== 'undefined') {
+    try {
+      const existing = window.localStorage.getItem(OUTBOX_DEVICE_KEY);
+      if (existing && /^[A-Za-z0-9._:@-]{3,120}$/.test(existing)) {
+        return existing;
+      }
+      const generated = `pwa-web-${crypto.randomUUID()}`;
+      window.localStorage.setItem(OUTBOX_DEVICE_KEY, generated);
+      return generated;
+    } catch {
+      // Fallback en memoria si localStorage no está disponible
+    }
+  }
+  if (!fallbackOutboxDeviceId) {
+    fallbackOutboxDeviceId = `pwa-web-${crypto.randomUUID()}`;
+  }
+  return fallbackOutboxDeviceId;
+}
+
+function extractRanchIdFromPayload(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const rec = payload as Record<string, unknown>;
+  const candidate = rec.idRancho ?? rec.ranchId;
+  return typeof candidate === 'string' && candidate.trim().length > 0 ? candidate.trim() : null;
+}
+
 function getEntityTable(entidad: SyncEntityName): Table<BaseLocalEntity, string> | null {
   switch (entidad) {
     case 'ranches':
@@ -38,6 +70,8 @@ function getEntityTable(entidad: SyncEntityName): Table<BaseLocalEntity, string>
       return db.weighings;
     case 'healthRecords':
       return db.healthRecords;
+    case 'treatments':
+      return db.treatments;
     case 'feedingRecords':
       return db.feedingRecords;
     case 'reproductionRecords':
@@ -75,6 +109,8 @@ export const OutboxRepository = {
       tipoOperacion: input.tipoOperacion,
       versionBase: input.versionBase ?? null,
       payload: input.payload,
+      idDispositivo: input.idDispositivo ?? resolveOutboxDeviceId(),
+      idRancho: input.idRancho ?? extractRanchIdFromPayload(input.payload),
       estado: 'pendiente',
       fechaCreacion: new Date().toISOString(),
       intentos: 0,
@@ -128,18 +164,17 @@ export const OutboxRepository = {
 
   async getByEntity(entidad: SyncEntityName, idEntidad: string): Promise<LocalOutboxQueue[]> {
     const ops = await db.outbox
-      .where('idEntidad')
-      .equals(idEntidad)
-      .filter((op) => op.entidad === entidad)
+      .where('[entidad+idEntidad]')
+      .equals([entidad, idEntidad])
       .toArray();
     return ops.sort((a, b) => a.fechaCreacion.localeCompare(b.fechaCreacion));
   },
 
   async getPendingByEntity(entidad: SyncEntityName, idEntidad: string): Promise<LocalOutboxQueue[]> {
     const ops = await db.outbox
-      .where('idEntidad')
-      .equals(idEntidad)
-      .filter((op) => op.entidad === entidad && op.estado !== 'confirmado')
+      .where('[entidad+idEntidad]')
+      .equals([entidad, idEntidad])
+      .filter((op) => op.estado !== 'confirmado')
       .toArray();
     return ops.sort((a, b) => a.fechaCreacion.localeCompare(b.fechaCreacion));
   },

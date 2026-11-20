@@ -49,7 +49,7 @@ export function registerFarmBoviServiceWorker(): void {
     window.location.reload();
   });
 
-  window.addEventListener('load', () => {
+  const performRegistration = () => {
     void (async () => {
       PwaUpdateManager.setRegistering();
       try {
@@ -94,5 +94,11 @@ export function registerFarmBoviServiceWorker(): void {
         PwaUpdateManager.setRegistrationError(msg);
       }
     })();
-  });
+  };
+
+  if (document.readyState === 'complete') {
+    performRegistration();
+  } else {
+    window.addEventListener('load', performRegistration, { once: true });
+  }
 }

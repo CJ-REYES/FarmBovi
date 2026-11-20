@@ -122,7 +122,8 @@ export class BaseTransactionalRepository<T extends BaseLocalEntity> {
               idEntidad: recordId,
               tipoOperacion: 'CREATE',
               versionBase: null,
-              payload: effectivePayload
+              payload: effectivePayload,
+              idRancho: newRecord.ranchId ?? null
             }),
             fechaCreacion: now
           };
@@ -188,7 +189,8 @@ export class BaseTransactionalRepository<T extends BaseLocalEntity> {
             idEntidad: recordId,
             tipoOperacion: operation,
             versionBase,
-            payload: effectivePayload
+            payload: effectivePayload,
+            idRancho: (data.ranchId ?? current.ranchId) ?? null
           }),
           fechaCreacion: now
         };
