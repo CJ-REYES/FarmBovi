@@ -5,7 +5,7 @@ import {
   apiRequest,
   buildApiUrl
 } from '../../lib/api';
-import type { LocalOutboxQueue } from '../../lib/database/schema';
+import type { LocalOutboxQueue, OutboxOperationType, SyncEntityName } from '../../lib/database/schema';
 import type {
   BackendEndpointAvailability,
   SyncBatchPushRequestDto,
@@ -21,6 +21,7 @@ import {
   validateSyncOperationResult,
   validateSyncPullResponse
 } from './sync-response.validator';
+import { isValidGuid } from '../cattle.validation';
 
 export class SyncEndpointNotConfiguredError extends Error {
   readonly endpointType: 'push' | 'pull';
@@ -34,9 +35,197 @@ export class SyncEndpointNotConfiguredError extends Error {
   }
 }
 
+const DEVICE_ID_STORAGE_KEY = 'farmbovi_device_id';
+let fallbackDeviceId: string | null = null;
+
+export function getOrCreateDeviceId(): string {
+  if (typeof window !== 'undefined') {
+    try {
+      const existing = window.localStorage.getItem(DEVICE_ID_STORAGE_KEY);
+      if (existing && /^[A-Za-z0-9._:@-]{3,120}$/.test(existing)) {
+        return existing;
+      }
+      const generated = `pwa-web-${crypto.randomUUID()}`;
+      window.localStorage.setItem(DEVICE_ID_STORAGE_KEY, generated);
+      return generated;
+    } catch {
+      // Continuar con identificador de memoria si localStorage no está disponible
+    }
+  }
+  if (!fallbackDeviceId) {
+    fallbackDeviceId = `pwa-web-${crypto.randomUUID()}`;
+  }
+  return fallbackDeviceId;
+}
+
+const CLIENT_ENTITY_TO_BACKEND: Partial<Record<SyncEntityName, string>> = {
+  ranches: 'Rancho',
+  lots: 'Lote',
+  cattle: 'Animal',
+  healthRecords: 'EventoSanitario',
+  feedingRecords: 'Alimentacion',
+  movements: 'MovimientoAnimal',
+  alerts: 'Recordatorio'
+};
+
+function mapOperationToBackend(op: OutboxOperationType): 'Crear' | 'Actualizar' | 'Eliminar' {
+  switch (op) {
+    case 'CREATE':
+      return 'Crear';
+    case 'UPDATE':
+      return 'Actualizar';
+    case 'DELETE':
+      return 'Eliminar';
+  }
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function resolvePayloadRanchId(dto: SyncOperationRequestDto): string {
+  if (dto.ranchId && isValidGuid(dto.ranchId)) {
+    return dto.ranchId;
+  }
+  if (isPlainRecord(dto.payload)) {
+    const candidate = dto.payload.idRancho ?? dto.payload.ranchId;
+    if (typeof candidate === 'string' && isValidGuid(candidate)) {
+      return candidate;
+    }
+  }
+  return '';
+}
+
+function resolveBackendRecordId(dto: SyncOperationRequestDto): string {
+  if (typeof dto.remoteId === 'string' && isValidGuid(dto.remoteId)) {
+    return dto.remoteId;
+  }
+  if (isValidGuid(dto.idEntidad)) {
+    return dto.idEntidad;
+  }
+  return dto.idEntidad;
+}
+
+function normalizeCattlePayloadForBackend(
+  rawPayload: unknown,
+  idRegistro: string,
+  idRancho: string,
+  tipoOperacion: OutboxOperationType
+): Record<string, unknown> {
+  if (tipoOperacion === 'DELETE') {
+    return { idAnimal: idRegistro };
+  }
+  if (!isPlainRecord(rawPayload)) {
+    return {};
+  }
+
+  const arete =
+    typeof rawPayload.arete === 'string'
+      ? rawPayload.arete.trim()
+      : typeof rawPayload.areteSiniiga === 'string'
+        ? rawPayload.areteSiniiga.trim()
+        : undefined;
+  const sexo =
+    typeof rawPayload.sexo === 'string'
+      ? rawPayload.sexo.trim()
+      : typeof rawPayload.gender === 'string'
+        ? rawPayload.gender.trim()
+        : undefined;
+  const rawLote =
+    rawPayload.idLote !== undefined
+      ? rawPayload.idLote
+      : rawPayload.loteId !== undefined
+        ? rawPayload.loteId
+        : undefined;
+  const idLote =
+    typeof rawLote === 'string' && rawLote.trim().length > 0 ? rawLote.trim() : rawLote === null ? null : undefined;
+
+  const backendPayload: Record<string, unknown> = {};
+
+  if (tipoOperacion === 'CREATE') {
+    backendPayload.idAnimal = idRegistro;
+    backendPayload.idRancho = idRancho;
+  }
+
+  if (idLote !== undefined) backendPayload.idLote = idLote;
+  if (arete !== undefined) backendPayload.arete = arete;
+  if (typeof rawPayload.raza === 'string') backendPayload.raza = rawPayload.raza.trim();
+  if (sexo !== undefined) backendPayload.sexo = sexo;
+  if (rawPayload.fechaNacimiento !== undefined) {
+    backendPayload.fechaNacimiento =
+      typeof rawPayload.fechaNacimiento === 'string' && rawPayload.fechaNacimiento.trim().length > 0
+        ? rawPayload.fechaNacimiento.trim()
+        : null;
+  }
+  if (typeof rawPayload.fechaIngreso === 'string' && rawPayload.fechaIngreso.trim().length > 0) {
+    backendPayload.fechaIngreso = rawPayload.fechaIngreso.trim();
+  }
+  if (typeof rawPayload.procedencia === 'string') {
+    backendPayload.procedencia = rawPayload.procedencia.trim();
+  }
+  if (typeof rawPayload.estado === 'string') {
+    backendPayload.estado = rawPayload.estado.trim();
+  }
+  if (rawPayload.fechaSalida !== undefined) {
+    backendPayload.fechaSalida =
+      typeof rawPayload.fechaSalida === 'string' && rawPayload.fechaSalida.trim().length > 0
+        ? rawPayload.fechaSalida.trim()
+        : null;
+  }
+  if (rawPayload.observaciones !== undefined) {
+    backendPayload.observaciones =
+      typeof rawPayload.observaciones === 'string' && rawPayload.observaciones.trim().length > 0
+        ? rawPayload.observaciones.trim()
+        : null;
+  }
+
+  return backendPayload;
+}
+
+function buildBackendPushBody(dto: SyncOperationRequestDto): {
+  body: Record<string, unknown>;
+  deviceId: string;
+} {
+  const deviceId = getOrCreateDeviceId();
+  const idRancho = resolvePayloadRanchId(dto);
+  const idRegistro = resolveBackendRecordId(dto);
+  const entidadBackend = CLIENT_ENTITY_TO_BACKEND[dto.entidad] ?? dto.entidad;
+  const parsedVersionBase =
+    dto.tipoOperacion === 'CREATE' || dto.versionBase === null || dto.versionBase === undefined
+      ? null
+      : Number(dto.versionBase);
+
+  const normalizedPayload =
+    dto.entidad === 'cattle'
+      ? normalizeCattlePayloadForBackend(dto.payload, idRegistro, idRancho, dto.tipoOperacion)
+      : isPlainRecord(dto.payload)
+        ? dto.payload
+        : {};
+
+  return {
+    deviceId,
+    body: {
+      idOperacion: dto.idOperacion,
+      idRancho,
+      idDispositivo: deviceId,
+      entidad: entidadBackend,
+      idRegistro,
+      operacion: mapOperationToBackend(dto.tipoOperacion),
+      versionBase:
+        parsedVersionBase !== null && Number.isFinite(parsedVersionBase) ? parsedVersionBase : null,
+      fechaLocal: dto.fechaCreacionCliente,
+      payload: normalizedPayload
+    }
+  };
+}
+
 let configuredEndpoints: SyncEndpointsConfig = {
-  pushEndpoint: (import.meta.env.VITE_SYNC_PUSH_URL as string | undefined)?.trim() || null,
-  pullEndpoint: (import.meta.env.VITE_SYNC_PULL_URL as string | undefined)?.trim() || null
+  pushEndpoint:
+    (import.meta.env.VITE_SYNC_PUSH_URL as string | undefined)?.trim() ||
+    BACKEND_ROUTES.SYNC_PUSH,
+  pullEndpoint:
+    (import.meta.env.VITE_SYNC_PULL_URL as string | undefined)?.trim() ||
+    BACKEND_ROUTES.SYNC_PULL
 };
 
 function mapHttpErrorToOperationResult(
@@ -49,16 +238,34 @@ function mapHttpErrorToOperationResult(
         ? (err.data as Record<string, unknown>)
         : null;
 
-    // 409 Conflict: versión base desactualizada en el servidor
+    // 409 Conflict: versión base desactualizada o restricción de integridad
     if (err.status === 409) {
+      const conflictType = typeof body?.tipoConflicto === 'string' ? body.tipoConflicto : '';
       const serverState =
-        body?.estadoServidor && typeof body.estadoServidor === 'object' && !Array.isArray(body.estadoServidor)
+        body?.estadoServidor &&
+        typeof body.estadoServidor === 'object' &&
+        !Array.isArray(body.estadoServidor)
           ? (body.estadoServidor as Record<string, unknown>)
           : null;
       const serverVersion =
         typeof body?.versionServidor === 'number' || typeof body?.versionServidor === 'string'
           ? body.versionServidor
           : null;
+
+      if (
+        conflictType === 'DUPLICATE_OR_INVALID_REFERENCE' ||
+        conflictType === 'CONSTRAINT_VIOLATION' ||
+        conflictType === 'IDEMPOTENCY_HASH_MISMATCH'
+      ) {
+        return {
+          idOperacion: dto.idOperacion,
+          entidad: dto.entidad,
+          idEntidad: dto.idEntidad,
+          resultado: 'VALIDATION_ERROR',
+          mensaje: err.message,
+          codigoHttp: 409
+        };
+      }
 
       return {
         idOperacion: dto.idOperacion,
@@ -135,7 +342,7 @@ function mapHttpErrorToOperationResult(
 
 export const SyncHttpClient = {
   /**
-   * Permite registrar rutas reales de sincronización una vez implementadas en ASP.NET Core.
+   * Permite sobreescribir rutas de sincronización en tiempo de ejecución o pruebas.
    */
   configureEndpoints(config: Partial<SyncEndpointsConfig>): void {
     configuredEndpoints = {
@@ -162,13 +369,15 @@ export const SyncHttpClient = {
    */
   serializeOperationDto(
     op: LocalOutboxQueue,
-    remoteId?: string | number | null
+    remoteId?: string | number | null,
+    ranchId?: string | null
   ): SyncOperationRequestDto {
     return {
       idOperacion: op.idOperacion,
       entidad: op.entidad,
       idEntidad: op.idEntidad,
       remoteId: remoteId ?? null,
+      ranchId: ranchId ?? null,
       tipoOperacion: op.tipoOperacion,
       versionBase: op.versionBase,
       payload: op.payload,
@@ -177,7 +386,7 @@ export const SyncHttpClient = {
   },
 
   /**
-   * Envía una operación individual al endpoint de sincronización cuando exista.
+   * Envía una operación individual al endpoint real `POST /api/sync/operaciones`.
    * Valida estrictamente el cuerpo de respuesta antes de aceptar confirmación.
    */
   async sendOperation(dto: SyncOperationRequestDto): Promise<SyncOperationResultDto> {
@@ -185,8 +394,10 @@ export const SyncHttpClient = {
       throw new SyncEndpointNotConfiguredError('push');
     }
 
+    const { body, deviceId } = buildBackendPushBody(dto);
     const headers: Record<string, string> = {
-      'X-Idempotency-Key': dto.idOperacion
+      'X-Idempotency-Key': dto.idOperacion,
+      'X-Device-Id': deviceId
     };
 
     if (dto.versionBase !== null && dto.versionBase !== undefined) {
@@ -196,11 +407,15 @@ export const SyncHttpClient = {
     try {
       const response = await apiRequest<unknown>(configuredEndpoints.pushEndpoint, {
         method: 'POST',
-        body: dto,
+        body,
         headers
       });
 
-      const validation = validateSyncOperationResult(response.data, dto.idOperacion);
+      const validation = validateSyncOperationResult(
+        response.data,
+        dto.idOperacion,
+        dto.idEntidad
+      );
       if (!validation.valid) {
         return {
           idOperacion: dto.idOperacion,
@@ -222,7 +437,7 @@ export const SyncHttpClient = {
   },
 
   /**
-   * Envía un lote ordenado de operaciones pendientes al servidor cuando exista el endpoint.
+   * Envía un lote ordenado de operaciones pendientes al servidor cuando exista endpoint batch.
    */
   async sendBatch(requestDto: SyncBatchPushRequestDto): Promise<SyncBatchPushResponseDto> {
     if (!configuredEndpoints.pushEndpoint) {
@@ -258,7 +473,7 @@ export const SyncHttpClient = {
   },
 
   /**
-   * Descarga cambios remotos paginados usando cursor opaco.
+   * Descarga cambios remotos paginados usando cursor opaco (`GET /api/sync/cambios`).
    */
   async fetchChanges<TData = Record<string, unknown>>(
     requestDto: SyncPullRequestDto

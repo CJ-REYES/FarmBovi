@@ -41,20 +41,16 @@ export interface PullOptions {
 }
 
 /**
- * Orden topológico padre -> hijo para asegurar que lotes y bovinos existan
- * antes de descargar pesajes, eventos de salud, movimientos o genealogía.
+ * Orden topológico padre -> hijo limitado a las entidades habilitadas en `SyncController`
+ * (`GET /api/sync/cambios`). Evita solicitudes 400 contra entidades aún no modeladas en Backend.
  */
 export const PULL_ENTITY_ORDER: readonly SyncEntityName[] = [
   'lots',
   'cattle',
-  'genealogy',
-  'weighings',
   'healthRecords',
   'feedingRecords',
-  'reproductionRecords',
   'movements',
-  'alerts',
-  'media'
+  'alerts'
 ];
 
 const inFlightPullEntities = new Set<SyncEntityName>();

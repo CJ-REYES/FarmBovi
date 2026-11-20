@@ -1,4 +1,5 @@
 export { BaseTransactionalRepository } from './base-transactional.repository';
+export { RanchRepository } from './ranch.repository';
 export { CattleRepository } from './cattle.repository';
 export { WeighingRepository } from './weighing.repository';
 export { HealthRepository } from './health.repository';

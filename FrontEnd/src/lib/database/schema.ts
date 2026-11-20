@@ -1,6 +1,7 @@
 export type SyncStatus = 'synced' | 'pending' | 'conflict' | 'error';
 
 export type SyncEntityName =
+  | 'ranches'
   | 'cattle'
   | 'weighings'
   | 'healthRecords'
@@ -62,12 +63,34 @@ export interface BaseLocalEntity {
   deletedAt?: string | null;
 }
 
+export interface LocalRanch extends BaseLocalEntity {
+  nombre: string;
+  ubicacionGeneral: string;
+  estado: string;
+}
+
 export interface LocalCattle extends BaseLocalEntity {
+  /** Identificador oficial / arete del animal (campo `arete` en Backend `Animal`). */
+  arete: string;
+  /** Alias legado mantenido en sincronía con `arete` por compatibilidad con v1–v3 y Pull. */
   areteSiniiga: string;
+  /** Campo legado local (no existe en Backend `Animal`). */
   nombre?: string;
   raza: string;
+  /** Sexo del animal (`sexo` en Backend `Animal`: 'Hembra' | 'Macho'). */
+  sexo: string;
+  /** Alias legado mantenido en sincronía con `sexo` por compatibilidad con v1–v3 y Pull. */
   gender: string;
   fechaNacimiento?: string;
+  /** Fecha de ingreso al rancho (`fechaIngreso` en Backend `Animal`). */
+  fechaIngreso: string;
+  /** Procedencia del animal (`procedencia` en Backend `Animal`). */
+  procedencia: string;
+  /** Estado operativo (`estado` en Backend `Animal`: 'Activo' | 'Vendido' | 'Baja'). */
+  estado: string;
+  /** Fecha de salida cuando estado es Vendido o Baja (`fechaSalida` en Backend `Animal`). */
+  fechaSalida?: string | null;
+  observaciones?: string | null;
   loteId?: string;
 }
 
@@ -107,6 +130,7 @@ export interface LocalLot extends BaseLocalEntity {
   nombre: string;
   capacidad: number;
   ubicacion?: string;
+  estado?: string;
 }
 
 export interface LocalMovement extends BaseLocalEntity {

@@ -36,6 +36,7 @@ export interface PushCycleSummary {
  * se sincronicen antes que registros dependientes (pesajes, salud, movimientos).
  */
 const ENTITY_SYNC_PRIORITY: Record<SyncEntityName, number> = {
+  ranches: 0,
   lots: 1,
   cattle: 2,
   genealogy: 3,
@@ -49,11 +50,27 @@ const ENTITY_SYNC_PRIORITY: Record<SyncEntityName, number> = {
   weighingAnalysisJobs: 11
 };
 
+/**
+ * Entidades actualmente soportadas por `SincronizacionController` (`POST /api/sync/operaciones`).
+ * Las entidades sin soporte en Backend permanecen en local sin provocar errores 400 permanentes.
+ */
+const BACKEND_PUSH_SUPPORTED_ENTITIES = new Set<SyncEntityName>([
+  'ranches',
+  'lots',
+  'cattle',
+  'healthRecords',
+  'feedingRecords',
+  'movements',
+  'alerts'
+]);
+
 const inFlightOperationIds = new Set<string>();
 let activePushPromise: Promise<PushCycleSummary> | null = null;
 
 function getEntityTable(entidad: SyncEntityName): Table<BaseLocalEntity, string> | null {
   switch (entidad) {
+    case 'ranches':
+      return db.ranches as unknown as Table<BaseLocalEntity, string>;
     case 'cattle':
       return db.cattle as unknown as Table<BaseLocalEntity, string>;
     case 'weighings':
@@ -159,7 +176,10 @@ export const PushSyncEngine = {
     // Recuperar operaciones que quedaron en 'en_proceso' tras un cierre inesperado
     await OutboxRepository.recoverInterruptedOperations(inFlightOperationIds);
 
-    const dispatchableOps = await OutboxRepository.getDispatchableOperations();
+    const allDispatchableOps = await OutboxRepository.getDispatchableOperations();
+    const dispatchableOps = allDispatchableOps.filter((op) =>
+      BACKEND_PUSH_SUPPORTED_ENTITIES.has(op.entidad)
+    );
     if (dispatchableOps.length === 0) {
       return { ...summary, status: 'nothing_to_push' };
     }
@@ -282,7 +302,8 @@ export const PushSyncEngine = {
           ...op,
           versionBase: effectiveVersionBase
         },
-        latestEntity?.remoteId ?? null
+        latestEntity?.remoteId ?? null,
+        latestEntity?.ranchId ?? null
       );
 
       const result = await SyncHttpClient.sendOperation(dto);

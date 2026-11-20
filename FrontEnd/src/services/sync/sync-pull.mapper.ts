@@ -73,6 +73,9 @@ async function resolveLocalForeignUuid(
   const byUuid = await parentTable.get(rawRef);
   if (byUuid) return byUuid.id;
 
+  const byStringRemote = await parentTable.where('remoteId').equals(rawRef).first();
+  if (byStringRemote) return byStringRemote.id;
+
   const numericRef = Number(rawRef);
   if (!Number.isNaN(numericRef)) {
     const byRemote = await parentTable.where('remoteId').equals(numericRef).first();
@@ -86,6 +89,8 @@ export function getSyncEntityTable(
   entidad: SyncEntityName
 ): Table<BaseLocalEntity, string> | null {
   switch (entidad) {
+    case 'ranches':
+      return db.ranches as unknown as Table<BaseLocalEntity, string>;
     case 'cattle':
       return db.cattle as unknown as Table<BaseLocalEntity, string>;
     case 'weighings':
@@ -123,7 +128,12 @@ export async function mapRemoteChangeToLocalEntity(
   }
 
   const data = change.datos;
-  const stableId = existing?.id || change.clientUuid || crypto.randomUUID();
+  const stableId =
+    existing?.id ||
+    change.clientUuid ||
+    (typeof change.remoteId === 'string' && change.remoteId.trim().length > 0
+      ? change.remoteId
+      : crypto.randomUUID());
   const localNumericId = existing?.localNumericId ?? computeStableNegativeId(stableId);
   const ranchId = readString(data, ['ranchId', 'ranchoId'], existing?.ranchId);
   const createdAt =
@@ -144,12 +154,34 @@ export async function mapRemoteChangeToLocalEntity(
 
   switch (entidad) {
     case 'cattle': {
-      const areteSiniiga = readString(data, ['areteSiniiga', 'tagNumber', 'earTag'], '') ?? '';
-      const raza = readString(data, ['raza', 'breed'], 'Cruzado') ?? 'Cruzado';
-      const gender = readString(data, ['gender', 'sex', 'sexo'], 'Hembra') ?? 'Hembra';
-      const nombre = readString(data, ['nombre', 'name']);
-      const fechaNacimiento = readString(data, ['fechaNacimiento', 'birthDate']);
-      const rawLoteId = readString(data, ['loteId', 'lotId']);
+      const existingCattle = existing as LocalCattle | undefined;
+      const arete =
+        readString(data, ['arete', 'areteSiniiga', 'tagNumber', 'earTag'], existingCattle?.arete ?? '') ??
+        '';
+      const raza = readString(data, ['raza', 'breed'], existingCattle?.raza ?? 'Cruzado') ?? 'Cruzado';
+      const sexo =
+        readString(data, ['sexo', 'gender', 'sex'], existingCattle?.sexo ?? 'Hembra') ?? 'Hembra';
+      const nombre = readString(data, ['nombre', 'name'], existingCattle?.nombre);
+      const fechaNacimiento = readString(
+        data,
+        ['fechaNacimiento', 'birthDate'],
+        existingCattle?.fechaNacimiento
+      );
+      const fechaIngreso =
+        readString(
+          data,
+          ['fechaIngreso'],
+          existingCattle?.fechaIngreso ?? createdAt.slice(0, 10)
+        ) ?? createdAt.slice(0, 10);
+      const procedencia =
+        readString(data, ['procedencia'], existingCattle?.procedencia ?? 'Propio') ?? 'Propio';
+      const estado =
+        readString(data, ['estado'], existingCattle?.estado ?? 'Activo') ?? 'Activo';
+      const fechaSalida =
+        readString(data, ['fechaSalida'], existingCattle?.fechaSalida ?? undefined) ?? null;
+      const observaciones =
+        readString(data, ['observaciones'], existingCattle?.observaciones ?? undefined) ?? null;
+      const rawLoteId = readString(data, ['idLote', 'loteId', 'lotId']);
       const loteId = rawLoteId
         ? await resolveLocalForeignUuid(
             db.lots as unknown as Table<BaseLocalEntity, string>,
@@ -157,19 +189,26 @@ export async function mapRemoteChangeToLocalEntity(
           )
         : undefined;
 
-      if (!areteSiniiga && !nombre) {
+      if (!arete && !nombre) {
         throw new Error(
-          `Registro remoto de bovino inválido (remoteId=${String(change.remoteId)}): falta areteSiniiga y nombre.`
+          `Registro remoto de bovino inválido (remoteId=${String(change.remoteId)}): falta arete.`
         );
       }
 
       const cattleRecord: LocalCattle = {
         ...baseFields,
-        areteSiniiga,
+        arete,
+        areteSiniiga: arete,
         nombre,
         raza,
-        gender,
+        sexo,
+        gender: sexo,
         fechaNacimiento,
+        fechaIngreso,
+        procedencia,
+        estado,
+        fechaSalida,
+        observaciones,
         loteId
       };
       return cattleRecord;

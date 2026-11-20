@@ -1,6 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { useSharedCattle } from '../../context/CattleContext';
-import type { Cattle } from '../../types/cattle';
+import { useSharedCattle } from '../../hooks/useCattle';
 import KpiCard from './KpiCard';
 import EmptyState from '../ui/EmptyState';
 import {
@@ -14,8 +13,8 @@ export function DashboardPage() {
   const { cattle, loading } = useSharedCattle();
 
   const totalBovinos = cattle?.length || 0;
-  const machos = cattle?.filter((c: Cattle & { gender?: string; sex?: string }) => c.gender === 'Macho' || c.sex === 'Macho').length || 0;
-  const hembras = cattle?.filter((c: Cattle & { gender?: string; sex?: string }) => c.gender === 'Hembra' || c.sex === 'Hembra').length || 0;
+  const machos = cattle?.filter((c) => c.sexo === 'Macho').length || 0;
+  const hembras = cattle?.filter((c) => c.sexo === 'Hembra').length || 0;
 
   const pctMachos = totalBovinos > 0 ? Math.round((machos / totalBovinos) * 100) : 0;
   const pctHembras = totalBovinos > 0 ? Math.round((hembras / totalBovinos) * 100) : 0;
@@ -103,6 +102,7 @@ export function DashboardPage() {
               message="Registra al menos 2 pesajes oficiales para generar la curva de crecimiento."
               icon={Scale}
               actionLabel="Ir a Pesajes"
+              onAction={() => navigate('/weighing')}
             />
           </div>
         </div>
@@ -209,18 +209,21 @@ export function DashboardPage() {
                <div className="p-8"><EmptyState title="Bitácora Vacía" message="No hay actividad reciente en el rancho." icon={ClipboardList} /></div>
             ) : (
                <ul className="divide-y divide-border-light/50">
-                 {/* CORRECCIÓN 2: Extendemos el tipado añadiendo gender y sex al inline type */}
-                 {cattle?.slice(0, 4).map((bovino: Cattle & { tagNumber?: string; areteSiniiga?: string; breed?: string; raza?: string; gender?: string; sex?: string }, index: number) => (
-                   <li key={bovino.id || index} className="flex items-center gap-4 p-3 hover:bg-surface-secondary/50 transition-colors cursor-pointer group">
+                 {cattle?.slice(0, 4).map((bovino) => (
+                   <li
+                     key={bovino.id}
+                     onClick={() => navigate(`/cattle/${bovino.id}`)}
+                     className="flex items-center gap-4 p-3 hover:bg-surface-secondary/50 transition-colors cursor-pointer group"
+                   >
                      <div className="w-10 h-10 rounded-full bg-surface-secondary border border-border-light flex items-center justify-center text-brand-slate shrink-0">
                        <Beef size={18} />
                      </div>
                      <div className="flex-1 min-w-0">
                        <p className="text-[14px] font-semibold text-brand-slate truncate">
-                         Registro en Padrón: {bovino.tagNumber || bovino.areteSiniiga || `ID-${bovino.id}`}
+                         Registro en Padrón: {bovino.arete || bovino.id}
                        </p>
                        <p className="text-[12px] text-brand-slate/60 truncate">
-                         {bovino.breed || bovino.raza || 'Bovino'} • {bovino.gender || bovino.sex || 'Sin clasificar'}
+                         {bovino.raza || 'Bovino'} • {bovino.sexo} • {bovino.estado}
                        </p>
                      </div>
                      <div className="text-[12px] font-medium text-brand-slate/40 px-4">

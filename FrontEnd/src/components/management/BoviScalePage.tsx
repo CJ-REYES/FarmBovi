@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { useSharedCattle } from '../../context/CattleContext';
-import type { Cattle } from '../../types/cattle';
+import { useSharedCattle } from '../../hooks/useCattle';
 import EmptyState from '../ui/EmptyState';
 import {
   Camera, Upload, RefreshCw, CheckCircle, Info,
@@ -154,9 +153,9 @@ export default function BoviScalePage() {
                     className="w-full h-[40px] pl-10 pr-4 bg-surface-app border border-border-light rounded-md text-[14px] text-brand-slate focus:outline-none focus:border-brand-primary"
                   >
                     <option value="">-- Selecciona un bovino del inventario --</option>
-                    {cattle?.map((c: Cattle & { areteSiniiga?: string; tagNumber?: string; nombre?: string; name?: string }) => (
+                    {cattle?.map((c) => (
                       <option key={c.id} value={c.id}>
-                        {c.areteSiniiga || c.tagNumber || `ID-${c.id}`} {(c.nombre || c.name) ? `- ${c.nombre || c.name}` : ''}
+                        {c.arete || c.id} — {c.raza}
                       </option>
                     ))}
                   </select>

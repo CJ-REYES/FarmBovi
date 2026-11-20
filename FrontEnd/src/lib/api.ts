@@ -1,15 +1,33 @@
-import type { Cattle, CattleInput } from '../types/cattle';
+import type {
+  BackendAnimalDto,
+  BackendAnimalPayload,
+  BackendLoteDto,
+  BackendRanchoDto
+} from '../types/cattle';
 
 export const API_BASE_URL = (
-  (import.meta.env.VITE_API_URL as string | undefined) || '/api'
+  (import.meta.env.VITE_API_BASE_URL as string | undefined) ||
+  (import.meta.env.VITE_API_URL as string | undefined) ||
+  '/api'
 ).replace(/\/$/, '');
 
 /**
  * Rutas reales confirmadas en el backend ASP.NET Core (.NET 10).
- * No se incluyen rutas inexistentes como /api/cattle.
  */
 export const BACKEND_ROUTES = {
-  ANIMALES: '/animales'
+  AUTH_LOGIN: '/auth/login',
+  ANIMALES: '/animales',
+  LOTES: '/lotes',
+  RANCHOS: '/ranchos',
+  MOVIMIENTOS: '/movimientos-animales',
+  ALIMENTACION: '/alimentacion',
+  EVENTOS_SANITARIOS: '/eventos-sanitarios',
+  TRATAMIENTOS: '/tratamientos',
+  RECORDATORIOS: '/recordatorios',
+  USUARIOS: '/usuarios',
+  SYNC_PUSH: '/sync/operaciones',
+  SYNC_PULL: '/sync/cambios',
+  SYNC_AUDIT: '/sync/auditoria'
 } as const;
 
 export class ApiError extends Error {
@@ -46,10 +64,10 @@ function parseRetryAfterHeader(headerValue: string | null): number | null {
 }
 
 /**
- * Obtiene el token de sesión únicamente desde memoria/sessionStorage sin almacenarlo
+ * Obtiene el token de sesión únicamente desde sessionStorage sin almacenarlo
  * en IndexedDB ni registrarlo en consola.
  */
-function readSessionAuthToken(): string | null {
+export function readSessionAuthToken(): string | null {
   if (typeof window === 'undefined') return null;
   try {
     return (
@@ -86,6 +104,42 @@ export function buildSafeHeaders(extraHeaders?: Record<string, string>): Record<
   return headers;
 }
 
+function extractErrorMessage(parsedBody: unknown, rawText: string, status: number): string {
+  if (typeof parsedBody === 'string' && parsedBody.trim().length > 0) {
+    return parsedBody.trim();
+  }
+
+  if (parsedBody && typeof parsedBody === 'object' && !Array.isArray(parsedBody)) {
+    const bodyRecord = parsedBody as Record<string, unknown>;
+    if (typeof bodyRecord.mensaje === 'string' && bodyRecord.mensaje.trim().length > 0) {
+      return bodyRecord.mensaje.trim();
+    }
+    if (typeof bodyRecord.message === 'string' && bodyRecord.message.trim().length > 0) {
+      return bodyRecord.message.trim();
+    }
+    if (typeof bodyRecord.detail === 'string' && bodyRecord.detail.trim().length > 0) {
+      return bodyRecord.detail.trim();
+    }
+    if (bodyRecord.errors && typeof bodyRecord.errors === 'object' && !Array.isArray(bodyRecord.errors)) {
+      const messages = Object.values(bodyRecord.errors as Record<string, unknown>)
+        .flatMap((val) => (Array.isArray(val) ? val : [val]))
+        .filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+      if (messages.length > 0) {
+        return messages.join(' ');
+      }
+    }
+    if (typeof bodyRecord.title === 'string' && bodyRecord.title.trim().length > 0) {
+      return bodyRecord.title.trim();
+    }
+  }
+
+  if (rawText.trim().length > 0 && rawText.trim().length < 300) {
+    return rawText.trim();
+  }
+
+  return `Error HTTP ${status} en el servidor.`;
+}
+
 export interface ApiRequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
@@ -113,7 +167,6 @@ export async function apiRequest<T>(
     response = await fetch(url, {
       method,
       headers,
-      credentials: 'include',
       cache: 'no-store',
       body:
         options.body === undefined
@@ -141,7 +194,7 @@ export async function apiRequest<T>(
   const rawText = await response.text();
 
   // Detecta respuestas HTML (ej. fallback index.html de SPA cuando una ruta API no existe)
-  if (contentType.includes('text/html') || rawText.trimStart().startsWith('<!doctype html')) {
+  if (contentType.includes('text/html') || rawText.trimStart().toLowerCase().startsWith('<!doctype html')) {
     throw new ApiError(
       'El servidor devolvió contenido HTML en lugar de JSON válido.',
       response.status || 502,
@@ -155,6 +208,15 @@ export async function apiRequest<T>(
     try {
       parsedBody = JSON.parse(rawText) as unknown;
     } catch (parseErr) {
+      if (!response.ok) {
+        throw new ApiError(
+          extractErrorMessage(null, rawText, response.status),
+          response.status,
+          rawText,
+          retryAfterMs,
+          parseErr
+        );
+      }
       throw new ApiError(
         'Respuesta JSON malformada recibida desde el servidor.',
         response.status,
@@ -166,16 +228,7 @@ export async function apiRequest<T>(
   }
 
   if (!response.ok) {
-    const bodyRecord =
-      parsedBody && typeof parsedBody === 'object'
-        ? (parsedBody as Record<string, unknown>)
-        : null;
-
-    const safeMessage =
-      (typeof bodyRecord?.message === 'string' && bodyRecord.message) ||
-      (typeof bodyRecord?.title === 'string' && bodyRecord.title) ||
-      `Error HTTP ${response.status} en el servidor.`;
-
+    const safeMessage = extractErrorMessage(parsedBody, rawText, response.status);
     throw new ApiError(safeMessage, response.status, parsedBody, retryAfterMs);
   }
 
@@ -196,37 +249,61 @@ export async function apiRequest<T>(
 }
 
 export const cattleApi = {
-  async list(): Promise<Cattle[]> {
-    const res = await apiRequest<Cattle[]>(BACKEND_ROUTES.ANIMALES, { method: 'GET' });
+  async list(incluirEliminados = false): Promise<BackendAnimalDto[]> {
+    const query = incluirEliminados ? '?incluirEliminados=true' : '';
+    const res = await apiRequest<BackendAnimalDto[]>(`${BACKEND_ROUTES.ANIMALES}${query}`, {
+      method: 'GET'
+    });
     return Array.isArray(res.data) ? res.data : [];
   },
 
-  async getById(id: number | string): Promise<Cattle> {
-    const res = await apiRequest<Cattle>(`${BACKEND_ROUTES.ANIMALES}/${id}`, { method: 'GET' });
+  async getById(id: string): Promise<BackendAnimalDto> {
+    const res = await apiRequest<BackendAnimalDto>(`${BACKEND_ROUTES.ANIMALES}/${id}`, {
+      method: 'GET'
+    });
     return res.data;
   },
 
-  async create(input: CattleInput): Promise<Cattle> {
-    const res = await apiRequest<Cattle>(BACKEND_ROUTES.ANIMALES, {
+  async create(input: BackendAnimalPayload): Promise<BackendAnimalDto> {
+    const res = await apiRequest<BackendAnimalDto>(BACKEND_ROUTES.ANIMALES, {
       method: 'POST',
       body: input
     });
     return res.data;
   },
 
-  async update(id: number | string, input: CattleInput): Promise<Cattle> {
-    const res = await apiRequest<Cattle>(`${BACKEND_ROUTES.ANIMALES}/${id}`, {
+  async update(id: string, input: BackendAnimalPayload): Promise<void> {
+    await apiRequest<unknown>(`${BACKEND_ROUTES.ANIMALES}/${id}`, {
       method: 'PUT',
       body: input,
       allowEmptyResponse: true
     });
-    return res.data;
   },
 
-  async remove(id: number | string): Promise<void> {
+  async remove(id: string): Promise<void> {
     await apiRequest<unknown>(`${BACKEND_ROUTES.ANIMALES}/${id}`, {
       method: 'DELETE',
       allowEmptyResponse: true
     });
+  }
+};
+
+export const lotsApi = {
+  async list(incluirEliminados = false): Promise<BackendLoteDto[]> {
+    const query = incluirEliminados ? '?incluirEliminados=true' : '';
+    const res = await apiRequest<BackendLoteDto[]>(`${BACKEND_ROUTES.LOTES}${query}`, {
+      method: 'GET'
+    });
+    return Array.isArray(res.data) ? res.data : [];
+  }
+};
+
+export const ranchesApi = {
+  async list(incluirEliminados = false): Promise<BackendRanchoDto[]> {
+    const query = incluirEliminados ? '?incluirEliminados=true' : '';
+    const res = await apiRequest<BackendRanchoDto[]>(`${BACKEND_ROUTES.RANCHOS}${query}`, {
+      method: 'GET'
+    });
+    return Array.isArray(res.data) ? res.data : [];
   }
 };

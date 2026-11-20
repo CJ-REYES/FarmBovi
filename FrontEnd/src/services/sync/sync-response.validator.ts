@@ -20,6 +20,7 @@ const VALID_OUTCOMES = new Set<SyncOperationOutcome>([
 ]);
 
 const VALID_ENTITIES = new Set<SyncEntityName>([
+  'ranches',
   'cattle',
   'weighings',
   'healthRecords',
@@ -32,6 +33,40 @@ const VALID_ENTITIES = new Set<SyncEntityName>([
   'media',
   'weighingAnalysisJobs'
 ]);
+
+const SERVER_ENTITY_TO_CLIENT: Record<string, SyncEntityName> = {
+  rancho: 'ranches',
+  ranchos: 'ranches',
+  ranches: 'ranches',
+  animal: 'cattle',
+  animales: 'cattle',
+  cattle: 'cattle',
+  lote: 'lots',
+  lotes: 'lots',
+  lots: 'lots',
+  eventosanitario: 'healthRecords',
+  'eventos-sanitarios': 'healthRecords',
+  tratamiento: 'healthRecords',
+  tratamientos: 'healthRecords',
+  healthrecords: 'healthRecords',
+  alimentacion: 'feedingRecords',
+  alimentaciones: 'feedingRecords',
+  feedingrecords: 'feedingRecords',
+  movimientoanimal: 'movements',
+  'movimientos-animales': 'movements',
+  movements: 'movements',
+  recordatorio: 'alerts',
+  recordatorios: 'alerts',
+  alerts: 'alerts'
+};
+
+function resolveClientEntityName(rawEntity: unknown): SyncEntityName | null {
+  if (typeof rawEntity !== 'string') return null;
+  if (VALID_ENTITIES.has(rawEntity as SyncEntityName)) {
+    return rawEntity as SyncEntityName;
+  }
+  return SERVER_ENTITY_TO_CLIENT[rawEntity.trim().toLowerCase()] ?? null;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -46,7 +81,8 @@ function isValidVersion(value: unknown): value is number | string {
 
 export function validateSyncOperationResult(
   raw: unknown,
-  expectedOperationId?: string
+  expectedOperationId?: string,
+  fallbackEntityId?: string
 ): ResponseValidationResult<SyncOperationResultDto> {
   if (!isRecord(raw)) {
     return { valid: false, reason: 'La respuesta de operación no es un objeto JSON válido.' };
@@ -63,8 +99,54 @@ export function validateSyncOperationResult(
     };
   }
 
-  if (typeof raw.entidad !== 'string' || !VALID_ENTITIES.has(raw.entidad as SyncEntityName)) {
+  const resolvedEntity = resolveClientEntityName(raw.entidad);
+  if (!resolvedEntity) {
     return { valid: false, reason: 'La respuesta contiene una entidad desconocida o ausente.' };
+  }
+
+  // Formato real del Backend (`OperacionSyncResponse` en SincronizacionDtos.cs)
+  if (typeof raw.duplicadoIgnorado === 'boolean') {
+    const version = raw.versionResultante ?? raw.version;
+    if (!isValidVersion(version)) {
+      return {
+        valid: false,
+        reason: 'La respuesta OperacionSyncResponse del servidor omite version/versionResultante.'
+      };
+    }
+
+    const idRegistro =
+      typeof raw.idRegistro === 'string' && raw.idRegistro.trim().length > 0
+        ? raw.idRegistro
+        : fallbackEntityId;
+
+    if (!idRegistro) {
+      return { valid: false, reason: 'La respuesta OperacionSyncResponse omite idRegistro.' };
+    }
+
+    const serverState = isRecord(raw.datos)
+      ? raw.datos
+      : isRecord(raw.estadoServidor)
+        ? raw.estadoServidor
+        : null;
+
+    return {
+      valid: true,
+      value: {
+        idOperacion: raw.idOperacion,
+        entidad: resolvedEntity,
+        idEntidad: fallbackEntityId ?? idRegistro,
+        resultado: raw.duplicadoIgnorado ? 'ALREADY_PROCESSED' : 'ACCEPTED',
+        remoteId: idRegistro,
+        versionServidor: version,
+        estadoServidor: serverState,
+        procesadoEnServidor:
+          typeof raw.aplicadoEn === 'string'
+            ? raw.aplicadoEn
+            : typeof raw.ocurrioEn === 'string'
+              ? raw.ocurrioEn
+              : undefined
+      }
+    };
   }
 
   if (typeof raw.idEntidad !== 'string' || raw.idEntidad.trim().length === 0) {
@@ -108,7 +190,7 @@ export function validateSyncOperationResult(
 
   const normalized: SyncOperationResultDto = {
     idOperacion: raw.idOperacion,
-    entidad: raw.entidad as SyncEntityName,
+    entidad: resolvedEntity,
     idEntidad: raw.idEntidad,
     resultado: outcome,
     remoteId:
