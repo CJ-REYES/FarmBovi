@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Map, Activity,
-  Beef, Scale, Syringe, HeartPulse, Dna, Camera,
+  Beef, Wheat, Scale, Syringe, HeartPulse, Dna, Camera,
   Bell, FileText, Settings, UserCircle, X, type LucideIcon
 } from 'lucide-react';
 
@@ -35,6 +35,7 @@ const MENU_GROUPS: MenuGroup[] = [
   {
     category: "MANEJO GANADERO",
     items: [
+      { id: 'alimentacion', path: '/feeding', label: 'Alimentación', icon: Wheat },
       { id: 'pesajes', path: '/weighing', label: 'Pesajes', icon: Scale },
       { id: 'salud', path: '/health', label: 'Salud y Tratamientos', icon: Syringe },
       { id: 'reproduccion', path: '/reproduction', label: 'Reproducción', icon: HeartPulse },

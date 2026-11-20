@@ -114,9 +114,24 @@ export interface LocalHealthRecord extends BaseLocalEntity {
 
 export interface LocalFeedingRecord extends BaseLocalEntity {
   lotId?: string;
+  /** Animal individual al que aplica la alimentación (mutuamente excluyente con `lotId`). */
+  cattleId?: string;
+  /** Alias legado sincronizado con `alimento` (Backend: `Alimento`). */
   tipoAlimento: string;
+  /** Alias legado sincronizado con `cantidad` (Backend: `Cantidad`). */
   cantidadKg: number;
+  /** Alias legado sincronizado con `inicio` (Backend: `Inicio`). */
   fecha: string;
+  /** Ración aplicada (Backend: `Racion`). */
+  racion?: string;
+  /** Unidad de medida (Backend: `Unidad`). */
+  unidad?: string;
+  /** Frecuencia de suministro (Backend: `Frecuencia`). */
+  frecuencia?: string;
+  /** Fecha/hora opcional de finalización (Backend: `Fin`). */
+  fin?: string | null;
+  /** Notas de cambio de dieta / observaciones (Backend: `CambioDieta`). */
+  cambioDieta?: string | null;
 }
 
 export interface LocalReproductionRecord extends BaseLocalEntity {

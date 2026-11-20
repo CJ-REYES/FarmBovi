@@ -298,6 +298,101 @@ function normalizeMovementPayloadForBackend(
   return backendPayload;
 }
 
+function normalizeFeedingPayloadForBackend(
+  rawPayload: unknown,
+  idRegistro: string,
+  tipoOperacion: OutboxOperationType
+): Record<string, unknown> {
+  if (tipoOperacion === 'DELETE') {
+    return { idAlimentacion: idRegistro };
+  }
+  if (!isPlainRecord(rawPayload)) {
+    return {};
+  }
+
+  const readGuidOrNull = (keys: readonly string[]): string | null | undefined => {
+    for (const key of keys) {
+      if (rawPayload[key] !== undefined) {
+        const val = rawPayload[key];
+        if (val === null) return null;
+        if (typeof val === 'string') {
+          const trimmed = val.trim();
+          return trimmed.length > 0 ? trimmed : null;
+        }
+      }
+    }
+    return undefined;
+  };
+
+  const readTextOrNull = (keys: readonly string[]): string | null | undefined => {
+    for (const key of keys) {
+      if (rawPayload[key] !== undefined) {
+        const val = rawPayload[key];
+        if (val === null) return null;
+        if (typeof val === 'string') {
+          const trimmed = val.trim();
+          return trimmed.length > 0 ? trimmed : null;
+        }
+      }
+    }
+    return undefined;
+  };
+
+  const backendPayload: Record<string, unknown> = {};
+  if (tipoOperacion === 'CREATE') {
+    backendPayload.idAlimentacion = idRegistro;
+  }
+
+  const idAnimal = readGuidOrNull(['idAnimal', 'cattleId']);
+  if (idAnimal !== undefined) backendPayload.idAnimal = idAnimal;
+
+  const idLote = readGuidOrNull(['idLote', 'lotId', 'loteId']);
+  if (idLote !== undefined) backendPayload.idLote = idLote;
+
+  const alimento = readTextOrNull(['alimento', 'tipoAlimento']);
+  if (typeof alimento === 'string') backendPayload.alimento = alimento;
+
+  const racion = readTextOrNull(['racion']);
+  if (typeof racion === 'string') {
+    backendPayload.racion = racion;
+  } else if (tipoOperacion === 'CREATE' && typeof alimento === 'string') {
+    backendPayload.racion = alimento;
+  }
+
+  const rawCantidad = rawPayload.cantidad ?? rawPayload.cantidadKg;
+  if (typeof rawCantidad === 'number' && Number.isFinite(rawCantidad)) {
+    backendPayload.cantidad = rawCantidad;
+  } else if (typeof rawCantidad === 'string' && rawCantidad.trim().length > 0) {
+    const parsed = Number(rawCantidad);
+    if (Number.isFinite(parsed)) backendPayload.cantidad = parsed;
+  }
+
+  const unidad = readTextOrNull(['unidad']);
+  if (typeof unidad === 'string') {
+    backendPayload.unidad = unidad;
+  } else if (tipoOperacion === 'CREATE') {
+    backendPayload.unidad = 'kg';
+  }
+
+  const frecuencia = readTextOrNull(['frecuencia']);
+  if (typeof frecuencia === 'string') {
+    backendPayload.frecuencia = frecuencia;
+  } else if (tipoOperacion === 'CREATE') {
+    backendPayload.frecuencia = 'Diaria';
+  }
+
+  const inicio = readTextOrNull(['inicio', 'fecha']);
+  if (typeof inicio === 'string') backendPayload.inicio = inicio;
+
+  const fin = readTextOrNull(['fin']);
+  if (fin !== undefined) backendPayload.fin = fin;
+
+  const cambioDieta = readTextOrNull(['cambioDieta']);
+  if (cambioDieta !== undefined) backendPayload.cambioDieta = cambioDieta;
+
+  return backendPayload;
+}
+
 function buildBackendPushBody(dto: SyncOperationRequestDto): {
   body: Record<string, unknown>;
   deviceId: string;
@@ -318,9 +413,11 @@ function buildBackendPushBody(dto: SyncOperationRequestDto): {
         ? normalizeLotPayloadForBackend(dto.payload, idRegistro, idRancho, dto.tipoOperacion)
         : dto.entidad === 'movements'
           ? normalizeMovementPayloadForBackend(dto.payload, idRegistro, dto.tipoOperacion)
-          : isPlainRecord(dto.payload)
-            ? dto.payload
-            : {};
+          : dto.entidad === 'feedingRecords'
+            ? normalizeFeedingPayloadForBackend(dto.payload, idRegistro, dto.tipoOperacion)
+            : isPlainRecord(dto.payload)
+              ? dto.payload
+              : {};
 
   return {
     deviceId,

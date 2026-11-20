@@ -1,5 +1,8 @@
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSharedCattle } from '../../hooks/useCattle';
+import { FeedingRepository } from '../../lib/database/repositories/feeding.repository';
+import type { LocalFeedingRecord } from '../../lib/database/schema';
 import KpiCard from './KpiCard';
 import EmptyState from '../ui/EmptyState';
 import {
@@ -11,6 +14,25 @@ export function DashboardPage() {
   const navigate = useNavigate();
   // CORRECCIÓN 1: Usamos 'loading' en lugar de 'isLoading' según la firma de tu hook
   const { cattle, loading } = useSharedCattle();
+  const [recentFeeding, setRecentFeeding] = useState<LocalFeedingRecord[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        const items = await FeedingRepository.getAllWithOptions({
+          includeDeleted: false,
+          order: 'desc'
+        });
+        if (active) setRecentFeeding(items.slice(0, 4));
+      } catch {
+        // Mantener vacío si IndexedDB no está disponible
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const totalBovinos = cattle?.length || 0;
   const machos = cattle?.filter((c) => c.sexo === 'Macho').length || 0;
@@ -177,17 +199,50 @@ export function DashboardPage() {
         </div>
 
         <div className="bg-surface-white border border-border-light rounded-xl shadow-sm flex flex-col h-[300px]">
-          <div className="px-5 py-4 border-b border-border-light">
+          <div className="px-5 py-4 border-b border-border-light flex items-center justify-between gap-2">
             <h2 className="font-bold text-[15px] text-brand-slate flex items-center gap-2">
               <Wheat size={18} className="text-brand-yellow" /> Alimentación Diaria
             </h2>
+            <button
+              type="button"
+              onClick={() => navigate('/feeding')}
+              className="text-[12px] font-semibold text-brand-primary hover:underline cursor-pointer"
+            >
+              Ver módulo
+            </button>
           </div>
-          <div className="flex-1 p-5">
-            <EmptyState
-              title="Módulo Pendiente"
-              message="La gestión de raciones y suplementos aún no está sincronizada."
-              icon={Wheat}
-            />
+          <div className="flex-1 p-4 overflow-y-auto">
+            {recentFeeding.length === 0 ? (
+              <EmptyState
+                title="Sin registros de alimentación"
+                message="Registra suministros por potrero o animal individual desde el módulo de alimentación."
+                icon={Wheat}
+                actionLabel="Ir a Alimentación"
+                onAction={() => navigate('/feeding')}
+              />
+            ) : (
+              <ul className="divide-y divide-border-light/60 text-[13px]">
+                {recentFeeding.map((item) => (
+                  <li
+                    key={item.id}
+                    onClick={() => navigate('/feeding')}
+                    className="py-2.5 flex items-center justify-between gap-2 cursor-pointer hover:bg-surface-app/60 px-2 rounded-md transition-colors"
+                  >
+                    <div className="min-w-0">
+                      <p className="font-semibold text-brand-forest truncate">
+                        {item.tipoAlimento}
+                      </p>
+                      <p className="text-[11px] text-brand-slate/65 truncate">
+                        {item.racion || item.tipoAlimento} • {item.frecuencia || 'Diaria'}
+                      </p>
+                    </div>
+                    <span className="text-[12px] font-bold text-brand-slate shrink-0">
+                      {item.cantidadKg} {item.unidad || 'kg'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
       </div>

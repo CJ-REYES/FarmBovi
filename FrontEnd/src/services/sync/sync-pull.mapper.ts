@@ -273,12 +273,23 @@ export async function mapRemoteChangeToLocalEntity(
     }
 
     case 'feedingRecords': {
-      const tipoAlimento = readString(data, ['tipoAlimento', 'feedType']);
-      const cantidadKg = readNumber(data, ['cantidadKg', 'quantityKg']);
-      const fecha = readString(data, ['fecha', 'date'], change.actualizadoEnServidor);
-      const rawLotId = readString(data, ['lotId', 'loteId']);
+      const existingFeeding = existing as LocalFeedingRecord | undefined;
+      const tipoAlimento = readString(
+        data,
+        ['alimento', 'tipoAlimento', 'feedType'],
+        existingFeeding?.tipoAlimento
+      );
+      const cantidadKg =
+        readNumber(data, ['cantidad', 'cantidadKg', 'quantityKg']) ?? existingFeeding?.cantidadKg;
+      const fecha = readString(
+        data,
+        ['inicio', 'fecha', 'date'],
+        existingFeeding?.fecha ?? change.actualizadoEnServidor
+      );
+      const rawLotId = readString(data, ['idLote', 'lotId', 'loteId']);
+      const rawCattleId = readString(data, ['idAnimal', 'cattleId', 'animalId']);
 
-      if (!tipoAlimento || cantidadKg === undefined || cantidadKg < 0 || !fecha) {
+      if (!tipoAlimento || cantidadKg === undefined || cantidadKg <= 0 || !fecha) {
         throw new Error(
           `Registro remoto de alimentación inválido (remoteId=${String(change.remoteId)}).`
         );
@@ -290,13 +301,26 @@ export async function mapRemoteChangeToLocalEntity(
             rawLotId
           )
         : undefined;
+      const cattleId = rawCattleId
+        ? await resolveLocalForeignUuid(
+            db.cattle as unknown as Table<BaseLocalEntity, string>,
+            rawCattleId
+          )
+        : undefined;
 
       const feedingRecord: LocalFeedingRecord = {
         ...baseFields,
         lotId,
+        cattleId,
         tipoAlimento,
         cantidadKg,
-        fecha
+        fecha,
+        racion: readString(data, ['racion'], existingFeeding?.racion ?? tipoAlimento),
+        unidad: readString(data, ['unidad'], existingFeeding?.unidad ?? 'kg'),
+        frecuencia: readString(data, ['frecuencia'], existingFeeding?.frecuencia ?? 'Diaria'),
+        fin: readString(data, ['fin'], existingFeeding?.fin ?? undefined) ?? null,
+        cambioDieta:
+          readString(data, ['cambioDieta'], existingFeeding?.cambioDieta ?? undefined) ?? null
       };
       return feedingRecord;
     }

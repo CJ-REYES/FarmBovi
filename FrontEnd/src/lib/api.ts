@@ -9,6 +9,10 @@ import type {
   BackendMovimientoAnimalDto,
   BackendMovimientoAnimalPayload
 } from '../types/movement';
+import type {
+  BackendAlimentacionDto,
+  BackendAlimentacionPayload
+} from '../types/feeding';
 
 export const API_BASE_URL = (
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ||
@@ -379,6 +383,48 @@ export const movementsApi = {
 
   async remove(id: string): Promise<void> {
     await apiRequest<unknown>(`${BACKEND_ROUTES.MOVIMIENTOS}/${id}`, {
+      method: 'DELETE',
+      allowEmptyResponse: true
+    });
+  }
+};
+
+export const feedingApi = {
+  async list(incluirEliminados = false): Promise<BackendAlimentacionDto[]> {
+    const query = incluirEliminados ? '?incluirEliminados=true' : '';
+    const res = await apiRequest<BackendAlimentacionDto[]>(
+      `${BACKEND_ROUTES.ALIMENTACION}${query}`,
+      { method: 'GET' }
+    );
+    return Array.isArray(res.data) ? res.data : [];
+  },
+
+  async getById(id: string): Promise<BackendAlimentacionDto> {
+    const res = await apiRequest<BackendAlimentacionDto>(
+      `${BACKEND_ROUTES.ALIMENTACION}/${id}`,
+      { method: 'GET' }
+    );
+    return res.data;
+  },
+
+  async create(input: BackendAlimentacionPayload): Promise<BackendAlimentacionDto> {
+    const res = await apiRequest<BackendAlimentacionDto>(BACKEND_ROUTES.ALIMENTACION, {
+      method: 'POST',
+      body: input
+    });
+    return res.data;
+  },
+
+  async update(id: string, input: BackendAlimentacionPayload): Promise<void> {
+    await apiRequest<unknown>(`${BACKEND_ROUTES.ALIMENTACION}/${id}`, {
+      method: 'PUT',
+      body: input,
+      allowEmptyResponse: true
+    });
+  },
+
+  async remove(id: string): Promise<void> {
+    await apiRequest<unknown>(`${BACKEND_ROUTES.ALIMENTACION}/${id}`, {
       method: 'DELETE',
       allowEmptyResponse: true
     });
