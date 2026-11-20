@@ -275,6 +275,10 @@ export interface LocalOutboxQueue {
   tipoOperacion: OutboxOperationType;
   versionBase: number | string | null;
   payload: unknown;
+  /** Identificador de dispositivo emisor para auditoría y sincronización Push. */
+  idDispositivo?: string | null;
+  /** Identificador del rancho propietario para facilitar sincronización sin depender de lookups posteriores. */
+  idRancho?: string | null;
   estado: OutboxOperationState;
   fechaCreacion: string;
   intentos: number;

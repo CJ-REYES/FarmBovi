@@ -118,10 +118,22 @@ export const PwaUpdateManager = {
     }
 
     if (!forceWithoutPrompt && typeof document !== 'undefined') {
-      const dirtyFields = document.querySelectorAll(
-        'input:not([type="hidden"]):not([value=""]), textarea:not(:empty)'
-      );
-      if (dirtyFields.length > 0) {
+      const hasDirtyFields = Array.from(
+        document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea')
+      ).some((el) => {
+        if (el instanceof HTMLInputElement) {
+          if (
+            el.type === 'hidden' ||
+            el.type === 'search' ||
+            el.type === 'checkbox' ||
+            el.type === 'radio'
+          ) {
+            return false;
+          }
+        }
+        return el.value.trim().length > 0;
+      });
+      if (hasDirtyFields) {
         const confirmed = window.confirm(
           'Hay campos editados en pantalla. Tus registros guardados en IndexedDB se conservarán, pero la vista se recargará para aplicar la actualización. ¿Continuar?'
         );
