@@ -22,7 +22,6 @@ public sealed class AnimalsController(FarmDbContext db, FarmDomainValidationServ
         if (!incluirEliminados)
             query = query.Where(a => a.EliminadoEn == null);
 
-        // Solo registros de ranchos donde el usuario tiene membresía activa.
         var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
         query = query.Where(x => ranchIds.Contains(x.IdRancho));
 
@@ -38,7 +37,7 @@ public sealed class AnimalsController(FarmDbContext db, FarmDomainValidationServ
     public async Task<ActionResult<AnimalResponseDto>> Get(Guid id, CancellationToken ct) =>
         await db.Animales.AsNoTracking().FirstOrDefaultAsync(a => a.IdAnimal == id, ct) is { } item
             ? Ok(ToResponseDto(item))
-            : NotFound();
+            : this.NotFoundProblem("El animal solicitado no existe.");
 
     [HttpPost]
     [ProducesResponseType(typeof(AnimalResponseDto), StatusCodes.Status201Created)]
@@ -49,16 +48,18 @@ public sealed class AnimalsController(FarmDbContext db, FarmDomainValidationServ
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     public async Task<ActionResult<AnimalResponseDto>> Create(AnimalCreateDto dto, CancellationToken ct)
     {
-        var id = dto.IdAnimal is { } clientId && clientId != Guid.Empty
-            ? clientId
-            : Guid.NewGuid();
+        var id = dto.IdAnimal ?? Guid.NewGuid();
 
         var existing = await db.Animales.AsNoTracking().FirstOrDefaultAsync(a => a.IdAnimal == id, ct);
         if (existing is not null)
-            return Ok(ToResponseDto(existing));
+        {
+            return MatchesAnimal(existing, dto)
+                ? Ok(ToResponseDto(existing))
+                : this.ConflictProblem("Ya existe un animal con el identificador proporcionado y contenido diferente.");
+        }
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor, ct);
-        if (authorError is not null) return BadRequest(authorError);
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
+        if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
 
         var item = new Animal
         {
@@ -68,19 +69,19 @@ public sealed class AnimalsController(FarmDbContext db, FarmDomainValidationServ
             Arete = dto.Arete.Trim(),
             Raza = dto.Raza.Trim(),
             Sexo = dto.Sexo.Trim(),
-            FechaNacimiento = dto.FechaNacimiento,
-            FechaIngreso = dto.FechaIngreso == default ? DateTime.UtcNow.Date : dto.FechaIngreso,
+            FechaNacimiento = ApiProblemResults.EnsureUtc(dto.FechaNacimiento),
+            FechaIngreso = ApiProblemResults.EnsureUtc(dto.FechaIngreso),
             Procedencia = dto.Procedencia.Trim(),
             Estado = dto.Estado.Trim(),
-            FechaSalida = dto.FechaSalida,
-            Observaciones = dto.Observaciones,
+            FechaSalida = ApiProblemResults.EnsureUtc(dto.FechaSalida),
+            Observaciones = dto.Observaciones?.Trim(),
             IdAutor = authorId,
             CreadoEn = DateTime.UtcNow,
             VersionRegistro = 1
         };
 
         var validationError = await validator.ValidateAnimalAsync(item, excludeAnimalId: null, ct);
-        if (validationError is not null) return BadRequest(validationError);
+        if (validationError is not null) return this.ValidationError(validationError);
 
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         db.Animales.Add(item);
@@ -110,7 +111,7 @@ public sealed class AnimalsController(FarmDbContext db, FarmDomainValidationServ
         catch (DbUpdateException)
         {
             await tx.RollbackAsync(ct);
-            return Conflict("El arete ya existe en este rancho o las referencias no son válidas.");
+            return this.ConflictProblem("El arete ya existe en este rancho o las referencias no son válidas.");
         }
 
         return CreatedAtAction(nameof(Get), new { id = item.IdAnimal }, ToResponseDto(item));
@@ -128,29 +129,30 @@ public sealed class AnimalsController(FarmDbContext db, FarmDomainValidationServ
         await using var tx = await db.Database.BeginTransactionAsync(ct);
 
         var item = await db.Animales.FindAsync([id], ct);
-        if (item is null) return NotFound();
+        if (item is null) return this.NotFoundProblem("El animal solicitado no existe.");
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, Guid.Empty, ct);
-        if (authorError is not null) return BadRequest(authorError);
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
+        if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
 
         var candidate = new Animal
         {
             IdAnimal = item.IdAnimal,
-            IdRancho = item.IdRancho, // Evita cambio inconsistente de rancho del expediente
+            IdRancho = item.IdRancho,
             IdLote = dto.IdLote,
             Arete = dto.Arete.Trim(),
             Raza = dto.Raza.Trim(),
             Sexo = dto.Sexo.Trim(),
-            FechaNacimiento = dto.FechaNacimiento,
-            FechaIngreso = dto.FechaIngreso,
+            FechaNacimiento = ApiProblemResults.EnsureUtc(dto.FechaNacimiento),
+            FechaIngreso = ApiProblemResults.EnsureUtc(dto.FechaIngreso),
             Procedencia = dto.Procedencia.Trim(),
             Estado = dto.Estado.Trim(),
-            FechaSalida = dto.FechaSalida,
-            Observaciones = dto.Observaciones,
-            IdAutor = authorId
+            FechaSalida = ApiProblemResults.EnsureUtc(dto.FechaSalida),
+            Observaciones = dto.Observaciones?.Trim(),
+            IdAutor = authorId,
+            EliminadoEn = ApiProblemResults.EnsureUtc(dto.EliminadoEn)
         };
         var validationError = await validator.ValidateAnimalAsync(candidate, excludeAnimalId: id, ct);
-        if (validationError is not null) return BadRequest(validationError);
+        if (validationError is not null) return this.ValidationError(validationError);
 
         var loteAnterior = item.IdLote;
         var estadoAnterior = item.Estado;
@@ -166,6 +168,7 @@ public sealed class AnimalsController(FarmDbContext db, FarmDomainValidationServ
         item.FechaSalida = candidate.FechaSalida;
         item.Observaciones = candidate.Observaciones;
         item.IdAutor = authorId;
+        item.EliminadoEn = candidate.EliminadoEn;
         item.VersionRegistro++;
 
         // Regla 06 y 08: Registrar cambio de lote o salida en MovimientoAnimal sin perder historial.
@@ -214,7 +217,7 @@ public sealed class AnimalsController(FarmDbContext db, FarmDomainValidationServ
         catch (DbUpdateException)
         {
             await tx.RollbackAsync(ct);
-            return Conflict("El arete ya existe en este rancho o las referencias no son válidas.");
+            return this.ConflictProblem("El arete ya existe en este rancho o las referencias no son válidas.");
         }
 
         return NoContent();
@@ -227,9 +230,8 @@ public sealed class AnimalsController(FarmDbContext db, FarmDomainValidationServ
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
-        // Regla 08: Conservar expedientes e historiales; no eliminar en cascada.
         var item = await db.Animales.FindAsync([id], ct);
-        if (item is null) return NotFound();
+        if (item is null) return this.NotFoundProblem("El animal solicitado no existe.");
 
         if (item.EliminadoEn is null)
         {
@@ -240,6 +242,19 @@ public sealed class AnimalsController(FarmDbContext db, FarmDomainValidationServ
 
         return NoContent();
     }
+
+    private static bool MatchesAnimal(Animal existing, AnimalCreateDto dto) =>
+        existing.IdRancho == dto.IdRancho &&
+        existing.IdLote == dto.IdLote &&
+        ApiProblemResults.SameText(existing.Arete, dto.Arete) &&
+        ApiProblemResults.SameText(existing.Raza, dto.Raza) &&
+        ApiProblemResults.SameText(existing.Sexo, dto.Sexo) &&
+        ApiProblemResults.SameUtcInstant(existing.FechaNacimiento, dto.FechaNacimiento) &&
+        ApiProblemResults.SameUtcInstant(existing.FechaIngreso, dto.FechaIngreso) &&
+        ApiProblemResults.SameText(existing.Procedencia, dto.Procedencia) &&
+        ApiProblemResults.SameText(existing.Estado, dto.Estado) &&
+        ApiProblemResults.SameUtcInstant(existing.FechaSalida, dto.FechaSalida) &&
+        ApiProblemResults.SameText(existing.Observaciones, dto.Observaciones);
 
     private static AnimalResponseDto ToResponseDto(Animal a) => new()
     {
@@ -257,6 +272,7 @@ public sealed class AnimalsController(FarmDbContext db, FarmDomainValidationServ
         Observaciones = a.Observaciones,
         IdAutor = a.IdAutor,
         CreadoEn = a.CreadoEn,
-        VersionRegistro = a.VersionRegistro
+        VersionRegistro = a.VersionRegistro,
+        EliminadoEn = a.EliminadoEn
     };
 }

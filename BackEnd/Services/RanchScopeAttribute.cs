@@ -39,16 +39,26 @@ public sealed class RanchScopeAttribute(RanchResource resource) : Attribute, IFi
         new RanchScopeFilter(this, serviceProvider.GetRequiredService<RanchAccessService>());
 }
 
-public sealed class RanchScopeFilter(RanchScopeAttribute options, RanchAccessService access) : IAsyncActionFilter
+public sealed class RanchScopeFilter(RanchScopeAttribute options, RanchAccessService access) : IAsyncActionFilter, IOrderedFilter
 {
     private static readonly string[] LoteProperties = ["IdLote", "IdLoteOrigen", "IdLoteDestino"];
+
+    public int Order => -100;
 
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {
         var ct = context.HttpContext.RequestAborted;
         if (RanchAccessService.GetUserId(context.HttpContext.User) is not { } userId)
         {
-            context.Result = new UnauthorizedResult();
+            context.Result = new ObjectResult(new ProblemDetails
+            {
+                Status = StatusCodes.Status401Unauthorized,
+                Title = "No autorizado.",
+                Detail = "Se requiere un token de autenticación válido."
+            })
+            {
+                StatusCode = StatusCodes.Status401Unauthorized
+            };
             return;
         }
 
@@ -77,12 +87,28 @@ public sealed class RanchScopeFilter(RanchScopeAttribute options, RanchAccessSer
                 : await access.CanAccessAsync(userId, ranchId, ct));
             if (!allowed)
             {
-                context.Result = new ObjectResult(new { mensaje = "No tienes permisos sobre el rancho de este registro." })
+                context.Result = new ObjectResult(new ProblemDetails
+                {
+                    Status = StatusCodes.Status403Forbidden,
+                    Title = "Acceso denegado.",
+                    Detail = "No tienes permisos sobre el rancho de este registro."
+                })
                 {
                     StatusCode = StatusCodes.Status403Forbidden
                 };
                 return;
             }
+        }
+
+        if (!context.ModelState.IsValid)
+        {
+            context.Result = new BadRequestObjectResult(new ValidationProblemDetails(context.ModelState)
+            {
+                Status = StatusCodes.Status400BadRequest,
+                Title = "Error de validación.",
+                Detail = "Uno o más campos no cumplen con las reglas de validación."
+            });
+            return;
         }
 
         await next();
@@ -120,5 +146,9 @@ public sealed class RanchScopeFilter(RanchScopeAttribute options, RanchAccessSer
         await AddAsync("IdAnimal", access.RanchOfAnimalAsync);
         await AddAsync("IdEventoSanitario", access.RanchOfEventoSanitarioAsync);
         await AddAsync("IdTratamiento", access.RanchOfTratamientoAsync);
+        await AddAsync("IdRecordatorio", access.RanchOfRecordatorioAsync);
+        await AddAsync("IdAlimentacion", access.RanchOfAlimentacionAsync);
+        await AddAsync("IdMovimiento", access.RanchOfMovimientoAsync);
+        await AddAsync("IdUsuarioRancho", access.RanchOfUsuarioRanchoAsync);
     }
 }

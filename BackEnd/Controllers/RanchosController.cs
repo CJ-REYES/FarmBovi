@@ -22,7 +22,6 @@ public sealed class RanchosController(FarmDbContext db, FarmDomainValidationServ
         if (!incluirEliminados)
             query = query.Where(r => r.EliminadoEn == null);
 
-        // Solo registros de ranchos donde el usuario tiene membresía activa.
         var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
         query = query.Where(x => ranchIds.Contains(x.IdRancho));
 
@@ -38,7 +37,7 @@ public sealed class RanchosController(FarmDbContext db, FarmDomainValidationServ
     public async Task<ActionResult<RanchoResponseDto>> Get(Guid id, CancellationToken ct) =>
         await db.Ranchos.AsNoTracking().FirstOrDefaultAsync(r => r.IdRancho == id, ct) is { } item
             ? Ok(ToResponseDto(item))
-            : NotFound();
+            : this.NotFoundProblem("El rancho solicitado no existe.");
 
     [HttpPost]
     [ProducesResponseType(typeof(RanchoResponseDto), StatusCodes.Status201Created)]
@@ -49,23 +48,18 @@ public sealed class RanchosController(FarmDbContext db, FarmDomainValidationServ
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     public async Task<ActionResult<RanchoResponseDto>> Create(RanchoCreateDto dto, CancellationToken ct)
     {
-        var id = dto.IdRancho is { } clientId && clientId != Guid.Empty
-            ? clientId
-            : Guid.NewGuid();
+        var id = dto.IdRancho ?? Guid.NewGuid();
 
         var existing = await db.Ranchos.AsNoTracking().FirstOrDefaultAsync(r => r.IdRancho == id, ct);
         if (existing is not null)
-            return Ok(ToResponseDto(existing));
-
-        if (string.IsNullOrWhiteSpace(dto.Nombre) ||
-            string.IsNullOrWhiteSpace(dto.UbicacionGeneral) ||
-            string.IsNullOrWhiteSpace(dto.Estado))
         {
-            return BadRequest("Nombre, ubicación general y estado del rancho son obligatorios.");
+            return MatchesRancho(existing, dto)
+                ? Ok(ToResponseDto(existing))
+                : this.ConflictProblem("Ya existe un rancho con el identificador proporcionado y contenido diferente.");
         }
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor, ct);
-        if (authorError is not null) return BadRequest(authorError);
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
+        if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
 
         var item = new Rancho
         {
@@ -79,7 +73,6 @@ public sealed class RanchosController(FarmDbContext db, FarmDomainValidationServ
         };
 
         db.Ranchos.Add(item);
-        // Quien crea el rancho queda como su administrador para poder operarlo con las reglas por rancho.
         if (RanchAccessService.GetUserId(User) is { } creatorId)
         {
             db.UsuarioRanchos.Add(new UsuarioRancho
@@ -98,7 +91,7 @@ public sealed class RanchosController(FarmDbContext db, FarmDomainValidationServ
         }
         catch (DbUpdateException)
         {
-            return Conflict("No se pudo crear el rancho.");
+            return this.ConflictProblem("No se pudo crear el rancho.");
         }
 
         return CreatedAtAction(nameof(Get), new { id = item.IdRancho }, ToResponseDto(item));
@@ -114,15 +107,16 @@ public sealed class RanchosController(FarmDbContext db, FarmDomainValidationServ
     public async Task<IActionResult> Update(Guid id, RanchoUpdateDto dto, CancellationToken ct)
     {
         var item = await db.Ranchos.FindAsync([id], ct);
-        if (item is null) return NotFound();
+        if (item is null) return this.NotFoundProblem("El rancho solicitado no existe.");
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, Guid.Empty, ct);
-        if (authorError is not null) return BadRequest(authorError);
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
+        if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
 
         item.Nombre = dto.Nombre.Trim();
         item.UbicacionGeneral = dto.UbicacionGeneral.Trim();
         item.Estado = dto.Estado.Trim();
         item.IdAutor = authorId;
+        item.EliminadoEn = ApiProblemResults.EnsureUtc(dto.EliminadoEn);
         item.VersionRegistro++;
 
         try
@@ -131,7 +125,7 @@ public sealed class RanchosController(FarmDbContext db, FarmDomainValidationServ
         }
         catch (DbUpdateException)
         {
-            return Conflict("No se pudo actualizar el rancho.");
+            return this.ConflictProblem("No se pudo actualizar el rancho.");
         }
 
         return NoContent();
@@ -146,7 +140,7 @@ public sealed class RanchosController(FarmDbContext db, FarmDomainValidationServ
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         var item = await db.Ranchos.FindAsync([id], ct);
-        if (item is null) return NotFound();
+        if (item is null) return this.NotFoundProblem("El rancho solicitado no existe.");
 
         var hasDependencies =
             await db.Lotes.AsNoTracking().AnyAsync(l => l.IdRancho == id && l.EliminadoEn == null, ct) ||
@@ -154,7 +148,7 @@ public sealed class RanchosController(FarmDbContext db, FarmDomainValidationServ
             await db.UsuarioRanchos.AsNoTracking().AnyAsync(ur => ur.IdRancho == id && ur.FechaBaja == null, ct);
 
         if (hasDependencies)
-            return Conflict("No se puede eliminar un rancho que tiene lotes, animales o usuarios asociados.");
+            return this.ConflictProblem("No se puede eliminar un rancho que tiene lotes, animales o usuarios asociados.");
 
         if (item.EliminadoEn is null)
         {
@@ -166,6 +160,11 @@ public sealed class RanchosController(FarmDbContext db, FarmDomainValidationServ
         return NoContent();
     }
 
+    private static bool MatchesRancho(Rancho existing, RanchoCreateDto dto) =>
+        ApiProblemResults.SameText(existing.Nombre, dto.Nombre) &&
+        ApiProblemResults.SameText(existing.UbicacionGeneral, dto.UbicacionGeneral) &&
+        ApiProblemResults.SameText(existing.Estado, dto.Estado);
+
     private static RanchoResponseDto ToResponseDto(Rancho r) => new()
     {
         IdRancho = r.IdRancho,
@@ -174,6 +173,7 @@ public sealed class RanchosController(FarmDbContext db, FarmDomainValidationServ
         Estado = r.Estado,
         IdAutor = r.IdAutor,
         CreadoEn = r.CreadoEn,
-        VersionRegistro = r.VersionRegistro
+        VersionRegistro = r.VersionRegistro,
+        EliminadoEn = r.EliminadoEn
     };
 }

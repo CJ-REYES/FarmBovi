@@ -4,30 +4,38 @@ namespace FarmBovi.Api.DTOs;
 
 public sealed class RanchoCreateDto
 {
+    [NotEmptyGuid(AllowNull = true)]
     public Guid? IdRancho { get; set; }
 
-    [Required, MaxLength(150)]
+    [Required, NotWhiteSpace, MaxLength(150)]
     public string Nombre { get; set; } = string.Empty;
 
-    [Required, MaxLength(250)]
+    [Required, NotWhiteSpace, MaxLength(250)]
     public string UbicacionGeneral { get; set; } = string.Empty;
 
-    [Required, MaxLength(40)]
+    [Required, NotWhiteSpace, MaxLength(40)]
     public string Estado { get; set; } = string.Empty;
 
-    public Guid IdAutor { get; set; }
+    [NotEmptyGuid(AllowNull = true)]
+    public Guid? IdAutor { get; set; }
 }
 
 public sealed class RanchoUpdateDto
 {
-    [Required, MaxLength(150)]
+    [Required, NotWhiteSpace, MaxLength(150)]
     public string Nombre { get; set; } = string.Empty;
 
-    [Required, MaxLength(250)]
+    [Required, NotWhiteSpace, MaxLength(250)]
     public string UbicacionGeneral { get; set; } = string.Empty;
 
-    [Required, MaxLength(40)]
+    [Required, NotWhiteSpace, MaxLength(40)]
     public string Estado { get; set; } = string.Empty;
+
+    [NotEmptyGuid(AllowNull = true)]
+    public Guid? IdAutor { get; set; }
+
+    [ValidDateRange(AllowNull = true)]
+    public DateTime? EliminadoEn { get; set; }
 }
 
 public sealed class RanchoResponseDto
@@ -39,4 +47,5 @@ public sealed class RanchoResponseDto
     public Guid IdAutor { get; set; }
     public DateTime CreadoEn { get; set; }
     public long VersionRegistro { get; set; }
+    public DateTime? EliminadoEn { get; set; }
 }

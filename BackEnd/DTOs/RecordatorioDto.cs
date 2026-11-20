@@ -4,55 +4,80 @@ namespace FarmBovi.Api.DTOs;
 
 public sealed class RecordatorioCreateDto
 {
+    [NotEmptyGuid(AllowNull = true)]
     public Guid? IdRecordatorio { get; set; }
 
-    [Required]
+    [Required, NotEmptyGuid]
     public Guid IdRancho { get; set; }
 
+    [NotEmptyGuid(AllowNull = true)]
     public Guid? IdAnimal { get; set; }
+
+    [NotEmptyGuid(AllowNull = true)]
     public Guid? IdLote { get; set; }
+
+    [NotEmptyGuid(AllowNull = true)]
     public Guid? IdTratamiento { get; set; }
+
+    [NotEmptyGuid(AllowNull = true)]
     public Guid? IdResponsable { get; set; }
 
-    [Required, MaxLength(80)]
+    [Required, NotWhiteSpace, MaxLength(80)]
     public string Tipo { get; set; } = string.Empty;
 
-    [Required, MaxLength(500)]
+    [Required, NotWhiteSpace, MaxLength(500)]
     public string Descripcion { get; set; } = string.Empty;
 
-    [Required]
+    [Required, ValidDateRange]
     public DateTime FechaProgramada { get; set; }
 
-    [Required, MaxLength(40)]
+    [Required, NotWhiteSpace, MaxLength(40)]
     public string Estado { get; set; } = string.Empty;
 
+    [ValidDateRange(AllowNull = true)]
     public DateTime? FechaCompletado { get; set; }
-    public Guid IdAutor { get; set; }
+
+    [NotEmptyGuid(AllowNull = true)]
+    public Guid? IdAutor { get; set; }
 }
 
 public sealed class RecordatorioUpdateDto
 {
-    [Required]
+    [Required, NotEmptyGuid]
     public Guid IdRancho { get; set; }
 
+    [NotEmptyGuid(AllowNull = true)]
     public Guid? IdAnimal { get; set; }
+
+    [NotEmptyGuid(AllowNull = true)]
     public Guid? IdLote { get; set; }
+
+    [NotEmptyGuid(AllowNull = true)]
     public Guid? IdTratamiento { get; set; }
+
+    [NotEmptyGuid(AllowNull = true)]
     public Guid? IdResponsable { get; set; }
 
-    [Required, MaxLength(80)]
+    [Required, NotWhiteSpace, MaxLength(80)]
     public string Tipo { get; set; } = string.Empty;
 
-    [Required, MaxLength(500)]
+    [Required, NotWhiteSpace, MaxLength(500)]
     public string Descripcion { get; set; } = string.Empty;
 
-    [Required]
+    [Required, ValidDateRange]
     public DateTime FechaProgramada { get; set; }
 
-    [Required, MaxLength(40)]
+    [Required, NotWhiteSpace, MaxLength(40)]
     public string Estado { get; set; } = string.Empty;
 
+    [ValidDateRange(AllowNull = true)]
     public DateTime? FechaCompletado { get; set; }
+
+    [NotEmptyGuid(AllowNull = true)]
+    public Guid? IdAutor { get; set; }
+
+    [ValidDateRange(AllowNull = true)]
+    public DateTime? EliminadoEn { get; set; }
 }
 
 public sealed class RecordatorioResponseDto
@@ -71,4 +96,5 @@ public sealed class RecordatorioResponseDto
     public Guid IdAutor { get; set; }
     public DateTime CreadoEn { get; set; }
     public long VersionRegistro { get; set; }
+    public DateTime? EliminadoEn { get; set; }
 }

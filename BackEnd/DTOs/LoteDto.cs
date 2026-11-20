@@ -4,36 +4,44 @@ namespace FarmBovi.Api.DTOs;
 
 public sealed class LoteCreateDto
 {
+    [NotEmptyGuid(AllowNull = true)]
     public Guid? IdLote { get; set; }
 
-    [Required]
+    [Required, NotEmptyGuid]
     public Guid IdRancho { get; set; }
 
-    [Required, MaxLength(120)]
+    [Required, NotWhiteSpace, MaxLength(120)]
     public string Nombre { get; set; } = string.Empty;
 
     [MaxLength(200)]
     public string? Ubicacion { get; set; }
 
-    [Required, MaxLength(40)]
+    [Required, NotWhiteSpace, MaxLength(40)]
     public string Estado { get; set; } = string.Empty;
 
-    public Guid IdAutor { get; set; }
+    [NotEmptyGuid(AllowNull = true)]
+    public Guid? IdAutor { get; set; }
 }
 
 public sealed class LoteUpdateDto
 {
-    [Required]
+    [Required, NotEmptyGuid]
     public Guid IdRancho { get; set; }
 
-    [Required, MaxLength(120)]
+    [Required, NotWhiteSpace, MaxLength(120)]
     public string Nombre { get; set; } = string.Empty;
 
     [MaxLength(200)]
     public string? Ubicacion { get; set; }
 
-    [Required, MaxLength(40)]
+    [Required, NotWhiteSpace, MaxLength(40)]
     public string Estado { get; set; } = string.Empty;
+
+    [NotEmptyGuid(AllowNull = true)]
+    public Guid? IdAutor { get; set; }
+
+    [ValidDateRange(AllowNull = true)]
+    public DateTime? EliminadoEn { get; set; }
 }
 
 public sealed class LoteResponseDto
@@ -46,4 +54,5 @@ public sealed class LoteResponseDto
     public Guid IdAutor { get; set; }
     public DateTime CreadoEn { get; set; }
     public long VersionRegistro { get; set; }
+    public DateTime? EliminadoEn { get; set; }
 }

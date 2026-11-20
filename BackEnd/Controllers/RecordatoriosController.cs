@@ -22,7 +22,6 @@ public sealed class RecordatoriosController(FarmDbContext db, FarmDomainValidati
         if (!incluirEliminados)
             query = query.Where(r => r.EliminadoEn == null);
 
-        // Solo registros de ranchos donde el usuario tiene membresía activa.
         var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
         query = query.Where(x => ranchIds.Contains(x.IdRancho));
 
@@ -38,7 +37,7 @@ public sealed class RecordatoriosController(FarmDbContext db, FarmDomainValidati
     public async Task<ActionResult<RecordatorioResponseDto>> Get(Guid id, CancellationToken ct) =>
         await db.Recordatorios.AsNoTracking().FirstOrDefaultAsync(r => r.IdRecordatorio == id, ct) is { } item
             ? Ok(ToResponseDto(item))
-            : NotFound();
+            : this.NotFoundProblem("El recordatorio solicitado no existe.");
 
     [HttpPost]
     [ProducesResponseType(typeof(RecordatorioResponseDto), StatusCodes.Status201Created)]
@@ -49,17 +48,18 @@ public sealed class RecordatoriosController(FarmDbContext db, FarmDomainValidati
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     public async Task<ActionResult<RecordatorioResponseDto>> Create(RecordatorioCreateDto dto, CancellationToken ct)
     {
-        var id = dto.IdRecordatorio is { } clientId && clientId != Guid.Empty
-            ? clientId
-            : Guid.NewGuid();
+        var id = dto.IdRecordatorio ?? Guid.NewGuid();
 
-        var existing = await db.Recordatorios.AsNoTracking()
-            .FirstOrDefaultAsync(r => r.IdRecordatorio == id, ct);
+        var existing = await db.Recordatorios.AsNoTracking().FirstOrDefaultAsync(r => r.IdRecordatorio == id, ct);
         if (existing is not null)
-            return Ok(ToResponseDto(existing));
+        {
+            return MatchesRecordatorio(existing, dto)
+                ? Ok(ToResponseDto(existing))
+                : this.ConflictProblem("Ya existe un recordatorio con el identificador proporcionado y contenido diferente.");
+        }
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor, ct);
-        if (authorError is not null) return BadRequest(authorError);
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
+        if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
 
         var estado = dto.Estado.Trim();
         var item = new Recordatorio
@@ -72,18 +72,18 @@ public sealed class RecordatoriosController(FarmDbContext db, FarmDomainValidati
             IdResponsable = dto.IdResponsable,
             Tipo = dto.Tipo.Trim(),
             Descripcion = dto.Descripcion.Trim(),
-            FechaProgramada = dto.FechaProgramada == default ? DateTime.UtcNow : dto.FechaProgramada,
+            FechaProgramada = ApiProblemResults.EnsureUtc(dto.FechaProgramada),
             Estado = estado,
             FechaCompletado = string.Equals(estado, "Completado", StringComparison.OrdinalIgnoreCase) && dto.FechaCompletado is null
                 ? DateTime.UtcNow
-                : dto.FechaCompletado,
+                : ApiProblemResults.EnsureUtc(dto.FechaCompletado),
             IdAutor = authorId,
             CreadoEn = DateTime.UtcNow,
             VersionRegistro = 1
         };
 
         var validationError = await validator.ValidateRecordatorioAsync(item, ct);
-        if (validationError is not null) return BadRequest(validationError);
+        if (validationError is not null) return this.ValidationError(validationError);
 
         db.Recordatorios.Add(item);
         try
@@ -92,7 +92,7 @@ public sealed class RecordatoriosController(FarmDbContext db, FarmDomainValidati
         }
         catch (DbUpdateException)
         {
-            return Conflict("No se pudo crear el recordatorio; verifica que el rancho y las referencias existan.");
+            return this.ConflictProblem("No se pudo crear el recordatorio; verifica que el rancho y las referencias existan.");
         }
 
         return CreatedAtAction(nameof(Get), new { id = item.IdRecordatorio }, ToResponseDto(item));
@@ -108,11 +108,12 @@ public sealed class RecordatoriosController(FarmDbContext db, FarmDomainValidati
     public async Task<IActionResult> Update(Guid id, RecordatorioUpdateDto dto, CancellationToken ct)
     {
         var item = await db.Recordatorios.FindAsync([id], ct);
-        if (item is null) return NotFound();
+        if (item is null) return this.NotFoundProblem("El recordatorio solicitado no existe.");
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, Guid.Empty, ct);
-        if (authorError is not null) return BadRequest(authorError);
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
+        if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
 
+        var estado = dto.Estado.Trim();
         var candidate = new Recordatorio
         {
             IdRecordatorio = item.IdRecordatorio,
@@ -123,13 +124,16 @@ public sealed class RecordatoriosController(FarmDbContext db, FarmDomainValidati
             IdResponsable = dto.IdResponsable,
             Tipo = dto.Tipo.Trim(),
             Descripcion = dto.Descripcion.Trim(),
-            FechaProgramada = dto.FechaProgramada,
-            Estado = dto.Estado.Trim(),
-            FechaCompletado = dto.FechaCompletado,
-            IdAutor = authorId
+            FechaProgramada = ApiProblemResults.EnsureUtc(dto.FechaProgramada),
+            Estado = estado,
+            FechaCompletado = string.Equals(estado, "Completado", StringComparison.OrdinalIgnoreCase)
+                ? (ApiProblemResults.EnsureUtc(dto.FechaCompletado) ?? item.FechaCompletado ?? DateTime.UtcNow)
+                : ApiProblemResults.EnsureUtc(dto.FechaCompletado),
+            IdAutor = authorId,
+            EliminadoEn = ApiProblemResults.EnsureUtc(dto.EliminadoEn)
         };
         var validationError = await validator.ValidateRecordatorioAsync(candidate, ct);
-        if (validationError is not null) return BadRequest(validationError);
+        if (validationError is not null) return this.ValidationError(validationError);
 
         item.IdRancho = candidate.IdRancho;
         item.IdAnimal = candidate.IdAnimal;
@@ -140,10 +144,9 @@ public sealed class RecordatoriosController(FarmDbContext db, FarmDomainValidati
         item.Descripcion = candidate.Descripcion;
         item.FechaProgramada = candidate.FechaProgramada;
         item.Estado = candidate.Estado;
-        item.FechaCompletado = string.Equals(candidate.Estado, "Completado", StringComparison.OrdinalIgnoreCase)
-            ? (dto.FechaCompletado ?? item.FechaCompletado ?? DateTime.UtcNow)
-            : dto.FechaCompletado;
+        item.FechaCompletado = candidate.FechaCompletado;
         item.IdAutor = authorId;
+        item.EliminadoEn = candidate.EliminadoEn;
         item.VersionRegistro++;
 
         try
@@ -152,7 +155,7 @@ public sealed class RecordatoriosController(FarmDbContext db, FarmDomainValidati
         }
         catch (DbUpdateException)
         {
-            return Conflict("No se pudo actualizar el recordatorio; verifica las referencias.");
+            return this.ConflictProblem("No se pudo actualizar el recordatorio; verifica las referencias.");
         }
 
         return NoContent();
@@ -166,7 +169,7 @@ public sealed class RecordatoriosController(FarmDbContext db, FarmDomainValidati
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         var item = await db.Recordatorios.FindAsync([id], ct);
-        if (item is null) return NotFound();
+        if (item is null) return this.NotFoundProblem("El recordatorio solicitado no existe.");
 
         if (item.EliminadoEn is null)
         {
@@ -177,6 +180,18 @@ public sealed class RecordatoriosController(FarmDbContext db, FarmDomainValidati
 
         return NoContent();
     }
+
+    private static bool MatchesRecordatorio(Recordatorio existing, RecordatorioCreateDto dto) =>
+        existing.IdRancho == dto.IdRancho &&
+        existing.IdAnimal == dto.IdAnimal &&
+        existing.IdLote == dto.IdLote &&
+        existing.IdTratamiento == dto.IdTratamiento &&
+        existing.IdResponsable == dto.IdResponsable &&
+        ApiProblemResults.SameText(existing.Tipo, dto.Tipo) &&
+        ApiProblemResults.SameText(existing.Descripcion, dto.Descripcion) &&
+        ApiProblemResults.SameUtcInstant(existing.FechaProgramada, dto.FechaProgramada) &&
+        ApiProblemResults.SameText(existing.Estado, dto.Estado) &&
+        ApiProblemResults.SameUtcInstant(existing.FechaCompletado, dto.FechaCompletado);
 
     private static RecordatorioResponseDto ToResponseDto(Recordatorio r) => new()
     {
@@ -193,6 +208,7 @@ public sealed class RecordatoriosController(FarmDbContext db, FarmDomainValidati
         FechaCompletado = r.FechaCompletado,
         IdAutor = r.IdAutor,
         CreadoEn = r.CreadoEn,
-        VersionRegistro = r.VersionRegistro
+        VersionRegistro = r.VersionRegistro,
+        EliminadoEn = r.EliminadoEn
     };
 }

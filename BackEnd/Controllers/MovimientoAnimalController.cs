@@ -22,7 +22,6 @@ public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValid
         if (!incluirEliminados)
             query = query.Where(m => m.EliminadoEn == null);
 
-        // Solo registros de ranchos donde el usuario tiene membresía activa.
         var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
         query = query.Where(x => db.Animales.Any(a => a.IdAnimal == x.IdAnimal && ranchIds.Contains(a.IdRancho)));
 
@@ -38,7 +37,7 @@ public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValid
     public async Task<ActionResult<MovimientoAnimalResponseDto>> Get(Guid id, CancellationToken ct) =>
         await db.MovimientosAnimales.AsNoTracking().FirstOrDefaultAsync(m => m.IdMovimiento == id, ct) is { } item
             ? Ok(ToResponseDto(item))
-            : NotFound();
+            : this.NotFoundProblem("El movimiento de animal solicitado no existe.");
 
     [HttpPost]
     [ProducesResponseType(typeof(MovimientoAnimalResponseDto), StatusCodes.Status201Created)]
@@ -49,18 +48,18 @@ public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValid
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     public async Task<ActionResult<MovimientoAnimalResponseDto>> Create(MovimientoAnimalCreateDto dto, CancellationToken ct)
     {
-        var id = dto.IdMovimiento is { } clientId && clientId != Guid.Empty
-            ? clientId
-            : Guid.NewGuid();
+        var id = dto.IdMovimiento ?? Guid.NewGuid();
 
         var existing = await db.MovimientosAnimales.AsNoTracking().FirstOrDefaultAsync(m => m.IdMovimiento == id, ct);
         if (existing is not null)
-            return Ok(ToResponseDto(existing));
+        {
+            return MatchesMovimiento(existing, dto)
+                ? Ok(ToResponseDto(existing))
+                : this.ConflictProblem("Ya existe un movimiento con el identificador proporcionado y contenido diferente.");
+        }
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor, ct);
-        if (authorError is not null) return BadRequest(authorError);
-
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
+        if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
 
         var movimiento = new MovimientoAnimal
         {
@@ -69,39 +68,42 @@ public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValid
             IdLoteOrigen = dto.IdLoteOrigen,
             IdLoteDestino = dto.IdLoteDestino,
             Tipo = dto.Tipo.Trim(),
-            Fecha = dto.Fecha == default ? DateTime.UtcNow : dto.Fecha,
-            OrigenExterno = dto.OrigenExterno,
-            DestinoExterno = dto.DestinoExterno,
-            Motivo = dto.Motivo,
+            Fecha = ApiProblemResults.EnsureUtc(dto.Fecha),
+            OrigenExterno = dto.OrigenExterno?.Trim(),
+            DestinoExterno = dto.DestinoExterno?.Trim(),
+            Motivo = dto.Motivo?.Trim(),
             IdAutor = authorId,
             CreadoEn = DateTime.UtcNow,
             VersionRegistro = 1
         };
 
-        var (animal, validationError) = await validator.ValidateAndPrepareMovimientoAsync(movimiento, ct);
-        if (validationError is not null || animal is null)
-            return BadRequest(validationError);
+        var (animal, error) = await validator.ValidateAndPrepareMovimientoAsync(movimiento, ct);
+        if (error is not null) return this.ValidationError(error);
 
-        // Regla 06 y 08: Actualizar ubicación/estado del expediente atómicamente con el movimiento.
-        var tipoNorm = movimiento.Tipo;
-        if (movimiento.IdLoteDestino.HasValue &&
-            (tipoNorm.Equals("Alta", StringComparison.OrdinalIgnoreCase) ||
-             tipoNorm.Equals("CambioInterno", StringComparison.OrdinalIgnoreCase) ||
-             tipoNorm.Equals("Cambio interno", StringComparison.OrdinalIgnoreCase)))
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+        if (animal is not null)
         {
-            animal.IdLote = movimiento.IdLoteDestino;
-            animal.VersionRegistro++;
-        }
-        else if (tipoNorm.Equals("Venta", StringComparison.OrdinalIgnoreCase) ||
-                 tipoNorm.Equals("Baja", StringComparison.OrdinalIgnoreCase))
-        {
-            animal.Estado = tipoNorm.Equals("Venta", StringComparison.OrdinalIgnoreCase) ? "Vendido" : "Baja";
-            animal.FechaSalida = movimiento.Fecha.Date;
-            animal.VersionRegistro++;
+            var tipo = movimiento.Tipo.Trim();
+            if (tipo.Equals("Alta", StringComparison.OrdinalIgnoreCase) ||
+                tipo.Equals("CambioInterno", StringComparison.OrdinalIgnoreCase) ||
+                tipo.Equals("Cambio interno", StringComparison.OrdinalIgnoreCase) ||
+                tipo.Equals("Traslado", StringComparison.OrdinalIgnoreCase))
+            {
+                animal.IdLote = movimiento.IdLoteDestino;
+                animal.VersionRegistro++;
+            }
+            else if (tipo.Equals("Venta", StringComparison.OrdinalIgnoreCase) ||
+                     tipo.Equals("Baja", StringComparison.OrdinalIgnoreCase))
+            {
+                animal.IdLote = null;
+                animal.Estado = tipo.Equals("Venta", StringComparison.OrdinalIgnoreCase) ? "Vendido" : "Baja";
+                animal.FechaSalida = movimiento.Fecha;
+                animal.VersionRegistro++;
+            }
         }
 
         db.MovimientosAnimales.Add(movimiento);
-
         try
         {
             await db.SaveChangesAsync(ct);
@@ -110,7 +112,7 @@ public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValid
         catch (DbUpdateException)
         {
             await tx.RollbackAsync(ct);
-            return Conflict("No se pudo registrar el movimiento; verifica las referencias.");
+            return this.ConflictProblem("No se pudo registrar el movimiento; verifica las referencias.");
         }
 
         return CreatedAtAction(nameof(Get), new { id = movimiento.IdMovimiento }, ToResponseDto(movimiento));
@@ -128,25 +130,59 @@ public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValid
         await using var tx = await db.Database.BeginTransactionAsync(ct);
 
         var item = await db.MovimientosAnimales.FindAsync([id], ct);
-        if (item is null) return NotFound();
+        if (item is null) return this.NotFoundProblem("El movimiento de animal solicitado no existe.");
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor, ct);
-        if (authorError is not null) return BadRequest(authorError);
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
+        if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
+
+        var candidate = new MovimientoAnimal
+        {
+            IdMovimiento = item.IdMovimiento,
+            IdAnimal = dto.IdAnimal,
+            IdLoteOrigen = dto.IdLoteOrigen,
+            IdLoteDestino = dto.IdLoteDestino,
+            Tipo = dto.Tipo.Trim(),
+            Fecha = ApiProblemResults.EnsureUtc(dto.Fecha),
+            OrigenExterno = dto.OrigenExterno?.Trim(),
+            DestinoExterno = dto.DestinoExterno?.Trim(),
+            Motivo = dto.Motivo?.Trim(),
+            IdAutor = authorId
+        };
+        var (animal, error) = await validator.ValidateAndPrepareMovimientoAsync(candidate, ct);
+        if (error is not null) return this.ValidationError(error);
 
         item.IdAnimal = dto.IdAnimal;
         item.IdLoteOrigen = dto.IdLoteOrigen;
         item.IdLoteDestino = dto.IdLoteDestino;
-        item.Tipo = dto.Tipo.Trim();
-        item.Fecha = dto.Fecha;
-        item.OrigenExterno = dto.OrigenExterno;
-        item.DestinoExterno = dto.DestinoExterno;
-        item.Motivo = dto.Motivo;
+        item.Tipo = candidate.Tipo;
+        item.Fecha = candidate.Fecha;
+        item.OrigenExterno = candidate.OrigenExterno;
+        item.DestinoExterno = candidate.DestinoExterno;
+        item.Motivo = candidate.Motivo;
         item.IdAutor = authorId;
-        item.EliminadoEn = dto.EliminadoEn;
+        item.EliminadoEn = ApiProblemResults.EnsureUtc(dto.EliminadoEn);
         item.VersionRegistro++;
 
-        var (_, validationError) = await validator.ValidateAndPrepareMovimientoAsync(item, ct);
-        if (validationError is not null) return BadRequest(validationError);
+        if (animal is not null)
+        {
+            var tipo = item.Tipo.Trim();
+            if (tipo.Equals("Alta", StringComparison.OrdinalIgnoreCase) ||
+                tipo.Equals("CambioInterno", StringComparison.OrdinalIgnoreCase) ||
+                tipo.Equals("Cambio interno", StringComparison.OrdinalIgnoreCase) ||
+                tipo.Equals("Traslado", StringComparison.OrdinalIgnoreCase))
+            {
+                animal.IdLote = item.IdLoteDestino;
+                animal.VersionRegistro++;
+            }
+            else if (tipo.Equals("Venta", StringComparison.OrdinalIgnoreCase) ||
+                     tipo.Equals("Baja", StringComparison.OrdinalIgnoreCase))
+            {
+                animal.IdLote = null;
+                animal.Estado = tipo.Equals("Venta", StringComparison.OrdinalIgnoreCase) ? "Vendido" : "Baja";
+                animal.FechaSalida = item.Fecha;
+                animal.VersionRegistro++;
+            }
+        }
 
         try
         {
@@ -156,7 +192,7 @@ public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValid
         catch (DbUpdateException)
         {
             await tx.RollbackAsync(ct);
-            return Conflict("No se pudo actualizar el movimiento; verifica las referencias.");
+            return this.ConflictProblem("No se pudo actualizar el movimiento; verifica las referencias.");
         }
 
         return NoContent();
@@ -169,9 +205,8 @@ public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValid
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
-        // Regla 06 y 08: Conservar historial de movimientos mediante borrado lógico.
         var item = await db.MovimientosAnimales.FindAsync([id], ct);
-        if (item is null) return NotFound();
+        if (item is null) return this.NotFoundProblem("El movimiento de animal solicitado no existe.");
 
         if (item.EliminadoEn is null)
         {
@@ -182,6 +217,16 @@ public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValid
 
         return NoContent();
     }
+
+    private static bool MatchesMovimiento(MovimientoAnimal existing, MovimientoAnimalCreateDto dto) =>
+        existing.IdAnimal == dto.IdAnimal &&
+        existing.IdLoteOrigen == dto.IdLoteOrigen &&
+        existing.IdLoteDestino == dto.IdLoteDestino &&
+        ApiProblemResults.SameText(existing.Tipo, dto.Tipo) &&
+        ApiProblemResults.SameUtcInstant(existing.Fecha, dto.Fecha) &&
+        ApiProblemResults.SameText(existing.OrigenExterno, dto.OrigenExterno) &&
+        ApiProblemResults.SameText(existing.DestinoExterno, dto.DestinoExterno) &&
+        ApiProblemResults.SameText(existing.Motivo, dto.Motivo);
 
     private static MovimientoAnimalResponseDto ToResponseDto(MovimientoAnimal m) => new()
     {
@@ -196,6 +241,7 @@ public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValid
         Motivo = m.Motivo,
         IdAutor = m.IdAutor,
         CreadoEn = m.CreadoEn,
-        VersionRegistro = m.VersionRegistro
+        VersionRegistro = m.VersionRegistro,
+        EliminadoEn = m.EliminadoEn
     };
 }

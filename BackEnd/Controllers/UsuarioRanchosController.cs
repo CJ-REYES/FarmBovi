@@ -18,7 +18,6 @@ public sealed class UsuarioRanchosController(FarmDbContext db) : ControllerBase
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     public async Task<ActionResult<List<UsuarioRanchoResponseDto>>> GetAll([FromServices] RanchAccessService access, CancellationToken ct)
     {
-        // Un administrador ve las membresías de sus ranchos; cualquier usuario ve las propias.
         var userId = RanchAccessService.GetUserId(User) ?? Guid.Empty;
         var adminRanchIds = access.AdminRanchIds(userId);
         var items = await db.UsuarioRanchos.AsNoTracking()
@@ -36,7 +35,7 @@ public sealed class UsuarioRanchosController(FarmDbContext db) : ControllerBase
     public async Task<ActionResult<UsuarioRanchoResponseDto>> Get(Guid id, CancellationToken ct) =>
         await db.UsuarioRanchos.AsNoTracking().FirstOrDefaultAsync(ur => ur.IdUsuarioRancho == id, ct) is { } item
             ? Ok(ToResponseDto(item))
-            : NotFound();
+            : this.NotFoundProblem("La asignación usuario-rancho solicitada no existe.");
 
     [HttpPost]
     [ProducesResponseType(typeof(UsuarioRanchoResponseDto), StatusCodes.Status201Created)]
@@ -47,20 +46,21 @@ public sealed class UsuarioRanchosController(FarmDbContext db) : ControllerBase
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     public async Task<ActionResult<UsuarioRanchoResponseDto>> Create(UsuarioRanchoCreateDto dto, CancellationToken ct)
     {
-        var id = dto.IdUsuarioRancho is { } clientId && clientId != Guid.Empty
-            ? clientId
-            : Guid.NewGuid();
+        var id = dto.IdUsuarioRancho ?? Guid.NewGuid();
 
-        var existing = await db.UsuarioRanchos.AsNoTracking()
-            .FirstOrDefaultAsync(ur => ur.IdUsuarioRancho == id, ct);
+        var existing = await db.UsuarioRanchos.AsNoTracking().FirstOrDefaultAsync(ur => ur.IdUsuarioRancho == id, ct);
         if (existing is not null)
-            return Ok(ToResponseDto(existing));
-
-        if (dto.IdUsuario == Guid.Empty || dto.IdRancho == Guid.Empty ||
-            string.IsNullOrWhiteSpace(dto.Rol) || string.IsNullOrWhiteSpace(dto.Estado))
         {
-            return BadRequest("IdUsuario, IdRancho, rol y estado son obligatorios.");
+            return MatchesUsuarioRancho(existing, dto)
+                ? Ok(ToResponseDto(existing))
+                : this.ConflictProblem("Ya existe una asignación con el identificador proporcionado y contenido diferente.");
         }
+
+        var userExists = await db.Usuarios.AsNoTracking().AnyAsync(u => u.IdUsuario == dto.IdUsuario, ct);
+        if (!userExists) return this.ValidationError("El usuario especificado no existe.", nameof(dto.IdUsuario));
+
+        var ranchoExists = await db.Ranchos.AsNoTracking().AnyAsync(r => r.IdRancho == dto.IdRancho && r.EliminadoEn == null, ct);
+        if (!ranchoExists) return this.ValidationError("El rancho especificado no existe o está eliminado.", nameof(dto.IdRancho));
 
         var item = new UsuarioRancho
         {
@@ -69,8 +69,8 @@ public sealed class UsuarioRanchosController(FarmDbContext db) : ControllerBase
             IdRancho = dto.IdRancho,
             Rol = dto.Rol.Trim(),
             Estado = dto.Estado.Trim(),
-            FechaAlta = dto.FechaAlta ?? DateTime.UtcNow,
-            FechaBaja = dto.FechaBaja
+            FechaAlta = ApiProblemResults.EnsureUtc(dto.FechaAlta ?? DateTime.UtcNow),
+            FechaBaja = ApiProblemResults.EnsureUtc(dto.FechaBaja)
         };
 
         db.UsuarioRanchos.Add(item);
@@ -80,7 +80,7 @@ public sealed class UsuarioRanchosController(FarmDbContext db) : ControllerBase
         }
         catch (DbUpdateException)
         {
-            return Conflict("La asignación ya existe o el usuario/rancho no existen.");
+            return this.ConflictProblem("La asignación ya existe o el usuario/rancho no existen.");
         }
 
         return CreatedAtAction(nameof(Get), new { id = item.IdUsuarioRancho }, ToResponseDto(item));
@@ -96,14 +96,20 @@ public sealed class UsuarioRanchosController(FarmDbContext db) : ControllerBase
     public async Task<IActionResult> Update(Guid id, UsuarioRanchoUpdateDto dto, CancellationToken ct)
     {
         var item = await db.UsuarioRanchos.FindAsync([id], ct);
-        if (item is null) return NotFound();
+        if (item is null) return this.NotFoundProblem("La asignación usuario-rancho solicitada no existe.");
+
+        var userExists = await db.Usuarios.AsNoTracking().AnyAsync(u => u.IdUsuario == dto.IdUsuario, ct);
+        if (!userExists) return this.ValidationError("El usuario especificado no existe.", nameof(dto.IdUsuario));
+
+        var ranchoExists = await db.Ranchos.AsNoTracking().AnyAsync(r => r.IdRancho == dto.IdRancho && r.EliminadoEn == null, ct);
+        if (!ranchoExists) return this.ValidationError("El rancho especificado no existe o está eliminado.", nameof(dto.IdRancho));
 
         item.IdUsuario = dto.IdUsuario;
         item.IdRancho = dto.IdRancho;
         item.Rol = dto.Rol.Trim();
         item.Estado = dto.Estado.Trim();
-        if (dto.FechaAlta.HasValue) item.FechaAlta = dto.FechaAlta.Value;
-        item.FechaBaja = dto.FechaBaja;
+        if (dto.FechaAlta.HasValue) item.FechaAlta = ApiProblemResults.EnsureUtc(dto.FechaAlta.Value);
+        item.FechaBaja = ApiProblemResults.EnsureUtc(dto.FechaBaja);
 
         try
         {
@@ -111,7 +117,7 @@ public sealed class UsuarioRanchosController(FarmDbContext db) : ControllerBase
         }
         catch (DbUpdateException)
         {
-            return Conflict("La asignación ya existe o el usuario/rancho no existen.");
+            return this.ConflictProblem("La asignación ya existe o el usuario/rancho no existen.");
         }
 
         return NoContent();
@@ -126,7 +132,7 @@ public sealed class UsuarioRanchosController(FarmDbContext db) : ControllerBase
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         var item = await db.UsuarioRanchos.FindAsync([id], ct);
-        if (item is null) return NotFound();
+        if (item is null) return this.NotFoundProblem("La asignación usuario-rancho solicitada no existe.");
 
         db.UsuarioRanchos.Remove(item);
         try
@@ -135,11 +141,19 @@ public sealed class UsuarioRanchosController(FarmDbContext db) : ControllerBase
         }
         catch (DbUpdateException)
         {
-            return Conflict("No se pudo eliminar la asignación usuario-rancho por una restricción de integridad.");
+            return this.ConflictProblem("No se pudo eliminar la asignación usuario-rancho por una restricción de integridad.");
         }
 
         return NoContent();
     }
+
+    private static bool MatchesUsuarioRancho(UsuarioRancho existing, UsuarioRanchoCreateDto dto) =>
+        existing.IdUsuario == dto.IdUsuario &&
+        existing.IdRancho == dto.IdRancho &&
+        ApiProblemResults.SameText(existing.Rol, dto.Rol) &&
+        ApiProblemResults.SameText(existing.Estado, dto.Estado) &&
+        ApiProblemResults.SameUtcInstant(existing.FechaAlta, dto.FechaAlta ?? existing.FechaAlta) &&
+        ApiProblemResults.SameUtcInstant(existing.FechaBaja, dto.FechaBaja);
 
     private static UsuarioRanchoResponseDto ToResponseDto(UsuarioRancho ur) => new()
     {

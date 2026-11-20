@@ -22,7 +22,6 @@ public sealed class LotesController(FarmDbContext db, FarmDomainValidationServic
         if (!incluirEliminados)
             query = query.Where(l => l.EliminadoEn == null);
 
-        // Solo registros de ranchos donde el usuario tiene membresía activa.
         var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
         query = query.Where(x => ranchIds.Contains(x.IdRancho));
 
@@ -38,7 +37,7 @@ public sealed class LotesController(FarmDbContext db, FarmDomainValidationServic
     public async Task<ActionResult<LoteResponseDto>> Get(Guid id, CancellationToken ct) =>
         await db.Lotes.AsNoTracking().FirstOrDefaultAsync(l => l.IdLote == id, ct) is { } item
             ? Ok(ToResponseDto(item))
-            : NotFound();
+            : this.NotFoundProblem("El lote solicitado no existe.");
 
     [HttpPost]
     [ProducesResponseType(typeof(LoteResponseDto), StatusCodes.Status201Created)]
@@ -49,29 +48,28 @@ public sealed class LotesController(FarmDbContext db, FarmDomainValidationServic
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     public async Task<ActionResult<LoteResponseDto>> Create(LoteCreateDto dto, CancellationToken ct)
     {
-        var id = dto.IdLote is { } clientId && clientId != Guid.Empty
-            ? clientId
-            : Guid.NewGuid();
+        var id = dto.IdLote ?? Guid.NewGuid();
 
         var existing = await db.Lotes.AsNoTracking().FirstOrDefaultAsync(l => l.IdLote == id, ct);
         if (existing is not null)
-            return Ok(ToResponseDto(existing));
+        {
+            return MatchesLote(existing, dto)
+                ? Ok(ToResponseDto(existing))
+                : this.ConflictProblem("Ya existe un lote con el identificador proporcionado y contenido diferente.");
+        }
 
-        if (dto.IdRancho == Guid.Empty || string.IsNullOrWhiteSpace(dto.Nombre) || string.IsNullOrWhiteSpace(dto.Estado))
-            return BadRequest("IdRancho, nombre y estado del lote son obligatorios.");
-
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor, ct);
-        if (authorError is not null) return BadRequest(authorError);
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
+        if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
 
         var ranchoExists = await db.Ranchos.AsNoTracking().AnyAsync(r => r.IdRancho == dto.IdRancho && r.EliminadoEn == null, ct);
-        if (!ranchoExists) return BadRequest("El rancho especificado no existe o está eliminado.");
+        if (!ranchoExists) return this.ValidationError("El rancho especificado no existe o está eliminado.", nameof(dto.IdRancho));
 
         var item = new Lote
         {
             IdLote = id,
             IdRancho = dto.IdRancho,
             Nombre = dto.Nombre.Trim(),
-            Ubicacion = dto.Ubicacion,
+            Ubicacion = dto.Ubicacion?.Trim(),
             Estado = dto.Estado.Trim(),
             IdAutor = authorId,
             CreadoEn = DateTime.UtcNow,
@@ -85,7 +83,7 @@ public sealed class LotesController(FarmDbContext db, FarmDomainValidationServic
         }
         catch (DbUpdateException)
         {
-            return Conflict("Ya existe el nombre de lote en ese rancho o el rancho no existe.");
+            return this.ConflictProblem("Ya existe el nombre de lote en ese rancho o el rancho no existe.");
         }
 
         return CreatedAtAction(nameof(Get), new { id = item.IdLote }, ToResponseDto(item));
@@ -101,16 +99,20 @@ public sealed class LotesController(FarmDbContext db, FarmDomainValidationServic
     public async Task<IActionResult> Update(Guid id, LoteUpdateDto dto, CancellationToken ct)
     {
         var item = await db.Lotes.FindAsync([id], ct);
-        if (item is null) return NotFound();
+        if (item is null) return this.NotFoundProblem("El lote solicitado no existe.");
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, Guid.Empty, ct);
-        if (authorError is not null) return BadRequest(authorError);
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
+        if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
+
+        var ranchoExists = await db.Ranchos.AsNoTracking().AnyAsync(r => r.IdRancho == dto.IdRancho && r.EliminadoEn == null, ct);
+        if (!ranchoExists) return this.ValidationError("El rancho especificado no existe o está eliminado.", nameof(dto.IdRancho));
 
         item.IdRancho = dto.IdRancho;
         item.Nombre = dto.Nombre.Trim();
-        item.Ubicacion = dto.Ubicacion;
+        item.Ubicacion = dto.Ubicacion?.Trim();
         item.Estado = dto.Estado.Trim();
         item.IdAutor = authorId;
+        item.EliminadoEn = ApiProblemResults.EnsureUtc(dto.EliminadoEn);
         item.VersionRegistro++;
 
         try
@@ -119,7 +121,7 @@ public sealed class LotesController(FarmDbContext db, FarmDomainValidationServic
         }
         catch (DbUpdateException)
         {
-            return Conflict("Ya existe el nombre de lote en ese rancho o el rancho no existe.");
+            return this.ConflictProblem("Ya existe el nombre de lote en ese rancho o el rancho no existe.");
         }
 
         return NoContent();
@@ -134,12 +136,12 @@ public sealed class LotesController(FarmDbContext db, FarmDomainValidationServic
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         var item = await db.Lotes.FindAsync([id], ct);
-        if (item is null) return NotFound();
+        if (item is null) return this.NotFoundProblem("El lote solicitado no existe.");
 
         var hasActiveAnimals = await db.Animales.AsNoTracking()
             .AnyAsync(a => a.IdLote == id && a.EliminadoEn == null, ct);
         if (hasActiveAnimals)
-            return Conflict("No se puede eliminar un lote que tiene animales activos asociados.");
+            return this.ConflictProblem("No se puede eliminar un lote que tiene animales activos asociados.");
 
         if (item.EliminadoEn is null)
         {
@@ -151,6 +153,12 @@ public sealed class LotesController(FarmDbContext db, FarmDomainValidationServic
         return NoContent();
     }
 
+    private static bool MatchesLote(Lote existing, LoteCreateDto dto) =>
+        existing.IdRancho == dto.IdRancho &&
+        ApiProblemResults.SameText(existing.Nombre, dto.Nombre) &&
+        ApiProblemResults.SameText(existing.Ubicacion, dto.Ubicacion) &&
+        ApiProblemResults.SameText(existing.Estado, dto.Estado);
+
     private static LoteResponseDto ToResponseDto(Lote l) => new()
     {
         IdLote = l.IdLote,
@@ -160,6 +168,7 @@ public sealed class LotesController(FarmDbContext db, FarmDomainValidationServic
         Estado = l.Estado,
         IdAutor = l.IdAutor,
         CreadoEn = l.CreadoEn,
-        VersionRegistro = l.VersionRegistro
+        VersionRegistro = l.VersionRegistro,
+        EliminadoEn = l.EliminadoEn
     };
 }

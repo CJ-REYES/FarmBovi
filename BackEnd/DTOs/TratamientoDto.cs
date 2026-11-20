@@ -2,78 +2,108 @@ using System.ComponentModel.DataAnnotations;
 
 namespace FarmBovi.Api.DTOs;
 
-public sealed class TratamientoCreateDto
+public sealed class TratamientoCreateDto : IValidatableObject
 {
+    [NotEmptyGuid(AllowNull = true)]
     public Guid? IdTratamiento { get; set; }
 
-    [Required]
+    [Required, NotEmptyGuid]
     public Guid IdEventoSanitario { get; set; }
 
-    [Required, MaxLength(150)]
+    [Required, NotWhiteSpace, MaxLength(150)]
     public string Producto { get; set; } = string.Empty;
 
-    [Required]
+    [Required, PositiveDecimal]
     public decimal Dosis { get; set; }
 
-    [Required, MaxLength(30)]
+    [Required, NotWhiteSpace, MaxLength(30)]
     public string UnidadDosis { get; set; } = string.Empty;
 
     [MaxLength(80)]
     public string? ViaAdministracion { get; set; }
 
-    [Required, MaxLength(80)]
+    [Required, NotWhiteSpace, MaxLength(80)]
     public string Frecuencia { get; set; } = string.Empty;
 
-    [Required]
+    [Required, ValidDateRange]
     public DateTime FechaInicio { get; set; }
 
+    [ValidDateRange(AllowNull = true)]
     public DateTime? FechaFin { get; set; }
 
-    [Required, MaxLength(150)]
+    [Required, NotWhiteSpace, MaxLength(150)]
     public string Responsable { get; set; } = string.Empty;
 
     [MaxLength(500)]
     public string? PrescripcionUri { get; set; }
 
-    [Required, MaxLength(40)]
+    [Required, NotWhiteSpace, MaxLength(40)]
     public string Estado { get; set; } = string.Empty;
 
-    public Guid IdAutor { get; set; }
+    [NotEmptyGuid(AllowNull = true)]
+    public Guid? IdAutor { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (FechaFin.HasValue && FechaFin.Value < FechaInicio)
+        {
+            yield return new ValidationResult(
+                "La fecha de fin del tratamiento no puede ser anterior a la fecha de inicio.",
+                [nameof(FechaFin), nameof(FechaInicio)]);
+        }
+    }
 }
 
-public sealed class TratamientoUpdateDto
+public sealed class TratamientoUpdateDto : IValidatableObject
 {
-    [Required]
+    [Required, NotEmptyGuid]
     public Guid IdEventoSanitario { get; set; }
 
-    [Required, MaxLength(150)]
+    [Required, NotWhiteSpace, MaxLength(150)]
     public string Producto { get; set; } = string.Empty;
 
-    [Required]
+    [Required, PositiveDecimal]
     public decimal Dosis { get; set; }
 
-    [Required, MaxLength(30)]
+    [Required, NotWhiteSpace, MaxLength(30)]
     public string UnidadDosis { get; set; } = string.Empty;
 
     [MaxLength(80)]
     public string? ViaAdministracion { get; set; }
 
-    [Required, MaxLength(80)]
+    [Required, NotWhiteSpace, MaxLength(80)]
     public string Frecuencia { get; set; } = string.Empty;
 
-    [Required]
+    [Required, ValidDateRange]
     public DateTime FechaInicio { get; set; }
 
+    [ValidDateRange(AllowNull = true)]
     public DateTime? FechaFin { get; set; }
 
-    [Required, MaxLength(150)]
+    [Required, NotWhiteSpace, MaxLength(150)]
     public string Responsable { get; set; } = string.Empty;
 
     [MaxLength(500)]
     public string? PrescripcionUri { get; set; }
 
-    [Required, MaxLength(40)]
+    [Required, NotWhiteSpace, MaxLength(40)]
     public string Estado { get; set; } = string.Empty;
+
+    [NotEmptyGuid(AllowNull = true)]
+    public Guid? IdAutor { get; set; }
+
+    [ValidDateRange(AllowNull = true)]
+    public DateTime? EliminadoEn { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (FechaFin.HasValue && FechaFin.Value < FechaInicio)
+        {
+            yield return new ValidationResult(
+                "La fecha de fin del tratamiento no puede ser anterior a la fecha de inicio.",
+                [nameof(FechaFin), nameof(FechaInicio)]);
+        }
+    }
 }
 
 public sealed class TratamientoResponseDto
@@ -93,4 +123,5 @@ public sealed class TratamientoResponseDto
     public Guid IdAutor { get; set; }
     public DateTime CreadoEn { get; set; }
     public long VersionRegistro { get; set; }
+    public DateTime? EliminadoEn { get; set; }
 }

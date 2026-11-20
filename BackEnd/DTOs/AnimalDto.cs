@@ -2,69 +2,122 @@ using System.ComponentModel.DataAnnotations;
 
 namespace FarmBovi.Api.DTOs;
 
-public sealed class AnimalCreateDto
+public sealed class AnimalCreateDto : IValidatableObject
 {
+    [NotEmptyGuid(AllowNull = true)]
     public Guid? IdAnimal { get; set; }
 
-    [Required]
+    [Required, NotEmptyGuid]
     public Guid IdRancho { get; set; }
 
+    [NotEmptyGuid(AllowNull = true)]
     public Guid? IdLote { get; set; }
 
-    [Required, MaxLength(80)]
+    [Required, NotWhiteSpace, MaxLength(80)]
     public string Arete { get; set; } = string.Empty;
 
-    [Required, MaxLength(80)]
+    [Required, NotWhiteSpace, MaxLength(80)]
     public string Raza { get; set; } = string.Empty;
 
-    [Required, MaxLength(20)]
+    [Required, NotWhiteSpace, MaxLength(20)]
     public string Sexo { get; set; } = string.Empty;
 
+    [ValidDateRange(AllowNull = true)]
     public DateTime? FechaNacimiento { get; set; }
 
-    [Required]
+    [Required, ValidDateRange]
     public DateTime FechaIngreso { get; set; }
 
-    [Required, MaxLength(120)]
+    [Required, NotWhiteSpace, MaxLength(120)]
     public string Procedencia { get; set; } = string.Empty;
 
-    [Required, MaxLength(40)]
+    [Required, NotWhiteSpace, MaxLength(40)]
     public string Estado { get; set; } = string.Empty;
 
+    [ValidDateRange(AllowNull = true)]
     public DateTime? FechaSalida { get; set; }
+
+    [MaxLength(1000)]
     public string? Observaciones { get; set; }
-    public Guid IdAutor { get; set; }
+
+    [NotEmptyGuid(AllowNull = true)]
+    public Guid? IdAutor { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (FechaNacimiento.HasValue && FechaNacimiento.Value > FechaIngreso)
+        {
+            yield return new ValidationResult(
+                "La fecha de nacimiento no puede ser posterior a la fecha de ingreso.",
+                [nameof(FechaNacimiento), nameof(FechaIngreso)]);
+        }
+
+        if (FechaSalida.HasValue && FechaSalida.Value < FechaIngreso)
+        {
+            yield return new ValidationResult(
+                "La fecha de salida no puede ser anterior a la fecha de ingreso.",
+                [nameof(FechaSalida), nameof(FechaIngreso)]);
+        }
+    }
 }
 
-public sealed class AnimalUpdateDto
+public sealed class AnimalUpdateDto : IValidatableObject
 {
-    [Required]
+    [Required, NotEmptyGuid]
     public Guid IdRancho { get; set; }
 
+    [NotEmptyGuid(AllowNull = true)]
     public Guid? IdLote { get; set; }
 
-    [Required, MaxLength(80)]
+    [Required, NotWhiteSpace, MaxLength(80)]
     public string Arete { get; set; } = string.Empty;
 
-    [Required, MaxLength(80)]
+    [Required, NotWhiteSpace, MaxLength(80)]
     public string Raza { get; set; } = string.Empty;
 
-    [Required, MaxLength(20)]
+    [Required, NotWhiteSpace, MaxLength(20)]
     public string Sexo { get; set; } = string.Empty;
 
+    [ValidDateRange(AllowNull = true)]
     public DateTime? FechaNacimiento { get; set; }
 
-    [Required]
+    [Required, ValidDateRange]
     public DateTime FechaIngreso { get; set; }
 
-    [Required, MaxLength(120)]
+    [Required, NotWhiteSpace, MaxLength(120)]
     public string Procedencia { get; set; } = string.Empty;
 
-    [Required, MaxLength(40)]
+    [Required, NotWhiteSpace, MaxLength(40)]
     public string Estado { get; set; } = string.Empty;
 
+    [ValidDateRange(AllowNull = true)]
     public DateTime? FechaSalida { get; set; }
+
+    [MaxLength(1000)]
     public string? Observaciones { get; set; }
+
+    [NotEmptyGuid(AllowNull = true)]
+    public Guid? IdAutor { get; set; }
+
+    [ValidDateRange(AllowNull = true)]
+    public DateTime? EliminadoEn { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (FechaNacimiento.HasValue && FechaNacimiento.Value > FechaIngreso)
+        {
+            yield return new ValidationResult(
+                "La fecha de nacimiento no puede ser posterior a la fecha de ingreso.",
+                [nameof(FechaNacimiento), nameof(FechaIngreso)]);
+        }
+
+        if (FechaSalida.HasValue && FechaSalida.Value < FechaIngreso)
+        {
+            yield return new ValidationResult(
+                "La fecha de salida no puede ser anterior a la fecha de ingreso.",
+                [nameof(FechaSalida), nameof(FechaIngreso)]);
+        }
+    }
 }
 
 public sealed class AnimalResponseDto
@@ -84,4 +137,5 @@ public sealed class AnimalResponseDto
     public Guid IdAutor { get; set; }
     public DateTime CreadoEn { get; set; }
     public long VersionRegistro { get; set; }
+    public DateTime? EliminadoEn { get; set; }
 }

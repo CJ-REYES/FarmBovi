@@ -2,64 +2,116 @@ using System.ComponentModel.DataAnnotations;
 
 namespace FarmBovi.Api.DTOs;
 
-public sealed class AlimentacionCreateDto
+public sealed class AlimentacionCreateDto : IValidatableObject
 {
+    [NotEmptyGuid(AllowNull = true)]
     public Guid? IdAlimentacion { get; set; }
+
+    [NotEmptyGuid(AllowNull = true)]
     public Guid? IdAnimal { get; set; }
+
+    [NotEmptyGuid(AllowNull = true)]
     public Guid? IdLote { get; set; }
 
-    [Required, MaxLength(150)]
+    [Required, NotWhiteSpace, MaxLength(150)]
     public string Alimento { get; set; } = string.Empty;
 
-    [Required, MaxLength(150)]
+    [Required, NotWhiteSpace, MaxLength(150)]
     public string Racion { get; set; } = string.Empty;
 
-    [Required]
+    [Required, PositiveDecimal]
     public decimal Cantidad { get; set; }
 
-    [Required, MaxLength(20)]
+    [Required, NotWhiteSpace, MaxLength(20)]
     public string Unidad { get; set; } = string.Empty;
 
-    [Required, MaxLength(80)]
+    [Required, NotWhiteSpace, MaxLength(80)]
     public string Frecuencia { get; set; } = string.Empty;
 
-    [Required]
+    [Required, ValidDateRange]
     public DateTime Inicio { get; set; }
 
+    [ValidDateRange(AllowNull = true)]
     public DateTime? Fin { get; set; }
+
+    [MaxLength(500)]
     public string? CambioDieta { get; set; }
 
-    public Guid IdAutor { get; set; }
+    [NotEmptyGuid(AllowNull = true)]
+    public Guid? IdAutor { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (IdAnimal.HasValue == IdLote.HasValue)
+        {
+            yield return new ValidationResult(
+                "Debe informarse exactamente uno entre idAnimal e idLote (son mutuamente excluyentes).",
+                [nameof(IdAnimal), nameof(IdLote)]);
+        }
+
+        if (Fin.HasValue && Fin.Value < Inicio)
+        {
+            yield return new ValidationResult(
+                "La fecha de fin no puede ser anterior a la fecha de inicio.",
+                [nameof(Fin), nameof(Inicio)]);
+        }
+    }
 }
 
-public sealed class AlimentacionUpdateDto
+public sealed class AlimentacionUpdateDto : IValidatableObject
 {
+    [NotEmptyGuid(AllowNull = true)]
     public Guid? IdAnimal { get; set; }
+
+    [NotEmptyGuid(AllowNull = true)]
     public Guid? IdLote { get; set; }
 
-    [Required, MaxLength(150)]
+    [Required, NotWhiteSpace, MaxLength(150)]
     public string Alimento { get; set; } = string.Empty;
 
-    [Required, MaxLength(150)]
+    [Required, NotWhiteSpace, MaxLength(150)]
     public string Racion { get; set; } = string.Empty;
 
-    [Required]
+    [Required, PositiveDecimal]
     public decimal Cantidad { get; set; }
 
-    [Required, MaxLength(20)]
+    [Required, NotWhiteSpace, MaxLength(20)]
     public string Unidad { get; set; } = string.Empty;
 
-    [Required, MaxLength(80)]
+    [Required, NotWhiteSpace, MaxLength(80)]
     public string Frecuencia { get; set; } = string.Empty;
 
-    [Required]
+    [Required, ValidDateRange]
     public DateTime Inicio { get; set; }
 
+    [ValidDateRange(AllowNull = true)]
     public DateTime? Fin { get; set; }
+
+    [MaxLength(500)]
     public string? CambioDieta { get; set; }
 
-    public Guid IdAutor { get; set; }
+    [NotEmptyGuid(AllowNull = true)]
+    public Guid? IdAutor { get; set; }
+
+    [ValidDateRange(AllowNull = true)]
     public DateTime? EliminadoEn { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (IdAnimal.HasValue == IdLote.HasValue)
+        {
+            yield return new ValidationResult(
+                "Debe informarse exactamente uno entre idAnimal e idLote (son mutuamente excluyentes).",
+                [nameof(IdAnimal), nameof(IdLote)]);
+        }
+
+        if (Fin.HasValue && Fin.Value < Inicio)
+        {
+            yield return new ValidationResult(
+                "La fecha de fin no puede ser anterior a la fecha de inicio.",
+                [nameof(Fin), nameof(Inicio)]);
+        }
+    }
 }
 
 public sealed class AlimentacionResponseDto
@@ -78,4 +130,5 @@ public sealed class AlimentacionResponseDto
     public Guid IdAutor { get; set; }
     public DateTime CreadoEn { get; set; }
     public long VersionRegistro { get; set; }
+    public DateTime? EliminadoEn { get; set; }
 }

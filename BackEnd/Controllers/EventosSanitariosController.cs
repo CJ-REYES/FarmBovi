@@ -22,7 +22,6 @@ public sealed class EventosSanitariosController(FarmDbContext db, FarmDomainVali
         if (!incluirEliminados)
             query = query.Where(e => e.EliminadoEn == null);
 
-        // Solo registros de ranchos donde el usuario tiene membresía activa.
         var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
         query = query.Where(x => db.Animales.Any(a => a.IdAnimal == x.IdAnimal && ranchIds.Contains(a.IdRancho)));
 
@@ -38,7 +37,7 @@ public sealed class EventosSanitariosController(FarmDbContext db, FarmDomainVali
     public async Task<ActionResult<EventoSanitarioResponseDto>> Get(Guid id, CancellationToken ct) =>
         await db.EventosSanitarios.AsNoTracking().FirstOrDefaultAsync(e => e.IdEventoSanitario == id, ct) is { } item
             ? Ok(ToResponseDto(item))
-            : NotFound();
+            : this.NotFoundProblem("El evento sanitario solicitado no existe.");
 
     [HttpPost]
     [ProducesResponseType(typeof(EventoSanitarioResponseDto), StatusCodes.Status201Created)]
@@ -49,37 +48,38 @@ public sealed class EventosSanitariosController(FarmDbContext db, FarmDomainVali
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     public async Task<ActionResult<EventoSanitarioResponseDto>> Create(EventoSanitarioCreateDto dto, CancellationToken ct)
     {
-        var id = dto.IdEventoSanitario is { } clientId && clientId != Guid.Empty
-            ? clientId
-            : Guid.NewGuid();
+        var id = dto.IdEventoSanitario ?? Guid.NewGuid();
 
-        var existing = await db.EventosSanitarios.AsNoTracking()
-            .FirstOrDefaultAsync(e => e.IdEventoSanitario == id, ct);
+        var existing = await db.EventosSanitarios.AsNoTracking().FirstOrDefaultAsync(e => e.IdEventoSanitario == id, ct);
         if (existing is not null)
-            return Ok(ToResponseDto(existing));
+        {
+            return MatchesEventoSanitario(existing, dto)
+                ? Ok(ToResponseDto(existing))
+                : this.ConflictProblem("Ya existe un evento sanitario con el identificador proporcionado y contenido diferente.");
+        }
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor, ct);
-        if (authorError is not null) return BadRequest(authorError);
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
+        if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
 
         var item = new EventoSanitario
         {
             IdEventoSanitario = id,
             IdAnimal = dto.IdAnimal,
             Tipo = dto.Tipo.Trim(),
-            Fecha = dto.Fecha == default ? DateTime.UtcNow : dto.Fecha,
-            Sintomas = dto.Sintomas,
-            Diagnostico = dto.Diagnostico,
-            ProfesionalDiagnostico = dto.ProfesionalDiagnostico,
-            EvidenciaDiagnosticoUri = dto.EvidenciaDiagnosticoUri,
+            Fecha = ApiProblemResults.EnsureUtc(dto.Fecha),
+            Sintomas = dto.Sintomas?.Trim(),
+            Diagnostico = dto.Diagnostico?.Trim(),
+            ProfesionalDiagnostico = dto.ProfesionalDiagnostico?.Trim(),
+            EvidenciaDiagnosticoUri = dto.EvidenciaDiagnosticoUri?.Trim(),
             Responsable = dto.Responsable.Trim(),
-            Observaciones = dto.Observaciones,
+            Observaciones = dto.Observaciones?.Trim(),
             IdAutor = authorId,
             CreadoEn = DateTime.UtcNow,
             VersionRegistro = 1
         };
 
         var validationError = await validator.ValidateEventoSanitarioAsync(item, ct);
-        if (validationError is not null) return BadRequest(validationError);
+        if (validationError is not null) return this.ValidationError(validationError);
 
         db.EventosSanitarios.Add(item);
         try
@@ -88,7 +88,7 @@ public sealed class EventosSanitariosController(FarmDbContext db, FarmDomainVali
         }
         catch (DbUpdateException)
         {
-            return Conflict("No se pudo crear el evento sanitario; verifica que el animal exista.");
+            return this.ConflictProblem("No se pudo crear el evento sanitario; verifica que el animal exista.");
         }
 
         return CreatedAtAction(nameof(Get), new { id = item.IdEventoSanitario }, ToResponseDto(item));
@@ -104,27 +104,28 @@ public sealed class EventosSanitariosController(FarmDbContext db, FarmDomainVali
     public async Task<IActionResult> Update(Guid id, EventoSanitarioUpdateDto dto, CancellationToken ct)
     {
         var item = await db.EventosSanitarios.FindAsync([id], ct);
-        if (item is null) return NotFound();
+        if (item is null) return this.NotFoundProblem("El evento sanitario solicitado no existe.");
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, Guid.Empty, ct);
-        if (authorError is not null) return BadRequest(authorError);
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
+        if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
 
         var candidate = new EventoSanitario
         {
             IdEventoSanitario = item.IdEventoSanitario,
             IdAnimal = dto.IdAnimal,
             Tipo = dto.Tipo.Trim(),
-            Fecha = dto.Fecha,
-            Sintomas = dto.Sintomas,
-            Diagnostico = dto.Diagnostico,
-            ProfesionalDiagnostico = dto.ProfesionalDiagnostico,
-            EvidenciaDiagnosticoUri = dto.EvidenciaDiagnosticoUri,
+            Fecha = ApiProblemResults.EnsureUtc(dto.Fecha),
+            Sintomas = dto.Sintomas?.Trim(),
+            Diagnostico = dto.Diagnostico?.Trim(),
+            ProfesionalDiagnostico = dto.ProfesionalDiagnostico?.Trim(),
+            EvidenciaDiagnosticoUri = dto.EvidenciaDiagnosticoUri?.Trim(),
             Responsable = dto.Responsable.Trim(),
-            Observaciones = dto.Observaciones,
-            IdAutor = authorId
+            Observaciones = dto.Observaciones?.Trim(),
+            IdAutor = authorId,
+            EliminadoEn = ApiProblemResults.EnsureUtc(dto.EliminadoEn)
         };
         var validationError = await validator.ValidateEventoSanitarioAsync(candidate, ct);
-        if (validationError is not null) return BadRequest(validationError);
+        if (validationError is not null) return this.ValidationError(validationError);
 
         item.IdAnimal = candidate.IdAnimal;
         item.Tipo = candidate.Tipo;
@@ -136,6 +137,7 @@ public sealed class EventosSanitariosController(FarmDbContext db, FarmDomainVali
         item.Responsable = candidate.Responsable;
         item.Observaciones = candidate.Observaciones;
         item.IdAutor = authorId;
+        item.EliminadoEn = candidate.EliminadoEn;
         item.VersionRegistro++;
 
         try
@@ -144,7 +146,7 @@ public sealed class EventosSanitariosController(FarmDbContext db, FarmDomainVali
         }
         catch (DbUpdateException)
         {
-            return Conflict("No se pudo actualizar el evento sanitario; verifica las referencias.");
+            return this.ConflictProblem("No se pudo actualizar el evento sanitario; verifica las referencias.");
         }
 
         return NoContent();
@@ -159,12 +161,12 @@ public sealed class EventosSanitariosController(FarmDbContext db, FarmDomainVali
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         var item = await db.EventosSanitarios.FindAsync([id], ct);
-        if (item is null) return NotFound();
+        if (item is null) return this.NotFoundProblem("El evento sanitario solicitado no existe.");
 
         var hasActiveTratamientos = await db.Tratamientos.AsNoTracking()
             .AnyAsync(t => t.IdEventoSanitario == id && t.EliminadoEn == null, ct);
         if (hasActiveTratamientos)
-            return Conflict("No se puede eliminar un evento sanitario que tiene tratamientos asociados.");
+            return this.ConflictProblem("No se puede eliminar un evento sanitario que tiene tratamientos asociados.");
 
         if (item.EliminadoEn is null)
         {
@@ -175,6 +177,17 @@ public sealed class EventosSanitariosController(FarmDbContext db, FarmDomainVali
 
         return NoContent();
     }
+
+    private static bool MatchesEventoSanitario(EventoSanitario existing, EventoSanitarioCreateDto dto) =>
+        existing.IdAnimal == dto.IdAnimal &&
+        ApiProblemResults.SameText(existing.Tipo, dto.Tipo) &&
+        ApiProblemResults.SameUtcInstant(existing.Fecha, dto.Fecha) &&
+        ApiProblemResults.SameText(existing.Sintomas, dto.Sintomas) &&
+        ApiProblemResults.SameText(existing.Diagnostico, dto.Diagnostico) &&
+        ApiProblemResults.SameText(existing.ProfesionalDiagnostico, dto.ProfesionalDiagnostico) &&
+        ApiProblemResults.SameText(existing.EvidenciaDiagnosticoUri, dto.EvidenciaDiagnosticoUri) &&
+        ApiProblemResults.SameText(existing.Responsable, dto.Responsable) &&
+        ApiProblemResults.SameText(existing.Observaciones, dto.Observaciones);
 
     private static EventoSanitarioResponseDto ToResponseDto(EventoSanitario e) => new()
     {
@@ -190,6 +203,7 @@ public sealed class EventosSanitariosController(FarmDbContext db, FarmDomainVali
         Observaciones = e.Observaciones,
         IdAutor = e.IdAutor,
         CreadoEn = e.CreadoEn,
-        VersionRegistro = e.VersionRegistro
+        VersionRegistro = e.VersionRegistro,
+        EliminadoEn = e.EliminadoEn
     };
 }

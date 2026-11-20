@@ -2,42 +2,69 @@ using System.ComponentModel.DataAnnotations;
 
 namespace FarmBovi.Api.DTOs;
 
-public sealed class UsuarioRanchoCreateDto
+public sealed class UsuarioRanchoCreateDto : IValidatableObject
 {
+    [NotEmptyGuid(AllowNull = true)]
     public Guid? IdUsuarioRancho { get; set; }
 
-    [Required]
+    [Required, NotEmptyGuid]
     public Guid IdUsuario { get; set; }
 
-    [Required]
+    [Required, NotEmptyGuid]
     public Guid IdRancho { get; set; }
 
-    [Required, MaxLength(40)]
+    [Required, NotWhiteSpace, MaxLength(40)]
     public string Rol { get; set; } = string.Empty;
 
-    [Required, MaxLength(40)]
+    [Required, NotWhiteSpace, MaxLength(40)]
     public string Estado { get; set; } = string.Empty;
 
+    [ValidDateRange(AllowNull = true)]
     public DateTime? FechaAlta { get; set; }
+
+    [ValidDateRange(AllowNull = true)]
     public DateTime? FechaBaja { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (FechaAlta.HasValue && FechaBaja.HasValue && FechaBaja.Value < FechaAlta.Value)
+        {
+            yield return new ValidationResult(
+                "La fecha de baja no puede ser anterior a la fecha de alta.",
+                [nameof(FechaBaja), nameof(FechaAlta)]);
+        }
+    }
 }
 
-public sealed class UsuarioRanchoUpdateDto
+public sealed class UsuarioRanchoUpdateDto : IValidatableObject
 {
-    [Required]
+    [Required, NotEmptyGuid]
     public Guid IdUsuario { get; set; }
 
-    [Required]
+    [Required, NotEmptyGuid]
     public Guid IdRancho { get; set; }
 
-    [Required, MaxLength(40)]
+    [Required, NotWhiteSpace, MaxLength(40)]
     public string Rol { get; set; } = string.Empty;
 
-    [Required, MaxLength(40)]
+    [Required, NotWhiteSpace, MaxLength(40)]
     public string Estado { get; set; } = string.Empty;
 
+    [ValidDateRange(AllowNull = true)]
     public DateTime? FechaAlta { get; set; }
+
+    [ValidDateRange(AllowNull = true)]
     public DateTime? FechaBaja { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (FechaAlta.HasValue && FechaBaja.HasValue && FechaBaja.Value < FechaAlta.Value)
+        {
+            yield return new ValidationResult(
+                "La fecha de baja no puede ser anterior a la fecha de alta.",
+                [nameof(FechaBaja), nameof(FechaAlta)]);
+        }
+    }
 }
 
 public sealed class UsuarioRanchoResponseDto

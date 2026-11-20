@@ -4,18 +4,22 @@ namespace FarmBovi.Api.DTOs;
 
 public sealed class EventoSanitarioCreateDto
 {
+    [NotEmptyGuid(AllowNull = true)]
     public Guid? IdEventoSanitario { get; set; }
 
-    [Required]
+    [Required, NotEmptyGuid]
     public Guid IdAnimal { get; set; }
 
-    [Required, MaxLength(80)]
+    [Required, NotWhiteSpace, MaxLength(80)]
     public string Tipo { get; set; } = string.Empty;
 
-    [Required]
+    [Required, ValidDateRange]
     public DateTime Fecha { get; set; }
 
+    [MaxLength(1000)]
     public string? Sintomas { get; set; }
+
+    [MaxLength(1000)]
     public string? Diagnostico { get; set; }
 
     [MaxLength(150)]
@@ -24,25 +28,31 @@ public sealed class EventoSanitarioCreateDto
     [MaxLength(500)]
     public string? EvidenciaDiagnosticoUri { get; set; }
 
-    [Required, MaxLength(150)]
+    [Required, NotWhiteSpace, MaxLength(150)]
     public string Responsable { get; set; } = string.Empty;
 
+    [MaxLength(1000)]
     public string? Observaciones { get; set; }
-    public Guid IdAutor { get; set; }
+
+    [NotEmptyGuid(AllowNull = true)]
+    public Guid? IdAutor { get; set; }
 }
 
 public sealed class EventoSanitarioUpdateDto
 {
-    [Required]
+    [Required, NotEmptyGuid]
     public Guid IdAnimal { get; set; }
 
-    [Required, MaxLength(80)]
+    [Required, NotWhiteSpace, MaxLength(80)]
     public string Tipo { get; set; } = string.Empty;
 
-    [Required]
+    [Required, ValidDateRange]
     public DateTime Fecha { get; set; }
 
+    [MaxLength(1000)]
     public string? Sintomas { get; set; }
+
+    [MaxLength(1000)]
     public string? Diagnostico { get; set; }
 
     [MaxLength(150)]
@@ -51,10 +61,17 @@ public sealed class EventoSanitarioUpdateDto
     [MaxLength(500)]
     public string? EvidenciaDiagnosticoUri { get; set; }
 
-    [Required, MaxLength(150)]
+    [Required, NotWhiteSpace, MaxLength(150)]
     public string Responsable { get; set; } = string.Empty;
 
+    [MaxLength(1000)]
     public string? Observaciones { get; set; }
+
+    [NotEmptyGuid(AllowNull = true)]
+    public Guid? IdAutor { get; set; }
+
+    [ValidDateRange(AllowNull = true)]
+    public DateTime? EliminadoEn { get; set; }
 }
 
 public sealed class EventoSanitarioResponseDto
@@ -72,4 +89,5 @@ public sealed class EventoSanitarioResponseDto
     public Guid IdAutor { get; set; }
     public DateTime CreadoEn { get; set; }
     public long VersionRegistro { get; set; }
+    public DateTime? EliminadoEn { get; set; }
 }
