@@ -1,9 +1,11 @@
 export type SyncStatus = 'synced' | 'pending' | 'conflict' | 'error';
 
 export type SyncEntityName =
+  | 'ranches'
   | 'cattle'
   | 'weighings'
   | 'healthRecords'
+  | 'treatments'
   | 'feedingRecords'
   | 'reproductionRecords'
   | 'lots'
@@ -62,19 +64,46 @@ export interface BaseLocalEntity {
   deletedAt?: string | null;
 }
 
+export interface LocalRanch extends BaseLocalEntity {
+  nombre: string;
+  ubicacionGeneral: string;
+  estado: string;
+}
+
 export interface LocalCattle extends BaseLocalEntity {
+  /** Identificador oficial / arete del animal (campo `arete` en Backend `Animal`). */
+  arete: string;
+  /** Alias legado mantenido en sincronía con `arete` por compatibilidad con v1–v3 y Pull. */
   areteSiniiga: string;
+  /** Campo legado local (no existe en Backend `Animal`). */
   nombre?: string;
   raza: string;
+  /** Sexo del animal (`sexo` en Backend `Animal`: 'Hembra' | 'Macho'). */
+  sexo: string;
+  /** Alias legado mantenido en sincronía con `sexo` por compatibilidad con v1–v3 y Pull. */
   gender: string;
   fechaNacimiento?: string;
+  /** Fecha de ingreso al rancho (`fechaIngreso` en Backend `Animal`). */
+  fechaIngreso: string;
+  /** Procedencia del animal (`procedencia` en Backend `Animal`). */
+  procedencia: string;
+  /** Estado operativo (`estado` en Backend `Animal`: 'Activo' | 'Vendido' | 'Baja'). */
+  estado: string;
+  /** Fecha de salida cuando estado es Vendido o Baja (`fechaSalida` en Backend `Animal`). */
+  fechaSalida?: string | null;
+  observaciones?: string | null;
   loteId?: string;
 }
 
 export interface LocalWeighing extends BaseLocalEntity {
   cattleId: string;
+  /** Peso real de báscula en kg (`pesoRealKg` en ER `Pesaje`, siempre > 0). */
   peso: number;
   fecha: string;
+  /** Fuente o equipo de báscula (`fuenteBascula` en ER `Pesaje`). */
+  fuenteBascula?: string;
+  /** Persona responsable del pesaje (`responsable` en ER `Pesaje`). */
+  responsable?: string;
   observaciones?: string;
   origenPesaje?: 'manual' | 'boviscale_ia';
   sourceAnalysisJobId?: string | null;
@@ -84,22 +113,62 @@ export interface LocalWeighing extends BaseLocalEntity {
 export interface LocalHealthRecord extends BaseLocalEntity {
   cattleId: string;
   tipo: string;
+  /** Resumen legado sincronizado para vistas compactas (diagnóstico / síntomas / observaciones). */
   descripcion: string;
   fecha: string;
   proximaAplicacion?: string;
+  sintomas?: string | null;
+  diagnostico?: string | null;
+  profesionalDiagnostico?: string | null;
+  evidenciaDiagnosticoUri?: string | null;
+  responsable?: string;
+  observaciones?: string | null;
+}
+
+export interface LocalTreatment extends BaseLocalEntity {
+  eventoSanitarioId: string;
+  cattleId: string;
+  producto: string;
+  dosis: number;
+  unidadDosis: string;
+  viaAdministracion?: string | null;
+  frecuencia: string;
+  fechaInicio: string;
+  fechaFin?: string | null;
+  responsable: string;
+  prescripcionUri?: string | null;
+  estado: string;
 }
 
 export interface LocalFeedingRecord extends BaseLocalEntity {
   lotId?: string;
+  /** Animal individual al que aplica la alimentación (mutuamente excluyente con `lotId`). */
+  cattleId?: string;
+  /** Alias legado sincronizado con `alimento` (Backend: `Alimento`). */
   tipoAlimento: string;
+  /** Alias legado sincronizado con `cantidad` (Backend: `Cantidad`). */
   cantidadKg: number;
+  /** Alias legado sincronizado con `inicio` (Backend: `Inicio`). */
   fecha: string;
+  /** Ración aplicada (Backend: `Racion`). */
+  racion?: string;
+  /** Unidad de medida (Backend: `Unidad`). */
+  unidad?: string;
+  /** Frecuencia de suministro (Backend: `Frecuencia`). */
+  frecuencia?: string;
+  /** Fecha/hora opcional de finalización (Backend: `Fin`). */
+  fin?: string | null;
+  /** Notas de cambio de dieta / observaciones (Backend: `CambioDieta`). */
+  cambioDieta?: string | null;
 }
 
 export interface LocalReproductionRecord extends BaseLocalEntity {
   cattleId: string;
+  /** Tipo de evento reproductivo (alias `tipo` en contrato futuro `EventoReproductivo`). */
   evento: string;
   fecha: string;
+  /** Resultado del evento reproductivo (campo `Resultado` documentado en contrato de sincronización). */
+  resultado?: string | null;
   observaciones?: string;
 }
 
@@ -107,12 +176,17 @@ export interface LocalLot extends BaseLocalEntity {
   nombre: string;
   capacidad: number;
   ubicacion?: string;
+  estado?: string;
 }
 
 export interface LocalMovement extends BaseLocalEntity {
   cattleId: string;
   origenLotId?: string;
   destinoLotId?: string;
+  /** Tipo de movimiento real del Backend (`Alta` | `CambioInterno` | `Traslado` | `Venta` | `Baja`). */
+  tipo?: string;
+  origenExterno?: string;
+  destinoExterno?: string;
   fecha: string;
   motivo: string;
 }
@@ -126,9 +200,24 @@ export interface LocalGenealogy extends BaseLocalEntity {
 export interface LocalAlert extends BaseLocalEntity {
   tipo: string;
   prioridad: string;
+  /** Alias sincronizado con `descripcion` en Backend `Recordatorio`. */
   mensaje: string;
+  /** Alias sincronizado con `estado === 'Completado'`. */
   leida: boolean;
+  /** Alias sincronizado con `fechaProgramada` en Backend `Recordatorio`. */
   fecha: string;
+  /** Animal asociado opcional (`idAnimal` en `Recordatorio`, excluyente con `lotId`). */
+  cattleId?: string | null;
+  /** Lote/potrero asociado opcional (`idLote` en `Recordatorio`, excluyente con `cattleId`). */
+  lotId?: string | null;
+  /** Tratamiento vinculado opcional (`idTratamiento` en `Recordatorio`). */
+  treatmentId?: string | null;
+  /** Usuario responsable opcional (`idResponsable` en `Recordatorio`). */
+  responsableId?: string | null;
+  /** Estado real del recordatorio (`Pendiente` | `En curso` | `Completado` | `Cancelado`). */
+  estado?: string;
+  /** Fecha/hora de completado (`fechaCompletado` en `Recordatorio`). */
+  fechaCompletado?: string | null;
 }
 
 export interface LocalMedia extends BaseLocalEntity {

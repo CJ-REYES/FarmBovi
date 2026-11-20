@@ -36,30 +36,53 @@ export interface PushCycleSummary {
  * se sincronicen antes que registros dependientes (pesajes, salud, movimientos).
  */
 const ENTITY_SYNC_PRIORITY: Record<SyncEntityName, number> = {
+  ranches: 0,
   lots: 1,
   cattle: 2,
   genealogy: 3,
   movements: 4,
   weighings: 5,
   healthRecords: 6,
-  feedingRecords: 7,
-  reproductionRecords: 8,
-  alerts: 9,
-  media: 10,
-  weighingAnalysisJobs: 11
+  treatments: 7,
+  feedingRecords: 8,
+  reproductionRecords: 9,
+  alerts: 10,
+  media: 11,
+  weighingAnalysisJobs: 12
 };
+
+/**
+ * Entidades habilitadas para Push en `POST /api/sync/operaciones`.
+ * Si el Backend aún no habilita alguna (p. ej. `Pesaje`), `sync-http.client.ts`
+ * clasifica el 400 "no está soportada" como error transitorio para conservarla en cola.
+ */
+const BACKEND_PUSH_SUPPORTED_ENTITIES = new Set<SyncEntityName>([
+  'ranches',
+  'lots',
+  'cattle',
+  'weighings',
+  'healthRecords',
+  'treatments',
+  'feedingRecords',
+  'movements',
+  'alerts'
+]);
 
 const inFlightOperationIds = new Set<string>();
 let activePushPromise: Promise<PushCycleSummary> | null = null;
 
 function getEntityTable(entidad: SyncEntityName): Table<BaseLocalEntity, string> | null {
   switch (entidad) {
+    case 'ranches':
+      return db.ranches as unknown as Table<BaseLocalEntity, string>;
     case 'cattle':
       return db.cattle as unknown as Table<BaseLocalEntity, string>;
     case 'weighings':
       return db.weighings as unknown as Table<BaseLocalEntity, string>;
     case 'healthRecords':
       return db.healthRecords as unknown as Table<BaseLocalEntity, string>;
+    case 'treatments':
+      return db.treatments as unknown as Table<BaseLocalEntity, string>;
     case 'feedingRecords':
       return db.feedingRecords as unknown as Table<BaseLocalEntity, string>;
     case 'reproductionRecords':
@@ -159,7 +182,10 @@ export const PushSyncEngine = {
     // Recuperar operaciones que quedaron en 'en_proceso' tras un cierre inesperado
     await OutboxRepository.recoverInterruptedOperations(inFlightOperationIds);
 
-    const dispatchableOps = await OutboxRepository.getDispatchableOperations();
+    const allDispatchableOps = await OutboxRepository.getDispatchableOperations();
+    const dispatchableOps = allDispatchableOps.filter((op) =>
+      BACKEND_PUSH_SUPPORTED_ENTITIES.has(op.entidad)
+    );
     if (dispatchableOps.length === 0) {
       return { ...summary, status: 'nothing_to_push' };
     }
@@ -282,7 +308,8 @@ export const PushSyncEngine = {
           ...op,
           versionBase: effectiveVersionBase
         },
-        latestEntity?.remoteId ?? null
+        latestEntity?.remoteId ?? null,
+        latestEntity?.ranchId ?? null
       );
 
       const result = await SyncHttpClient.sendOperation(dto);

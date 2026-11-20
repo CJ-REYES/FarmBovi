@@ -255,6 +255,8 @@ export class BaseTransactionalRepository<T extends BaseLocalEntity> {
     if (typeof identifier === 'string') {
       const byUuid = await this.table.get(identifier);
       if (byUuid) return byUuid;
+      const byRemoteGuid = await this.getByRemoteId(identifier);
+      if (byRemoteGuid) return byRemoteGuid;
       const parsed = Number(identifier);
       if (!Number.isNaN(parsed)) {
         return (await this.getByRemoteId(parsed)) ?? (await this.getByLocalNumericId(parsed));

@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { Search, Plus, Bell, MapPin, Database, Wifi, Menu } from 'lucide-react';
-import { useSharedCattle } from '../../context/CattleContext'; // Estado centralizado
+import { useSharedCattle } from '../../hooks/useCattle'; // Estado centralizado
 
 export default function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
   const navigate = useNavigate();

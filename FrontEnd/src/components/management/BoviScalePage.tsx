@@ -1,14 +1,24 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { useSharedCattle } from '../../context/CattleContext';
-import type { Cattle } from '../../types/cattle';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useSharedCattle } from '../../hooks/useCattle';
 import EmptyState from '../ui/EmptyState';
+import AnimalSelectField from '../shared/AnimalSelectField';
 import {
   Camera, Upload, RefreshCw, CheckCircle, Info,
-  Beef, Scale, History, AlertTriangle, X, Image as ImageIcon, Zap
+  Scale, History, AlertTriangle, X, Image as ImageIcon, Zap
 } from 'lucide-react';
 
 export default function BoviScalePage() {
   const { cattle } = useSharedCattle();
+
+  const animalOptions = useMemo(
+    () =>
+      (cattle || []).map((c) => ({
+        id: c.id,
+        arete: c.arete || c.id,
+        raza: c.raza
+      })),
+    [cattle]
+  );
 
   // Estados de UI y Selección
   const [selectedCattleId, setSelectedCattleId] = useState<string>('');
@@ -143,24 +153,17 @@ export default function BoviScalePage() {
             </div>
 
             <div className="p-5 flex-1 flex flex-col">
-              {/* 3. Selección del Bovino */}
+              {/* 3. Selección del Bovino con buscador por arete */}
               <div className="mb-4">
-                <label className="block text-[13px] font-semibold text-brand-slate mb-1.5">Seleccionar Bovino a Estimar</label>
-                <div className="relative">
-                  <Beef size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-slate/40" />
-                  <select
-                    value={selectedCattleId}
-                    onChange={(e) => setSelectedCattleId(e.target.value)}
-                    className="w-full h-[40px] pl-10 pr-4 bg-surface-app border border-border-light rounded-md text-[14px] text-brand-slate focus:outline-none focus:border-brand-primary"
-                  >
-                    <option value="">-- Selecciona un bovino del inventario --</option>
-                    {cattle?.map((c: Cattle & { areteSiniiga?: string; tagNumber?: string; nombre?: string; name?: string }) => (
-                      <option key={c.id} value={c.id}>
-                        {c.areteSiniiga || c.tagNumber || `ID-${c.id}`} {(c.nombre || c.name) ? `- ${c.nombre || c.name}` : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                <AnimalSelectField
+                  id="boviscale-animal"
+                  name="idAnimal"
+                  label="Seleccionar Bovino a Estimar"
+                  value={selectedCattleId}
+                  options={animalOptions}
+                  placeholder="Selecciona un animal"
+                  onChange={setSelectedCattleId}
+                />
               </div>
 
               {/* Error de permisos */}

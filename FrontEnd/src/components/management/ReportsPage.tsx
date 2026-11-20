@@ -1,32 +1,48 @@
-import { useSharedCattle } from '../../context/CattleContext';
-import type { Cattle } from '../../types/cattle';
+import { useSharedCattle } from '../../hooks/useCattle';
 import { FileText, Download, BarChart2, PieChart, Activity } from 'lucide-react';
 import EmptyState from '../ui/EmptyState';
+
+function escapeCsvCell(value: string | null | undefined): string {
+  const safe = (value ?? '').replace(/"/g, '""');
+  return `"${safe}"`;
+}
 
 export default function ReportsPage() {
   const { cattle, loading } = useSharedCattle();
 
   const totalBovinos = cattle?.length || 0;
-  const machos = cattle?.filter((c: Cattle & { gender?: string; sex?: string }) => c.gender === 'Macho' || c.sex === 'Macho').length || 0;
-  const hembras = cattle?.filter((c: Cattle & { gender?: string; sex?: string }) => c.gender === 'Hembra' || c.sex === 'Hembra').length || 0;
+  const machos = cattle?.filter((c) => c.sexo === 'Macho').length || 0;
+  const hembras = cattle?.filter((c) => c.sexo === 'Hembra').length || 0;
 
   // EXPORTACIÓN REAL A CSV
   const handleExportCSV = () => {
     if (!cattle || cattle.length === 0) return;
 
-    const headers = "ID,Arete SINIIGA,Nombre,Raza,Sexo,Fecha Nacimiento\n";
-    const rows = cattle.map((c: Cattle & { areteSiniiga?: string; nombre?: string; raza?: string; gender?: string; sex?: string; fechaNacimiento?: string }) => {
-      return `${c.id},"${c.areteSiniiga || ''}","${c.nombre || ''}","${c.raza || ''}","${c.gender || c.sex || ''}","${c.fechaNacimiento ? new Date(c.fechaNacimiento).toLocaleDateString() : ''}"`;
-    }).join("\n");
+    const headers = 'ID Animal,Arete,Raza,Sexo,Fecha Nacimiento,Fecha Ingreso,Procedencia,Estado\n';
+    const rows = cattle
+      .map((c) =>
+        [
+          escapeCsvCell(c.idAnimal),
+          escapeCsvCell(c.arete),
+          escapeCsvCell(c.raza),
+          escapeCsvCell(c.sexo),
+          escapeCsvCell(c.fechaNacimiento),
+          escapeCsvCell(c.fechaIngreso),
+          escapeCsvCell(c.procedencia),
+          escapeCsvCell(c.estado)
+        ].join(',')
+      )
+      .join('\n');
 
     const blob = new Blob([headers + rows], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
+    const link = document.createElement('a');
     link.href = url;
-    link.setAttribute("download", `Inventario_FarmBovi_${new Date().toISOString().split('T')[0]}.csv`);
+    link.setAttribute('download', `Inventario_FarmBovi_${new Date().toISOString().split('T')[0]}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   return (

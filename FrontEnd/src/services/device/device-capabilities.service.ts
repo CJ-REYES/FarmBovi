@@ -247,7 +247,7 @@ export const DeviceCapabilitiesService = {
   },
 
   subscribe(listener: CapabilitiesListener): () => void {
-    this.initialize();
+    DeviceCapabilitiesService.initialize();
     listeners.add(listener);
     return () => {
       listeners.delete(listener);

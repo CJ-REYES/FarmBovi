@@ -39,7 +39,7 @@ export const SyncEngine = {
         await BoviScaleAnalysisService.processPendingQueue();
 
         const pushCompleted =
-          push.status === 'completed' &&
+          (push.status === 'completed' || push.status === 'nothing_to_push') &&
           push.transientErrorCount === 0 &&
           push.validationErrorCount === 0 &&
           push.conflictCount === 0;

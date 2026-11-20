@@ -220,4 +220,101 @@ export function configureMigrations(db: Dexie): void {
         if (raw.idPesajeConfirmado === undefined) raw.idPesajeConfirmado = null;
       });
     });
+
+  // Versión 4: Tabla local de ranchos y campos reales del contrato Backend para Animal y Lote
+  db.version(4)
+    .stores({
+      ranches: 'id, localNumericId, remoteId, nombre, estado, syncStatus, updatedAt',
+      cattle:
+        'id, localNumericId, remoteId, ranchId, arete, areteSiniiga, loteId, estado, syncStatus, updatedAt, createdAt',
+      weighings:
+        'id, localNumericId, remoteId, ranchId, cattleId, sourceAnalysisJobId, fecha, syncStatus, updatedAt',
+      healthRecords: 'id, localNumericId, remoteId, ranchId, cattleId, tipo, fecha, syncStatus, updatedAt',
+      feedingRecords: 'id, localNumericId, remoteId, ranchId, lotId, fecha, syncStatus, updatedAt',
+      reproductionRecords: 'id, localNumericId, remoteId, ranchId, cattleId, evento, fecha, syncStatus, updatedAt',
+      lots: 'id, localNumericId, remoteId, ranchId, nombre, estado, syncStatus, updatedAt',
+      movements: 'id, localNumericId, remoteId, ranchId, cattleId, fecha, syncStatus, updatedAt',
+      genealogy: 'id, localNumericId, remoteId, ranchId, cattleId, padreId, madreId, syncStatus, updatedAt',
+      alerts: 'id, localNumericId, remoteId, ranchId, tipo, prioridad, leida, fecha, syncStatus',
+      media:
+        'id, remoteId, ranchId, cattleId, idEntidadRelacionada, tipo, estadoArchivo, idOperacionSubida, fechaCaptura, syncStatus, updatedAt',
+      weighingAnalysisJobs:
+        'idTrabajo, idMedia, idBovino, ranchId, idPesajeConfirmado, estado, proximoIntento, fechaCreacion, actualizadoEn',
+      outbox: 'id, &idOperacion, entidad, idEntidad, tipoOperacion, estado, fechaCreacion, proximoIntento',
+      syncConflicts: 'idConflicto, idOperacion, entidad, idEntidad, tipoConflicto, estadoResolucion, fechaDeteccion',
+      syncCheckpoints: 'entidad, cursorOpaco, actualizadoEn',
+      syncMetadata: 'entityName'
+    })
+    .upgrade(async (tx) => {
+      const todayIso = new Date().toISOString().slice(0, 10);
+      const cattleTable = tx.table<Record<string, unknown>, string>('cattle');
+      await cattleTable.toCollection().modify((raw) => {
+        const arete =
+          typeof raw.arete === 'string' && raw.arete.trim().length > 0
+            ? raw.arete.trim()
+            : typeof raw.areteSiniiga === 'string'
+              ? raw.areteSiniiga.trim()
+              : '';
+        const sexo =
+          typeof raw.sexo === 'string' && raw.sexo.trim().length > 0
+            ? raw.sexo.trim()
+            : typeof raw.gender === 'string' && raw.gender.trim().length > 0
+              ? raw.gender.trim()
+              : 'Hembra';
+
+        raw.arete = arete;
+        raw.areteSiniiga = arete;
+        raw.sexo = sexo;
+        raw.gender = sexo;
+        if (typeof raw.fechaIngreso !== 'string' || raw.fechaIngreso.trim().length === 0) {
+          const created = typeof raw.createdAt === 'string' ? raw.createdAt.slice(0, 10) : todayIso;
+          raw.fechaIngreso = created;
+        }
+        if (typeof raw.procedencia !== 'string' || raw.procedencia.trim().length === 0) {
+          raw.procedencia = 'Propio';
+        }
+        if (typeof raw.estado !== 'string' || raw.estado.trim().length === 0) {
+          raw.estado = 'Activo';
+        }
+        if (raw.fechaSalida === undefined) {
+          raw.fechaSalida = null;
+        }
+        if (raw.observaciones === undefined) {
+          raw.observaciones = null;
+        }
+      });
+
+      const lotsTable = tx.table<Record<string, unknown>, string>('lots');
+      await lotsTable.toCollection().modify((raw) => {
+        if (typeof raw.estado !== 'string' || raw.estado.trim().length === 0) {
+          raw.estado = 'Activo';
+        }
+      });
+    });
+
+  // v5: Incorpora almacén dedicado `treatments` alineado al contrato real `Tratamiento` (1:N con EventoSanitario)
+  db.version(5).stores({
+    ranches: 'id, localNumericId, remoteId, ranchId, nombre, estado, syncStatus, updatedAt',
+    cattle:
+      'id, localNumericId, remoteId, ranchId, arete, areteSiniiga, loteId, estado, syncStatus, updatedAt, createdAt',
+    weighings:
+      'id, localNumericId, remoteId, ranchId, cattleId, sourceAnalysisJobId, fecha, syncStatus, updatedAt',
+    healthRecords: 'id, localNumericId, remoteId, ranchId, cattleId, tipo, fecha, syncStatus, updatedAt',
+    treatments:
+      'id, localNumericId, remoteId, ranchId, eventoSanitarioId, cattleId, estado, fechaInicio, syncStatus, updatedAt',
+    feedingRecords: 'id, localNumericId, remoteId, ranchId, lotId, fecha, syncStatus, updatedAt',
+    reproductionRecords: 'id, localNumericId, remoteId, ranchId, cattleId, evento, fecha, syncStatus, updatedAt',
+    lots: 'id, localNumericId, remoteId, ranchId, nombre, estado, syncStatus, updatedAt',
+    movements: 'id, localNumericId, remoteId, ranchId, cattleId, fecha, syncStatus, updatedAt',
+    genealogy: 'id, localNumericId, remoteId, ranchId, cattleId, padreId, madreId, syncStatus, updatedAt',
+    alerts: 'id, localNumericId, remoteId, ranchId, tipo, prioridad, leida, fecha, syncStatus',
+    media:
+      'id, remoteId, ranchId, cattleId, idEntidadRelacionada, tipo, estadoArchivo, idOperacionSubida, fechaCaptura, syncStatus, updatedAt',
+    weighingAnalysisJobs:
+      'idTrabajo, idMedia, idBovino, ranchId, idPesajeConfirmado, estado, proximoIntento, fechaCreacion, actualizadoEn',
+    outbox: 'id, &idOperacion, entidad, idEntidad, tipoOperacion, estado, fechaCreacion, proximoIntento',
+    syncConflicts: 'idConflicto, idOperacion, entidad, idEntidad, tipoConflicto, estadoResolucion, fechaDeteccion',
+    syncCheckpoints: 'entidad, cursorOpaco, actualizadoEn',
+    syncMetadata: 'entityName'
+  });
 }

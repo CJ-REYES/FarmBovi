@@ -30,6 +30,8 @@ export const MAX_PUSH_RETRY_ATTEMPTS = MAX_TRANSIENT_PUSH_RETRIES;
 
 function getEntityTable(entidad: SyncEntityName): Table<BaseLocalEntity, string> | null {
   switch (entidad) {
+    case 'ranches':
+      return db.ranches;
     case 'cattle':
       return db.cattle;
     case 'weighings':

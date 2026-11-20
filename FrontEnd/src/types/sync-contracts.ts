@@ -23,6 +23,7 @@ export interface SyncOperationRequestDto<TPayload = unknown> {
   entidad: SyncEntityName;
   idEntidad: string;
   remoteId?: string | number | null;
+  ranchId?: string | null;
   tipoOperacion: OutboxOperationType;
   versionBase: number | string | null;
   payload: TPayload;
