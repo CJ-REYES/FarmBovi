@@ -317,4 +317,108 @@ export function configureMigrations(db: Dexie): void {
     syncCheckpoints: 'entidad, cursorOpaco, actualizadoEn',
     syncMetadata: 'entityName'
   });
+
+  // v6 (FE-03): Índices relacionales completos (`feedingRecords.cattleId`, `alerts` FK/estado,
+  // índice compuesto `[entidad+idEntidad]` en `outbox`), deduplicación por `remoteId` y
+  // recuperación de operaciones interrumpidas (`en_proceso` -> `pendiente`).
+  db.version(6)
+    .stores({
+      ranches: 'id, localNumericId, remoteId, ranchId, nombre, estado, syncStatus, updatedAt',
+      cattle:
+        'id, localNumericId, remoteId, ranchId, arete, areteSiniiga, loteId, estado, syncStatus, updatedAt, createdAt',
+      weighings:
+        'id, localNumericId, remoteId, ranchId, cattleId, sourceAnalysisJobId, fecha, syncStatus, updatedAt',
+      healthRecords:
+        'id, localNumericId, remoteId, ranchId, cattleId, tipo, fecha, syncStatus, updatedAt',
+      treatments:
+        'id, localNumericId, remoteId, ranchId, eventoSanitarioId, cattleId, estado, fechaInicio, syncStatus, updatedAt',
+      feedingRecords:
+        'id, localNumericId, remoteId, ranchId, lotId, cattleId, fecha, syncStatus, updatedAt',
+      reproductionRecords:
+        'id, localNumericId, remoteId, ranchId, cattleId, evento, fecha, syncStatus, updatedAt',
+      lots: 'id, localNumericId, remoteId, ranchId, nombre, estado, syncStatus, updatedAt',
+      movements: 'id, localNumericId, remoteId, ranchId, cattleId, fecha, syncStatus, updatedAt',
+      genealogy:
+        'id, localNumericId, remoteId, ranchId, cattleId, padreId, madreId, syncStatus, updatedAt',
+      alerts:
+        'id, localNumericId, remoteId, ranchId, cattleId, lotId, treatmentId, tipo, prioridad, estado, leida, fecha, syncStatus, updatedAt',
+      media:
+        'id, remoteId, ranchId, cattleId, idEntidadRelacionada, tipo, estadoArchivo, idOperacionSubida, fechaCaptura, syncStatus, updatedAt',
+      weighingAnalysisJobs:
+        'idTrabajo, idMedia, idBovino, ranchId, idPesajeConfirmado, estado, proximoIntento, fechaCreacion, actualizadoEn',
+      outbox:
+        'id, &idOperacion, entidad, idEntidad, [entidad+idEntidad], tipoOperacion, estado, fechaCreacion, proximoIntento',
+      syncConflicts:
+        'idConflicto, idOperacion, entidad, idEntidad, tipoConflicto, estadoResolucion, fechaDeteccion',
+      syncCheckpoints: 'entidad, cursorOpaco, actualizadoEn',
+      syncMetadata: 'entityName'
+    })
+    .upgrade(async (tx) => {
+      // 1. Recuperar operaciones que pudieran haber quedado atascadas en 'en_proceso'
+      const outboxTable = tx.table<Record<string, unknown>, string>('outbox');
+      await outboxTable.toCollection().modify((raw) => {
+        if (raw.estado === 'en_proceso') {
+          raw.estado = 'pendiente';
+        }
+      });
+
+      // 2. Normalizar estado en alertas heredadas
+      const alertsTable = tx.table<Record<string, unknown>, string>('alerts');
+      await alertsTable.toCollection().modify((raw) => {
+        if (typeof raw.estado !== 'string' || raw.estado.trim().length === 0) {
+          raw.estado = raw.leida === true ? 'Completado' : 'Pendiente';
+        }
+      });
+
+      // 3. Deduplicar registros por remoteId (conservando pendientes/conflictos o la versión más reciente)
+      const dedupeTables = [
+        'ranches',
+        'cattle',
+        'lots',
+        'weighings',
+        'healthRecords',
+        'treatments',
+        'feedingRecords',
+        'reproductionRecords',
+        'movements',
+        'genealogy',
+        'alerts'
+      ];
+
+      for (const tableName of dedupeTables) {
+        const table = tx.table<Record<string, unknown>, string>(tableName);
+        const rows = await table.toArray();
+        const byRemoteId = new Map<string, Record<string, unknown>[]>();
+
+        for (const row of rows) {
+          const remote = row.remoteId;
+          if (typeof remote !== 'string' && typeof remote !== 'number') continue;
+          const key = String(remote);
+          const group = byRemoteId.get(key);
+          if (group) {
+            group.push(row);
+          } else {
+            byRemoteId.set(key, [row]);
+          }
+        }
+
+        for (const group of byRemoteId.values()) {
+          if (group.length <= 1) continue;
+          group.sort((a, b) => {
+            const aPriority = a.syncStatus === 'pending' || a.syncStatus === 'conflict' ? 1 : 0;
+            const bPriority = b.syncStatus === 'pending' || b.syncStatus === 'conflict' ? 1 : 0;
+            if (aPriority !== bPriority) return bPriority - aPriority;
+            const aUpd = typeof a.updatedAt === 'string' ? a.updatedAt : '';
+            const bUpd = typeof b.updatedAt === 'string' ? b.updatedAt : '';
+            return bUpd.localeCompare(aUpd);
+          });
+          for (let i = 1; i < group.length; i++) {
+            const dupId = group[i].id;
+            if (typeof dupId === 'string') {
+              await table.delete(dupId);
+            }
+          }
+        }
+      }
+    });
 }

@@ -1,4 +1,6 @@
 import { db } from '../../lib/database/db';
+import { OutboxRepository } from '../../lib/database/repositories/outbox.repository';
+import { StorageMonitor } from '../../lib/database/storage-monitor';
 import { ConnectivityService } from '../connectivity.service';
 import { SyncHttpClient } from './sync-http.client';
 import { SyncEngine, type FullSyncCycleResult } from './sync-engine';
@@ -458,6 +460,11 @@ export const SyncScheduler = {
   },
 
   async handleAppStartup(): Promise<void> {
+    // 1. Recuperar cualquier operación interrumpida en un cierre previo (incluso si reabrimos offline)
+    await OutboxRepository.recoverInterruptedOperations(new Set());
+    // 2. Solicitar almacenamiento persistente del navegador para proteger IndexedDB
+    void StorageMonitor.initPersistenceAndCheck();
+
     const probe = await ConnectivityService.checkBackendAvailability();
     const current = await this.refreshState(probe.isOnline);
 

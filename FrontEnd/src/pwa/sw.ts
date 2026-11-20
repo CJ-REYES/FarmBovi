@@ -47,6 +47,7 @@ interface SwClients {
 }
 
 interface CustomServiceWorkerScope {
+  readonly location: Location;
   readonly clients: SwClients;
   skipWaiting(): Promise<void>;
   addEventListener(type: 'activate', listener: (event: SwExtendableEvent) => void): void;
@@ -58,33 +59,41 @@ interface CustomServiceWorkerScope {
   ): void;
 }
 
-const SW_VERSION = 'farmbovi-sw-2.0.0';
-const STATIC_ASSETS_CACHE = 'farmbovi-static-assets-v2';
-const FONT_ASSETS_CACHE = 'farmbovi-fonts-v2';
+const SW_VERSION = 'farmbovi-sw-3.0.0';
+const STATIC_ASSETS_CACHE = 'farmbovi-static-assets-v3';
+const FONT_ASSETS_CACHE = 'farmbovi-fonts-v3';
 const EXPECTED_CACHES = new Set<string>([STATIC_ASSETS_CACHE, FONT_ASSETS_CACHE]);
 
 const sw = self as unknown as CustomServiceWorkerScope;
+
+function isPrivateOrApiRequest(url: URL, request: Request): boolean {
+  if (request.method !== 'GET') return true;
+  if (request.headers.has('authorization')) return true;
+  if (url.pathname.startsWith('/api/')) return true;
+  if (url.pathname === '/health' || url.pathname.startsWith('/auth/')) return true;
+  return false;
+}
 
 // 1. Precache del App Shell inyectado por vite-plugin-pwa (debe usar self.__WB_MANIFEST literal)
 precacheAndRoute(self.__WB_MANIFEST);
 cleanupOutdatedCaches();
 
-// 2. Navegación SPA offline (excluyendo rutas de API y archivos estáticos directos)
+// 2. Navegación SPA offline (excluyendo rutas de API, sonda /health y archivos de control PWA)
 const navigationHandler = createHandlerBoundToURL('/index.html');
 const navigationRoute = new NavigationRoute(navigationHandler, {
-  denylist: [/^\/api\//, /^\/sw\.js$/, /^\/manifest\.webmanifest$/]
+  denylist: [/^\/api\//, /^\/health$/, /^\/sw\.js$/, /^\/manifest\.webmanifest$/]
 });
 registerRoute(navigationRoute);
 
-// 3. Nunca almacenar respuestas de la API ASP.NET Core como datos locales confirmados
+// 3. Nunca almacenar en caché respuestas privadas, autenticadas o de la API ASP.NET Core
 registerRoute(
-  ({ url }) => url.pathname.startsWith('/api/'),
+  ({ url, request }) => isPrivateOrApiRequest(url, request),
   new NetworkOnly()
 );
 
-// 4. Caché controlada para fuentes e iconos estáticos
+// 4. Caché controlada para fuentes tipográficas públicas
 registerRoute(
-  ({ request }) => request.destination === 'font',
+  ({ request, url }) => !isPrivateOrApiRequest(url, request) && request.destination === 'font',
   new CacheFirst({
     cacheName: FONT_ASSETS_CACHE,
     plugins: [
@@ -96,9 +105,11 @@ registerRoute(
   })
 );
 
+// 5. Caché controlada únicamente para imágenes y hojas de estilo públicas del mismo origen
 registerRoute(
   ({ request, url }) =>
-    !url.pathname.startsWith('/api/') &&
+    url.origin === sw.location.origin &&
+    !isPrivateOrApiRequest(url, request) &&
     (request.destination === 'image' || request.destination === 'style'),
   new StaleWhileRevalidate({
     cacheName: STATIC_ASSETS_CACHE,

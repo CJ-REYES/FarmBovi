@@ -3,6 +3,11 @@ import { SyncHttpClient } from '../../services/sync/sync-http.client';
 import { OutboxRepository } from '../../lib/database/repositories/outbox.repository';
 import { db } from '../../lib/database/db';
 import { useSyncStatus } from '../../hooks/useSyncStatus';
+import { usePwaUpdate } from '../../hooks/usePwaUpdate';
+import {
+  OfflineInventoryService,
+  type OfflineInventorySnapshot
+} from '../../services/offline-inventory.service';
 import type {
   LocalOutboxQueue,
   LocalSyncCheckpoint,
@@ -19,7 +24,9 @@ import {
   Info,
   Database,
   WifiOff,
-  FileImage
+  FileImage,
+  HardDrive,
+  ShieldCheck
 } from 'lucide-react';
 import SyncConflictsPanel from './SyncConflictsPanel';
 
@@ -52,21 +59,26 @@ export default function SyncStatusPanel() {
     refreshStatus
   } = useSyncStatus();
 
+  const { updateAvailable, offlineReady, swVersion, applyUpdate } = usePwaUpdate();
+
   const [pendingOps, setPendingOps] = useState<LocalOutboxQueue[]>([]);
   const [checkpoints, setCheckpoints] = useState<LocalSyncCheckpoint[]>([]);
+  const [inventory, setInventory] = useState<OfflineInventorySnapshot | null>(null);
   const [retryingOpId, setRetryingOpId] = useState<string | null>(null);
 
   const availability = SyncHttpClient.getEndpointAvailability();
 
   const reloadPending = useCallback(async () => {
     try {
-      const [allOps, allCheckpoints] = await Promise.all([
+      const [allOps, allCheckpoints, inv] = await Promise.all([
         db.outbox.orderBy('fechaCreacion').toArray(),
-        db.syncCheckpoints.toArray()
+        db.syncCheckpoints.toArray(),
+        OfflineInventoryService.getSnapshot()
       ]);
 
       setPendingOps(allOps.filter((op) => op.estado !== 'confirmado'));
       setCheckpoints(allCheckpoints);
+      setInventory(inv);
       await refreshStatus();
     } catch (err) {
       console.error('Error cargando estado de sincronización:', err);
@@ -78,14 +90,16 @@ export default function SyncStatusPanel() {
 
     const syncView = async () => {
       try {
-        const [allOps, allCheckpoints] = await Promise.all([
+        const [allOps, allCheckpoints, inv] = await Promise.all([
           db.outbox.orderBy('fechaCreacion').toArray(),
-          db.syncCheckpoints.toArray()
+          db.syncCheckpoints.toArray(),
+          OfflineInventoryService.getSnapshot()
         ]);
 
         if (!active) return;
         setPendingOps(allOps.filter((op) => op.estado !== 'confirmado'));
         setCheckpoints(allCheckpoints);
+        setInventory(inv);
       } catch (err) {
         console.error('Error cargando estado de sincronización:', err);
       }
@@ -220,6 +234,81 @@ export default function SyncStatusPanel() {
         </div>
       </div>
 
+      {/* Indicador de datos disponibles localmente en IndexedDB y estado PWA */}
+      {inventory && (
+        <div className="p-3.5 rounded-lg bg-surface-app/45 border border-border-light space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h4 className="text-[12px] font-bold text-brand-forest uppercase tracking-wider flex items-center gap-1.5">
+              <HardDrive size={14} className="text-brand-primary" />
+              Datos Disponibles Localmente ({inventory.totalLocalRecords})
+            </h4>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                  inventory.isStoragePersisted
+                    ? 'bg-status-success/15 text-status-success'
+                    : 'bg-brand-slate/10 text-brand-slate/75'
+                }`}
+              >
+                <ShieldCheck size={11} />
+                {inventory.isStoragePersisted ? 'Persistencia protegida' : 'IndexedDB activo'}
+              </span>
+              {offlineReady && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-brand-primary/10 text-brand-primary">
+                  App lista offline{swVersion ? ` · ${swVersion}` : ''}
+                </span>
+              )}
+              {updateAvailable && (
+                <button
+                  type="button"
+                  onClick={() => applyUpdate(false)}
+                  className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-brand-primary text-white hover:bg-brand-dark"
+                >
+                  Aplicar actualización PWA
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-[11px] text-brand-slate/80">
+            <span className="px-2 py-1 rounded bg-surface-white border border-border-light">
+              Bovinos: <strong>{inventory.counts.cattle}</strong>
+            </span>
+            <span className="px-2 py-1 rounded bg-surface-white border border-border-light">
+              Potreros: <strong>{inventory.counts.lots}</strong>
+            </span>
+            <span className="px-2 py-1 rounded bg-surface-white border border-border-light">
+              Pesajes: <strong>{inventory.counts.weighings}</strong>
+            </span>
+            <span className="px-2 py-1 rounded bg-surface-white border border-border-light">
+              Movimientos: <strong>{inventory.counts.movements}</strong>
+            </span>
+            <span className="px-2 py-1 rounded bg-surface-white border border-border-light">
+              Alimentación: <strong>{inventory.counts.feedingRecords}</strong>
+            </span>
+            <span className="px-2 py-1 rounded bg-surface-white border border-border-light">
+              Salud / Trat.:{' '}
+              <strong>
+                {inventory.counts.healthRecords + inventory.counts.treatments}
+              </strong>
+            </span>
+            <span className="px-2 py-1 rounded bg-surface-white border border-border-light">
+              Reproducción: <strong>{inventory.counts.reproductionRecords}</strong>
+            </span>
+            <span className="px-2 py-1 rounded bg-surface-white border border-border-light">
+              Alertas: <strong>{inventory.counts.alerts}</strong>
+            </span>
+          </div>
+
+          {inventory.storageWarning && (
+            <p className="text-[11px] font-semibold text-status-danger">
+              Advertencia: el almacenamiento local supera el {inventory.storageUsagePercentage}% de
+              la cuota del navegador.
+            </p>
+          )}
+        </div>
+      )}
+
       {(!availability.pushDisponible || !availability.pullDisponible) && (
         <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-[12px] text-brand-slate">
           <Info size={16} className="text-amber-600 shrink-0 mt-0.5" />
@@ -278,6 +367,12 @@ export default function SyncStatusPanel() {
                     <div className="min-w-0">
                       <p className="font-semibold text-brand-slate uppercase text-[11px]">
                         {op.tipoOperacion} : {op.entidad}
+                      </p>
+                      <p
+                        className="text-[10px] font-mono text-brand-slate/55"
+                        title={`ID Operación: ${op.idOperacion}`}
+                      >
+                        Op: {op.idOperacion.slice(0, 8)}… · {new Date(op.fechaCreacion).toLocaleString()}
                       </p>
                       <p className="text-[11px] text-brand-slate/65 break-words">
                         Intentos: {op.intentos}
