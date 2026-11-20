@@ -66,6 +66,7 @@ const CLIENT_ENTITY_TO_BACKEND: Partial<Record<SyncEntityName, string>> = {
   healthRecords: 'EventoSanitario',
   treatments: 'Tratamiento',
   feedingRecords: 'Alimentacion',
+  reproductionRecords: 'EventoReproductivo',
   movements: 'MovimientoAnimal',
   alerts: 'Recordatorio'
 };
@@ -600,6 +601,56 @@ function normalizeTreatmentPayloadForBackend(
   return backendPayload;
 }
 
+function normalizeReproductionPayloadForBackend(
+  rawPayload: unknown,
+  idRegistro: string,
+  tipoOperacion: OutboxOperationType
+): Record<string, unknown> {
+  if (tipoOperacion === 'DELETE') {
+    return { idEventoReproductivo: idRegistro };
+  }
+  if (!isPlainRecord(rawPayload)) {
+    return {};
+  }
+
+  const readTextOrNull = (keys: readonly string[]): string | null | undefined => {
+    for (const key of keys) {
+      if (rawPayload[key] !== undefined) {
+        const val = rawPayload[key];
+        if (val === null) return null;
+        if (typeof val === 'string') {
+          const trimmed = val.trim();
+          return trimmed.length > 0 ? trimmed : null;
+        }
+      }
+    }
+    return undefined;
+  };
+
+  const backendPayload: Record<string, unknown> = {};
+  if (tipoOperacion === 'CREATE') {
+    backendPayload.idEventoReproductivo = idRegistro;
+    const idAnimal = readTextOrNull(['idAnimal', 'cattleId']);
+    if (typeof idAnimal === 'string') {
+      backendPayload.idAnimal = idAnimal;
+    }
+  }
+
+  const tipo = readTextOrNull(['tipo', 'evento']);
+  if (typeof tipo === 'string') backendPayload.tipo = tipo;
+
+  const fecha = readTextOrNull(['fecha']);
+  if (typeof fecha === 'string') backendPayload.fecha = fecha;
+
+  const resultado = readTextOrNull(['resultado']);
+  if (resultado !== undefined) backendPayload.resultado = resultado;
+
+  const observaciones = readTextOrNull(['observaciones']);
+  if (observaciones !== undefined) backendPayload.observaciones = observaciones;
+
+  return backendPayload;
+}
+
 function buildBackendPushBody(dto: SyncOperationRequestDto): {
   body: Record<string, unknown>;
   deviceId: string;
@@ -628,9 +679,15 @@ function buildBackendPushBody(dto: SyncOperationRequestDto): {
                 ? normalizeHealthEventPayloadForBackend(dto.payload, idRegistro, dto.tipoOperacion)
                 : dto.entidad === 'treatments'
                   ? normalizeTreatmentPayloadForBackend(dto.payload, idRegistro, dto.tipoOperacion)
-                  : isPlainRecord(dto.payload)
-                    ? dto.payload
-                    : {};
+                  : dto.entidad === 'reproductionRecords'
+                    ? normalizeReproductionPayloadForBackend(
+                        dto.payload,
+                        idRegistro,
+                        dto.tipoOperacion
+                      )
+                    : isPlainRecord(dto.payload)
+                      ? dto.payload
+                      : {};
 
   return {
     deviceId,

@@ -560,8 +560,15 @@ export default function CattleDetailPage() {
                 <ul className="divide-y divide-border-light text-[13px]">
                   {history.reproductionRecords.slice(0, 5).map((r) => (
                     <li key={r.id} className="py-2 flex items-center justify-between gap-2">
-                      <span className="font-medium text-brand-slate">{r.evento}</span>
-                      <span className="text-[11px] text-brand-slate/60">
+                      <div className="min-w-0">
+                        <span className="font-medium text-brand-slate">{r.evento}</span>
+                        {r.resultado && (
+                          <span className="ml-2 text-[11px] text-brand-slate/70">
+                            · {r.resultado}
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[11px] text-brand-slate/60 shrink-0">
                         {formatDateDisplay(r.fecha)}
                       </span>
                     </li>

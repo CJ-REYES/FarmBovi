@@ -421,8 +421,8 @@ export async function mapRemoteChangeToLocalEntity(
     }
 
     case 'reproductionRecords': {
-      const rawCattleId = readString(data, ['cattleId', 'animalId', 'bovinoId']);
-      const evento = readString(data, ['evento', 'event']);
+      const rawCattleId = readString(data, ['idAnimal', 'cattleId', 'animalId', 'bovinoId']);
+      const evento = readString(data, ['tipo', 'evento', 'event']);
       const fecha = readString(data, ['fecha', 'date'], change.actualizadoEnServidor);
 
       if (!rawCattleId || !evento || !fecha) {
@@ -441,6 +441,7 @@ export async function mapRemoteChangeToLocalEntity(
         cattleId,
         evento,
         fecha,
+        resultado: readString(data, ['resultado', 'result']) ?? null,
         observaciones: readString(data, ['observaciones', 'notes'])
       };
       return reproductionRecord;
