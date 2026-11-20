@@ -67,11 +67,13 @@ No todas las tablas locales de IndexedDB tienen representación en el servidor. 
 | `movements` | `MovimientoAnimal` | Habilitada | Animal, fecha, motivo y lotes origen/destino. |
 | `alerts` | `Recordatorio` | Habilitada | Tipo, mensaje, fecha programada, prioridad y estado de lectura. |
 | `weighings` | — (solo IndexedDB) | No habilitada | Requiere crear modelo remoto `Pesaje` (`IdPesaje`, `IdAnimal`, `PesoKg`, `Fecha`, `IdRancho` o derivación por animal, `VersionRegistro`, `EliminadoEn`) y su registro en `CambioServidor`. |
-| `genealogy` | — (solo IndexedDB) | No habilitada | Requiere crear modelo remoto `Genealogia` (`IdGenealogia`, `IdAnimal`, `IdPadre`, `IdMadre`, `VersionRegistro`, `EliminadoEn`) y auditoría. |
+| `genealogy` | `GenealogiaAnimal` (API + `CambioServidor`) | No habilitada en Pull/Push | Modelo remoto `GenealogiaAnimal` (`IdGenealogia`, `IdAnimal`, `IdPadre`, `IdMadre`, `VersionRegistro`, `EliminadoEn`) ya integrado en `FarmDbContext.IsSynchronizableEntity()` para emitir `CambioServidor`; falta habilitar el mapeo `genealogy` en los contratos Push/Pull. |
 | `reproductionRecords` | — (solo IndexedDB) | No habilitada | Requiere crear modelo remoto `EventoReproductivo` (`IdEventoReproductivo`, `IdAnimal`, `Tipo`, `Fecha`, `Resultado`, `VersionRegistro`, `EliminadoEn`). |
 | `media` | — (solo IndexedDB) | No habilitada | Requiere almacenamiento binario/URI y modelo remoto `ArchivoMultimedia` (`IdMedia`, `IdRancho`, `EntidadRelacionada`, `IdRegistro`, `MimeType`, `Url`/`Hash`, `VersionRegistro`, `EliminadoEn`). |
 
 Solicitar cualquiera de las entidades no habilitadas (`weighings`, `genealogy`, `reproductionRecords`, `media`) devuelve `400 Bad Request`.
+
+> **Nota de alcance (`genealogy` / `GenealogiaAnimal` — BE-P03):** El paquete BE-P03 entrega el modelo `GenealogiaAnimal`, su migración, los endpoints de la API y la emisión automática de cambios en `CambioServidor` a través de `FarmDbContext.IsSynchronizableEntity()` (conservando `IdGenealogia`, `IdAnimal`, `IdPadre`, `IdMadre`, `VersionRegistro`, `EliminadoEn` y resolviendo `IdRancho` vía `IdAnimal`). La sincronización offline completa de `genealogy` (mapeo en `GET /api/sync/cambios` y `POST /api/sincronizacion`) **no está habilitada** y queda explícitamente como dependencia del paquete de sincronización offline.
 
 ## Pull
 

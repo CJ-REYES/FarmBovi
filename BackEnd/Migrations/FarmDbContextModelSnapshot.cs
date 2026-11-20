@@ -282,6 +282,51 @@ namespace FarmBovi.Api.Migrations
                     b.ToTable("EventoSanitario", (string)null);
                 });
 
+            modelBuilder.Entity("FarmBovi.Api.Models.GenealogiaAnimal", b =>
+                {
+                    b.Property<Guid>("IdGenealogia")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreadoEn")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("EliminadoEn")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("IdAnimal")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("IdAutor")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("IdMadre")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("IdPadre")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("Observaciones")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
+
+                    b.Property<long>("VersionRegistro")
+                        .IsConcurrencyToken()
+                        .HasColumnType("bigint");
+
+                    b.HasKey("IdGenealogia");
+
+                    b.HasIndex("IdAnimal")
+                        .IsUnique();
+
+                    b.HasIndex("IdAutor");
+
+                    b.HasIndex("IdMadre");
+
+                    b.HasIndex("IdPadre");
+
+                    b.ToTable("GenealogiaAnimal", (string)null);
+                });
+
             modelBuilder.Entity("FarmBovi.Api.Models.Lote", b =>
                 {
                     b.Property<Guid>("IdLote")
@@ -767,6 +812,31 @@ namespace FarmBovi.Api.Migrations
                         .HasForeignKey("IdAutor")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("FarmBovi.Api.Models.GenealogiaAnimal", b =>
+                {
+                    b.HasOne("FarmBovi.Api.Models.Animal", null)
+                        .WithMany()
+                        .HasForeignKey("IdAnimal")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("FarmBovi.Api.Models.Usuario", null)
+                        .WithMany()
+                        .HasForeignKey("IdAutor")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("FarmBovi.Api.Models.Animal", null)
+                        .WithMany()
+                        .HasForeignKey("IdMadre")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("FarmBovi.Api.Models.Animal", null)
+                        .WithMany()
+                        .HasForeignKey("IdPadre")
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("FarmBovi.Api.Models.Lote", b =>

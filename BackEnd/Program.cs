@@ -73,6 +73,7 @@ builder.Services.AddAuthorization(options =>
 
 builder.Services.AddScoped<FarmDomainValidationService>();
 builder.Services.AddScoped<RanchAccessService>();
+builder.Services.AddScoped<GenealogiaService>();
 
 var connectionString = builder.Configuration.GetConnectionString("FarmBovi")
     ?? throw new InvalidOperationException("Configura ConnectionStrings:FarmBovi.");
