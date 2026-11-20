@@ -51,13 +51,15 @@ const ENTITY_SYNC_PRIORITY: Record<SyncEntityName, number> = {
 };
 
 /**
- * Entidades actualmente soportadas por `SincronizacionController` (`POST /api/sync/operaciones`).
- * Las entidades sin soporte en Backend permanecen en local sin provocar errores 400 permanentes.
+ * Entidades habilitadas para Push en `POST /api/sync/operaciones`.
+ * Si el Backend aún no habilita alguna (p. ej. `Pesaje`), `sync-http.client.ts`
+ * clasifica el 400 "no está soportada" como error transitorio para conservarla en cola.
  */
 const BACKEND_PUSH_SUPPORTED_ENTITIES = new Set<SyncEntityName>([
   'ranches',
   'lots',
   'cattle',
+  'weighings',
   'healthRecords',
   'feedingRecords',
   'movements',

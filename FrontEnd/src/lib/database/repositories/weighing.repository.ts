@@ -6,18 +6,60 @@ import type { LocalWeighing } from '../schema';
 
 const inFlightConfirmationJobs = new Set<string>();
 
+function compareWeighingsChronologically(
+  a: LocalWeighing,
+  b: LocalWeighing,
+  order: 'asc' | 'desc' = 'desc'
+): number {
+  const timeA = Date.parse(a.fecha);
+  const timeB = Date.parse(b.fecha);
+  let diff =
+    !Number.isNaN(timeA) && !Number.isNaN(timeB) && timeA !== timeB
+      ? timeA - timeB
+      : a.fecha.localeCompare(b.fecha);
+
+  if (diff === 0) {
+    diff = a.createdAt.localeCompare(b.createdAt);
+  }
+  if (diff === 0) {
+    diff = a.id.localeCompare(b.id);
+  }
+
+  return order === 'asc' ? diff : -diff;
+}
+
 class WeighingTransactionalRepository extends BaseTransactionalRepository<LocalWeighing> {
   constructor() {
     super('weighings', db.weighings);
   }
 
+  async getAllWithOptions(options?: {
+    cattleId?: string;
+    includeDeleted?: boolean;
+    order?: 'asc' | 'desc';
+  }): Promise<LocalWeighing[]> {
+    let items: LocalWeighing[];
+    if (options?.cattleId) {
+      items = await db.weighings.where('cattleId').equals(options.cattleId).toArray();
+    } else {
+      items = await db.weighings.toArray();
+    }
+
+    if (!options?.includeDeleted) {
+      items = items.filter((w) => !w.deletedAt);
+    }
+
+    return items.sort((a, b) => compareWeighingsChronologically(a, b, options?.order ?? 'desc'));
+  }
+
+  async getByIdIncludingDeleted(id: string): Promise<LocalWeighing | undefined> {
+    const direct = await db.weighings.get(id);
+    if (direct) return direct;
+    return await db.weighings.where('remoteId').equals(id).first();
+  }
+
   async getByCattleId(cattleId: string): Promise<LocalWeighing[]> {
-    const items = await db.weighings
-      .where('cattleId')
-      .equals(cattleId)
-      .filter((w) => !w.deletedAt)
-      .toArray();
-    return items.sort((a, b) => b.fecha.localeCompare(a.fecha));
+    return await this.getAllWithOptions({ cattleId, includeDeleted: false, order: 'desc' });
   }
 
   /**

@@ -1,10 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSharedCattle } from '../../hooks/useCattle';
 import { FeedingRepository } from '../../lib/database/repositories/feeding.repository';
+import { WeighingRepository } from '../../lib/database/repositories/weighing.repository';
+import { WeighingService } from '../../services/weighing.service';
+import { computeWeightAnalytics } from '../../services/weighing.validation';
 import type { LocalFeedingRecord } from '../../lib/database/schema';
+import type { Weighing } from '../../types/weighing';
 import KpiCard from './KpiCard';
 import EmptyState from '../ui/EmptyState';
+import WeightEvolutionChart from '../management/WeightEvolutionChart';
 import {
   Beef, Scale, Activity, AlertTriangle, TrendingUp, ChevronRight,
   Map, PieChart, Wheat, ClipboardList, Stethoscope, Plus
@@ -15,16 +20,20 @@ export function DashboardPage() {
   // CORRECCIÓN 1: Usamos 'loading' en lugar de 'isLoading' según la firma de tu hook
   const { cattle, loading } = useSharedCattle();
   const [recentFeeding, setRecentFeeding] = useState<LocalFeedingRecord[]>([]);
+  const [weighings, setWeighings] = useState<Weighing[]>([]);
 
   useEffect(() => {
     let active = true;
     void (async () => {
       try {
-        const items = await FeedingRepository.getAllWithOptions({
-          includeDeleted: false,
-          order: 'desc'
-        });
-        if (active) setRecentFeeding(items.slice(0, 4));
+        const [feedingItems, weighingItems] = await Promise.all([
+          FeedingRepository.getAllWithOptions({ includeDeleted: false, order: 'desc' }),
+          WeighingRepository.getAllWithOptions({ includeDeleted: false, order: 'asc' })
+        ]);
+        if (active) {
+          setRecentFeeding(feedingItems.slice(0, 4));
+          setWeighings(weighingItems.map((w) => WeighingService.toWeighing(w)));
+        }
       } catch {
         // Mantener vacío si IndexedDB no está disponible
       }
@@ -33,6 +42,11 @@ export function DashboardPage() {
       active = false;
     };
   }, []);
+
+  const weightAnalytics = useMemo(
+    () => computeWeightAnalytics(weighings, cattle || []),
+    [weighings, cattle]
+  );
 
   const totalBovinos = cattle?.length || 0;
   const machos = cattle?.filter((c) => c.sexo === 'Macho').length || 0;
@@ -84,10 +98,18 @@ export function DashboardPage() {
         <KpiCard
           title="GDP Promedio"
           icon={Scale}
-          value="--.-"
+          value={
+            weightAnalytics.averageGdpKgDay !== null
+              ? `${weightAnalytics.averageGdpKgDay > 0 ? '+' : ''}${weightAnalytics.averageGdpKgDay.toFixed(2)}`
+              : '--.-'
+          }
           unit="kg/día"
-          sub="Sin registros históricos recientes"
-          color="bg-brand-slate/30"
+          sub={
+            weightAnalytics.latestWeighing
+              ? `Último pesaje: ${weightAnalytics.latestWeighing.pesoRealKg.toFixed(1)} kg`
+              : 'Sin registros históricos recientes'
+          }
+          color={weightAnalytics.averageGdpKgDay !== null ? 'bg-brand-primary' : 'bg-brand-slate/30'}
         />
         <KpiCard
           title="Tasa de Preñez"
@@ -107,24 +129,27 @@ export function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <div className="lg:col-span-8 bg-surface-white border border-border-light rounded-xl shadow-sm flex flex-col h-[380px] overflow-hidden">
+        <div className="lg:col-span-8 bg-surface-white border border-border-light rounded-xl shadow-sm flex flex-col min-h-[380px] overflow-hidden">
           <div className="px-5 py-4 border-b border-border-light flex justify-between items-center bg-surface-app/30">
             <div>
               <h2 className="font-bold text-[16px] text-brand-slate flex items-center gap-2">
                 <TrendingUp size={18} className="text-brand-primary" /> Evolución de Pesos y Ganancia
               </h2>
             </div>
-            <select className="text-[12px] font-medium border border-border-light rounded px-2 py-1 bg-surface-white text-brand-slate outline-none focus:border-brand-primary">
-              <option>Últimos 6 meses</option>
-            </select>
+            <button
+              type="button"
+              onClick={() => navigate('/weighing')}
+              className="text-[12px] font-semibold text-brand-primary hover:underline cursor-pointer"
+            >
+              Ir a Pesajes
+            </button>
           </div>
-          <div className="flex-1 p-6 flex flex-col">
-            <EmptyState
-              title="Gráfica no disponible"
-              message="Registra al menos 2 pesajes oficiales para generar la curva de crecimiento."
-              icon={Scale}
-              actionLabel="Ir a Pesajes"
-              onAction={() => navigate('/weighing')}
+          <div className="flex-1 p-5 flex flex-col justify-center">
+            <WeightEvolutionChart
+              points={weightAnalytics.evolutionPoints}
+              subtitle={`Promedio real del hato (${weightAnalytics.evolutionPoints.length} jornada(s))`}
+              emptyActionLabel="Ir a Pesajes"
+              onEmptyAction={() => navigate('/weighing')}
             />
           </div>
         </div>

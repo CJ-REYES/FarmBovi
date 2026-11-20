@@ -62,6 +62,7 @@ const CLIENT_ENTITY_TO_BACKEND: Partial<Record<SyncEntityName, string>> = {
   ranches: 'Rancho',
   lots: 'Lote',
   cattle: 'Animal',
+  weighings: 'Pesaje',
   healthRecords: 'EventoSanitario',
   feedingRecords: 'Alimentacion',
   movements: 'MovimientoAnimal',
@@ -393,6 +394,72 @@ function normalizeFeedingPayloadForBackend(
   return backendPayload;
 }
 
+function normalizeWeighingPayloadForBackend(
+  rawPayload: unknown,
+  idRegistro: string,
+  tipoOperacion: OutboxOperationType
+): Record<string, unknown> {
+  if (tipoOperacion === 'DELETE') {
+    return { idPesaje: idRegistro };
+  }
+  if (!isPlainRecord(rawPayload)) {
+    return {};
+  }
+
+  const readTextOrNull = (keys: readonly string[]): string | null | undefined => {
+    for (const key of keys) {
+      if (rawPayload[key] !== undefined) {
+        const val = rawPayload[key];
+        if (val === null) return null;
+        if (typeof val === 'string') {
+          const trimmed = val.trim();
+          return trimmed.length > 0 ? trimmed : null;
+        }
+      }
+    }
+    return undefined;
+  };
+
+  const backendPayload: Record<string, unknown> = {};
+  if (tipoOperacion === 'CREATE') {
+    backendPayload.idPesaje = idRegistro;
+    const idAnimal = readTextOrNull(['idAnimal', 'cattleId']);
+    if (typeof idAnimal === 'string') {
+      backendPayload.idAnimal = idAnimal;
+    }
+  }
+
+  const rawPeso = rawPayload.pesoRealKg ?? rawPayload.peso;
+  if (typeof rawPeso === 'number' && Number.isFinite(rawPeso)) {
+    backendPayload.pesoRealKg = rawPeso;
+  } else if (typeof rawPeso === 'string' && rawPeso.trim().length > 0) {
+    const parsed = Number(rawPeso);
+    if (Number.isFinite(parsed)) backendPayload.pesoRealKg = parsed;
+  }
+
+  const fecha = readTextOrNull(['fecha']);
+  if (typeof fecha === 'string') backendPayload.fecha = fecha;
+
+  const fuenteBascula = readTextOrNull(['fuenteBascula']);
+  if (typeof fuenteBascula === 'string') {
+    backendPayload.fuenteBascula = fuenteBascula;
+  } else if (tipoOperacion === 'CREATE') {
+    backendPayload.fuenteBascula = 'Báscula registrada en campo';
+  }
+
+  const responsable = readTextOrNull(['responsable']);
+  if (typeof responsable === 'string') {
+    backendPayload.responsable = responsable;
+  } else if (tipoOperacion === 'CREATE') {
+    backendPayload.responsable = 'Operador de campo';
+  }
+
+  const observaciones = readTextOrNull(['observaciones']);
+  if (observaciones !== undefined) backendPayload.observaciones = observaciones;
+
+  return backendPayload;
+}
+
 function buildBackendPushBody(dto: SyncOperationRequestDto): {
   body: Record<string, unknown>;
   deviceId: string;
@@ -415,9 +482,11 @@ function buildBackendPushBody(dto: SyncOperationRequestDto): {
           ? normalizeMovementPayloadForBackend(dto.payload, idRegistro, dto.tipoOperacion)
           : dto.entidad === 'feedingRecords'
             ? normalizeFeedingPayloadForBackend(dto.payload, idRegistro, dto.tipoOperacion)
-            : isPlainRecord(dto.payload)
-              ? dto.payload
-              : {};
+            : dto.entidad === 'weighings'
+              ? normalizeWeighingPayloadForBackend(dto.payload, idRegistro, dto.tipoOperacion)
+              : isPlainRecord(dto.payload)
+                ? dto.payload
+                : {};
 
   return {
     deviceId,
@@ -498,6 +567,20 @@ function mapHttpErrorToOperationResult(
 
     // 400 / 422: error de validación de dominio o esquema
     if (err.status === 400 || err.status === 422) {
+      // Si el Backend aún no implementa esta entidad en Sync (p. ej. Pesaje), mantenerla
+      // pendiente en la cola en lugar de descartarla permanentemente.
+      if (err.status === 400 && /no está soportada para sincronización/i.test(err.message)) {
+        return {
+          idOperacion: dto.idOperacion,
+          entidad: dto.entidad,
+          idEntidad: dto.idEntidad,
+          resultado: 'TRANSIENT_ERROR',
+          mensaje:
+            'El servidor aún no habilita la sincronización para esta entidad. El registro permanece seguro en IndexedDB y en la cola pendiente.',
+          codigoHttp: err.status
+        };
+      }
+
       const fieldErrors =
         body?.errors && typeof body.errors === 'object' && !Array.isArray(body.errors)
           ? (body.errors as Record<string, string[]>)

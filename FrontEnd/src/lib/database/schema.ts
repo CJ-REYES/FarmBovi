@@ -96,8 +96,13 @@ export interface LocalCattle extends BaseLocalEntity {
 
 export interface LocalWeighing extends BaseLocalEntity {
   cattleId: string;
+  /** Peso real de báscula en kg (`pesoRealKg` en ER `Pesaje`, siempre > 0). */
   peso: number;
   fecha: string;
+  /** Fuente o equipo de báscula (`fuenteBascula` en ER `Pesaje`). */
+  fuenteBascula?: string;
+  /** Persona responsable del pesaje (`responsable` en ER `Pesaje`). */
+  responsable?: string;
   observaciones?: string;
   origenPesaje?: 'manual' | 'boviscale_ia';
   sourceAnalysisJobId?: string | null;

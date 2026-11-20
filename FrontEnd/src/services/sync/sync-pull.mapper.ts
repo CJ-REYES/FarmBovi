@@ -215,8 +215,9 @@ export async function mapRemoteChangeToLocalEntity(
     }
 
     case 'weighings': {
-      const rawCattleId = readString(data, ['cattleId', 'animalId', 'bovinoId']);
-      const peso = readNumber(data, ['peso', 'weight', 'weightKg']);
+      const existingWeighing = existing as LocalWeighing | undefined;
+      const rawCattleId = readString(data, ['idAnimal', 'cattleId', 'animalId', 'bovinoId']);
+      const peso = readNumber(data, ['pesoRealKg', 'peso', 'weight', 'weightKg']);
       const fecha = readString(data, ['fecha', 'date', 'fechaPesaje'], change.actualizadoEnServidor);
 
       if (!rawCattleId || peso === undefined || peso <= 0 || !fecha) {
@@ -235,7 +236,9 @@ export async function mapRemoteChangeToLocalEntity(
         cattleId,
         peso,
         fecha,
-        observaciones: readString(data, ['observaciones', 'notes']),
+        fuenteBascula: readString(data, ['fuenteBascula'], existingWeighing?.fuenteBascula),
+        responsable: readString(data, ['responsable'], existingWeighing?.responsable),
+        observaciones: readString(data, ['observaciones', 'notes'], existingWeighing?.observaciones),
         origenPesaje:
           data.origenPesaje === 'boviscale_ia' ? 'boviscale_ia' : 'manual',
         sourceAnalysisJobId: readString(data, ['sourceAnalysisJobId']) ?? null,
