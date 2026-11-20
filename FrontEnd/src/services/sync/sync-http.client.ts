@@ -62,6 +62,7 @@ const CLIENT_ENTITY_TO_BACKEND: Partial<Record<SyncEntityName, string>> = {
   ranches: 'Rancho',
   lots: 'Lote',
   cattle: 'Animal',
+  genealogy: 'Genealogia',
   weighings: 'Pesaje',
   healthRecords: 'EventoSanitario',
   treatments: 'Tratamiento',
@@ -651,6 +652,50 @@ function normalizeReproductionPayloadForBackend(
   return backendPayload;
 }
 
+function normalizeGenealogyPayloadForBackend(
+  rawPayload: unknown,
+  idRegistro: string,
+  tipoOperacion: OutboxOperationType
+): Record<string, unknown> {
+  if (tipoOperacion === 'DELETE') {
+    return { idGenealogia: idRegistro };
+  }
+  if (!isPlainRecord(rawPayload)) {
+    return {};
+  }
+
+  const readGuidOrNull = (keys: readonly string[]): string | null | undefined => {
+    for (const key of keys) {
+      if (rawPayload[key] !== undefined) {
+        const val = rawPayload[key];
+        if (val === null) return null;
+        if (typeof val === 'string') {
+          const trimmed = val.trim();
+          return trimmed.length > 0 ? trimmed : null;
+        }
+      }
+    }
+    return undefined;
+  };
+
+  const backendPayload: Record<string, unknown> = {};
+  if (tipoOperacion === 'CREATE') {
+    backendPayload.idGenealogia = idRegistro;
+    const idAnimal = readGuidOrNull(['idAnimal', 'cattleId']);
+    if (typeof idAnimal === 'string') {
+      backendPayload.idAnimal = idAnimal;
+    }
+  }
+
+  const idPadre = readGuidOrNull(['idPadre', 'padreId']);
+  if (idPadre !== undefined) backendPayload.idPadre = idPadre;
+
+  const idMadre = readGuidOrNull(['idMadre', 'madreId']);
+  if (idMadre !== undefined) backendPayload.idMadre = idMadre;
+
+  return backendPayload;
+}
+
 function buildBackendPushBody(dto: SyncOperationRequestDto): {
   body: Record<string, unknown>;
   deviceId: string;
@@ -685,9 +730,15 @@ function buildBackendPushBody(dto: SyncOperationRequestDto): {
                         idRegistro,
                         dto.tipoOperacion
                       )
-                    : isPlainRecord(dto.payload)
-                      ? dto.payload
-                      : {};
+                    : dto.entidad === 'genealogy'
+                      ? normalizeGenealogyPayloadForBackend(
+                          dto.payload,
+                          idRegistro,
+                          dto.tipoOperacion
+                        )
+                      : isPlainRecord(dto.payload)
+                        ? dto.payload
+                        : {};
 
   return {
     deviceId,

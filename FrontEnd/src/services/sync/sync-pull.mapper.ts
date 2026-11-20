@@ -505,7 +505,7 @@ export async function mapRemoteChangeToLocalEntity(
     }
 
     case 'genealogy': {
-      const rawCattleId = readString(data, ['cattleId', 'animalId', 'bovinoId']);
+      const rawCattleId = readString(data, ['idAnimal', 'cattleId', 'animalId', 'bovinoId']);
       if (!rawCattleId) {
         throw new Error(
           `Registro remoto de genealogía inválido (remoteId=${String(change.remoteId)}).`
@@ -514,8 +514,8 @@ export async function mapRemoteChangeToLocalEntity(
 
       const cattleTable = db.cattle as unknown as Table<BaseLocalEntity, string>;
       const cattleId = await resolveLocalForeignUuid(cattleTable, rawCattleId);
-      const rawPadre = readString(data, ['padreId', 'fatherId']);
-      const rawMadre = readString(data, ['madreId', 'motherId']);
+      const rawPadre = readString(data, ['idPadre', 'padreId', 'fatherId']);
+      const rawMadre = readString(data, ['idMadre', 'madreId', 'motherId']);
 
       const genealogyRecord: LocalGenealogy = {
         ...baseFields,

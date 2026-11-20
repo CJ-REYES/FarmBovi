@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { Link, useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   ArrowLeft,
   Edit,
@@ -49,6 +49,7 @@ interface AnimalHistory {
   healthRecords: LocalHealthRecord[];
   reproductionRecords: LocalReproductionRecord[];
   genealogy?: LocalGenealogy;
+  descendantsCount: number;
 }
 
 function formatDateDisplay(value: string | null | undefined): string {
@@ -65,14 +66,15 @@ export default function CattleDetailPage() {
   const location = useLocation();
   const locationState = location.state as DetailLocationState | null;
 
-  const { ranches, lots, getById, deactivate } = useSharedCattle();
+  const { cattle, ranches, lots, getById, deactivate } = useSharedCattle();
 
   const [animal, setAnimal] = useState<Cattle | null>(null);
   const [history, setHistory] = useState<AnimalHistory>({
     movements: [],
     weighings: [],
     healthRecords: [],
-    reproductionRecords: []
+    reproductionRecords: [],
+    descendantsCount: 0
   });
   const [loading, setLoading] = useState<boolean>(Boolean(id));
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -100,13 +102,14 @@ export default function CattleDetailPage() {
         setAnimal(record);
         setErrorMsg(null);
 
-        const [movements, weighings, healthRecords, reproductionRecords, genealogy] =
+        const [movements, weighings, healthRecords, reproductionRecords, genealogy, descendants] =
           await Promise.all([
             MovementRepository.getByCattleId(record.id),
             WeighingRepository.getByCattleId(record.id),
             HealthRepository.getByCattleId(record.id),
             ReproductionRepository.getByCattleId(record.id),
-            GenealogyRepository.getByCattleId(record.id)
+            GenealogyRepository.getByCattleId(record.id),
+            GenealogyRepository.getDescendantsOf(record.id)
           ]);
 
         if (!active) return;
@@ -115,7 +118,8 @@ export default function CattleDetailPage() {
           weighings,
           healthRecords,
           reproductionRecords,
-          genealogy
+          genealogy,
+          descendantsCount: descendants.length
         });
       } catch (err) {
         if (!active) return;
@@ -539,16 +543,49 @@ export default function CattleDetailPage() {
               <h3 className="font-bold text-[14px] text-brand-slate flex items-center gap-2">
                 <HeartPulse size={16} className="text-pink-600" /> Reproducción y Genealogía
               </h3>
-              <Dna size={15} className="text-brand-yellow" />
+              <Link
+                to={`/genealogy?animal=${animal.id}`}
+                className="text-[12px] font-semibold text-brand-primary hover:underline inline-flex items-center gap-1"
+              >
+                <Dna size={14} className="text-brand-yellow" /> Ver árbol
+              </Link>
             </div>
             <div className="flex-1 p-4 space-y-3">
-              {history.genealogy && (history.genealogy.padreId || history.genealogy.madreId) && (
+              {(history.genealogy && (history.genealogy.padreId || history.genealogy.madreId)) ||
+              history.descendantsCount > 0 ? (
                 <div className="p-2.5 rounded-lg bg-surface-secondary/50 border border-border-light text-[12px] space-y-1">
                   <p className="font-bold text-brand-slate">Parentesco registrado</p>
-                  {history.genealogy.padreId && <p>Padre: {history.genealogy.padreId}</p>}
-                  {history.genealogy.madreId && <p>Madre: {history.genealogy.madreId}</p>}
+                  {history.genealogy?.padreId && (
+                    <p>
+                      Padre:{' '}
+                      <Link
+                        to={`/cattle/${history.genealogy.padreId}`}
+                        className="font-semibold text-brand-primary hover:underline"
+                      >
+                        {cattle.find((c) => c.id === history.genealogy?.padreId)?.arete ||
+                          history.genealogy.padreId}
+                      </Link>
+                    </p>
+                  )}
+                  {history.genealogy?.madreId && (
+                    <p>
+                      Madre:{' '}
+                      <Link
+                        to={`/cattle/${history.genealogy.madreId}`}
+                        className="font-semibold text-brand-primary hover:underline"
+                      >
+                        {cattle.find((c) => c.id === history.genealogy?.madreId)?.arete ||
+                          history.genealogy.madreId}
+                      </Link>
+                    </p>
+                  )}
+                  {history.descendantsCount > 0 && (
+                    <p className="text-brand-slate/75">
+                      Descendientes registrados: <strong>{history.descendantsCount}</strong>
+                    </p>
+                  )}
                 </div>
-              )}
+              ) : null}
 
               {history.reproductionRecords.length === 0 ? (
                 <EmptyState
