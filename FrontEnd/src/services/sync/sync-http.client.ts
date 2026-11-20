@@ -696,6 +696,90 @@ function normalizeGenealogyPayloadForBackend(
   return backendPayload;
 }
 
+function normalizeAlertPayloadForBackend(
+  rawPayload: unknown,
+  idRegistro: string,
+  idRancho: string,
+  tipoOperacion: OutboxOperationType
+): Record<string, unknown> {
+  if (tipoOperacion === 'DELETE') {
+    return { idRecordatorio: idRegistro };
+  }
+  if (!isPlainRecord(rawPayload)) {
+    return {};
+  }
+
+  const readGuidOrNull = (keys: readonly string[]): string | null | undefined => {
+    for (const key of keys) {
+      if (rawPayload[key] !== undefined) {
+        const val = rawPayload[key];
+        if (val === null) return null;
+        if (typeof val === 'string') {
+          const trimmed = val.trim();
+          return trimmed.length > 0 ? trimmed : null;
+        }
+      }
+    }
+    return undefined;
+  };
+
+  const readTextOrNull = (keys: readonly string[]): string | null | undefined => {
+    for (const key of keys) {
+      if (rawPayload[key] !== undefined) {
+        const val = rawPayload[key];
+        if (val === null) return null;
+        if (typeof val === 'string') {
+          const trimmed = val.trim();
+          return trimmed.length > 0 ? trimmed : null;
+        }
+      }
+    }
+    return undefined;
+  };
+
+  const backendPayload: Record<string, unknown> = {};
+  if (tipoOperacion === 'CREATE') {
+    backendPayload.idRecordatorio = idRegistro;
+    const resolvedRancho = readGuidOrNull(['idRancho', 'ranchId']) || idRancho;
+    if (typeof resolvedRancho === 'string' && resolvedRancho.length > 0) {
+      backendPayload.idRancho = resolvedRancho;
+    }
+  }
+
+  const idAnimal = readGuidOrNull(['idAnimal', 'cattleId']);
+  if (idAnimal !== undefined) backendPayload.idAnimal = idAnimal;
+
+  const idLote = readGuidOrNull(['idLote', 'lotId', 'loteId']);
+  if (idLote !== undefined) backendPayload.idLote = idLote;
+
+  const idTratamiento = readGuidOrNull(['idTratamiento', 'treatmentId']);
+  if (idTratamiento !== undefined) backendPayload.idTratamiento = idTratamiento;
+
+  const idResponsable = readGuidOrNull(['idResponsable', 'responsableId']);
+  if (idResponsable !== undefined) backendPayload.idResponsable = idResponsable;
+
+  const tipo = readTextOrNull(['tipo']);
+  if (typeof tipo === 'string') backendPayload.tipo = tipo;
+
+  const descripcion = readTextOrNull(['descripcion', 'mensaje']);
+  if (typeof descripcion === 'string') backendPayload.descripcion = descripcion;
+
+  const fechaProgramada = readTextOrNull(['fechaProgramada', 'fecha']);
+  if (typeof fechaProgramada === 'string') backendPayload.fechaProgramada = fechaProgramada;
+
+  const estado = readTextOrNull(['estado']);
+  if (typeof estado === 'string') {
+    backendPayload.estado = estado;
+  } else if (typeof rawPayload.leida === 'boolean') {
+    backendPayload.estado = rawPayload.leida ? 'Completado' : 'Pendiente';
+  }
+
+  const fechaCompletado = readTextOrNull(['fechaCompletado']);
+  if (fechaCompletado !== undefined) backendPayload.fechaCompletado = fechaCompletado;
+
+  return backendPayload;
+}
+
 function buildBackendPushBody(dto: SyncOperationRequestDto): {
   body: Record<string, unknown>;
   deviceId: string;
@@ -736,9 +820,16 @@ function buildBackendPushBody(dto: SyncOperationRequestDto): {
                           idRegistro,
                           dto.tipoOperacion
                         )
-                      : isPlainRecord(dto.payload)
-                        ? dto.payload
-                        : {};
+                      : dto.entidad === 'alerts'
+                        ? normalizeAlertPayloadForBackend(
+                            dto.payload,
+                            idRegistro,
+                            idRancho,
+                            dto.tipoOperacion
+                          )
+                        : isPlainRecord(dto.payload)
+                          ? dto.payload
+                          : {};
 
   return {
     deviceId,

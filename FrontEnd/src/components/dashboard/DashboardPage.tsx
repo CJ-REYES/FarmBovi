@@ -3,9 +3,21 @@ import { useNavigate } from 'react-router-dom';
 import { useSharedCattle } from '../../hooks/useCattle';
 import { FeedingRepository } from '../../lib/database/repositories/feeding.repository';
 import { WeighingRepository } from '../../lib/database/repositories/weighing.repository';
+import { AlertRepository } from '../../lib/database/repositories/alert.repository';
+import { TreatmentRepository } from '../../lib/database/repositories/treatment.repository';
+import { AlertService } from '../../services/alert.service';
+import {
+  classifyAlertTiming,
+  formatAlertRelativeTiming,
+  isAlertPendingEstado
+} from '../../services/alert.validation';
+import { HealthService } from '../../services/health.service';
+import { isTreatmentPending } from '../../services/health.validation';
 import { WeighingService } from '../../services/weighing.service';
 import { computeWeightAnalytics } from '../../services/weighing.validation';
 import type { LocalFeedingRecord } from '../../lib/database/schema';
+import type { AlertRecord } from '../../types/alert';
+import type { Treatment } from '../../types/health';
 import type { Weighing } from '../../types/weighing';
 import KpiCard from './KpiCard';
 import EmptyState from '../ui/EmptyState';
@@ -21,18 +33,28 @@ export function DashboardPage() {
   const { cattle, loading } = useSharedCattle();
   const [recentFeeding, setRecentFeeding] = useState<LocalFeedingRecord[]>([]);
   const [weighings, setWeighings] = useState<Weighing[]>([]);
+  const [alerts, setAlerts] = useState<AlertRecord[]>([]);
+  const [pendingTreatments, setPendingTreatments] = useState<Treatment[]>([]);
 
   useEffect(() => {
     let active = true;
     void (async () => {
       try {
-        const [feedingItems, weighingItems] = await Promise.all([
+        const [feedingItems, weighingItems, alertItems, treatmentItems] = await Promise.all([
           FeedingRepository.getAllWithOptions({ includeDeleted: false, order: 'desc' }),
-          WeighingRepository.getAllWithOptions({ includeDeleted: false, order: 'asc' })
+          WeighingRepository.getAllWithOptions({ includeDeleted: false, order: 'asc' }),
+          AlertRepository.getAllWithOptions({ includeDeleted: false, order: 'asc' }),
+          TreatmentRepository.getAllWithOptions({ includeDeleted: false })
         ]);
         if (active) {
           setRecentFeeding(feedingItems.slice(0, 4));
           setWeighings(weighingItems.map((w) => WeighingService.toWeighing(w)));
+          setAlerts(alertItems.map((a) => AlertService.toAlertRecord(a)));
+          setPendingTreatments(
+            treatmentItems
+              .map((t) => HealthService.toTreatment(t))
+              .filter((t) => isTreatmentPending(t.estado))
+          );
         }
       } catch {
         // Mantener vacío si IndexedDB no está disponible
@@ -47,6 +69,18 @@ export function DashboardPage() {
     () => computeWeightAnalytics(weighings, cattle || []),
     [weighings, cattle]
   );
+
+  const alertSummary = useMemo(() => {
+    const activePending = alerts.filter((a) => !a.deletedAt && isAlertPendingEstado(a.estado));
+    const overdue = activePending.filter((a) => classifyAlertTiming(a) === 'vencida');
+    const upcoming = activePending.filter((a) => classifyAlertTiming(a) === 'proxima');
+    return {
+      activePending,
+      overdue,
+      upcoming,
+      totalActiveCount: activePending.length + pendingTreatments.length
+    };
+  }, [alerts, pendingTreatments]);
 
   const totalBovinos = cattle?.length || 0;
   const machos = cattle?.filter((c) => c.sexo === 'Macho').length || 0;
@@ -121,10 +155,16 @@ export function DashboardPage() {
         <KpiCard
           title="Alertas Activas"
           icon={AlertTriangle}
-          value="0"
+          value={alertSummary.totalActiveCount.toString()}
           unit="Pendientes"
-          sub="Sanidad y recordatorios al día"
-          color="bg-status-warning"
+          sub={
+            alertSummary.overdue.length > 0
+              ? `${alertSummary.overdue.length} vencida(s) · ${pendingTreatments.length} trat. activos`
+              : alertSummary.totalActiveCount > 0
+                ? `${alertSummary.upcoming.length} próxima(s) · ${pendingTreatments.length} trat. activos`
+                : 'Sanidad y recordatorios al día'
+          }
+          color={alertSummary.overdue.length > 0 ? 'bg-status-danger' : 'bg-status-warning'}
         />
       </div>
 
@@ -155,17 +195,51 @@ export function DashboardPage() {
         </div>
 
         <div className="lg:col-span-4 bg-surface-white border border-border-light rounded-xl shadow-sm flex flex-col h-[380px] overflow-hidden">
-          <div className="px-5 py-4 border-b border-border-light bg-surface-app/30">
+          <div className="px-5 py-4 border-b border-border-light bg-surface-app/30 flex items-center justify-between">
             <h2 className="font-bold text-[16px] text-brand-slate flex items-center gap-2">
               <AlertTriangle size={18} className="text-status-warning" /> Panel de Alertas
             </h2>
+            <button
+              type="button"
+              onClick={() => navigate('/alerts')}
+              className="text-[12px] font-semibold text-brand-primary hover:underline cursor-pointer"
+            >
+              Ver todas
+            </button>
           </div>
-          <div className="flex-1 p-6">
-            <EmptyState
-              title="Hato Saludable"
-              message="No hay alertas sanitarias ni tratamientos vencidos registrados actualmente."
-              icon={Stethoscope}
-            />
+          <div className="flex-1 p-4 overflow-y-auto">
+            {alertSummary.overdue.length === 0 && pendingTreatments.length === 0 ? (
+              <EmptyState
+                title="Hato Saludable"
+                message="No hay alertas vencidas ni tratamientos pendientes registrados actualmente."
+                icon={Stethoscope}
+              />
+            ) : (
+              <ul className="divide-y divide-border-light text-[13px]">
+                {alertSummary.overdue.slice(0, 3).map((a) => (
+                  <li key={a.id} className="py-2.5 space-y-0.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-status-danger">{a.tipo}</span>
+                      <span className="text-[11px] font-semibold text-status-danger">
+                        {formatAlertRelativeTiming(a)}
+                      </span>
+                    </div>
+                    <p className="text-[12px] text-brand-slate/80 line-clamp-2">{a.descripcion}</p>
+                  </li>
+                ))}
+                {pendingTreatments.slice(0, 3).map((t) => (
+                  <li key={t.id} className="py-2.5 space-y-0.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-brand-forest">{t.producto}</span>
+                      <span className="text-[11px] font-semibold text-status-info">{t.estado}</span>
+                    </div>
+                    <p className="text-[12px] text-brand-slate/75">
+                      {t.dosis} {t.unidadDosis} · {t.frecuencia}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
       </div>
@@ -318,17 +392,40 @@ export function DashboardPage() {
         </div>
 
         <div className="lg:col-span-4 bg-surface-white border border-border-light rounded-xl shadow-sm flex flex-col min-h-[300px]">
-          <div className="px-5 py-4 border-b border-border-light">
+          <div className="px-5 py-4 border-b border-border-light flex items-center justify-between">
             <h2 className="font-bold text-[16px] text-brand-slate flex items-center gap-2">
               <Activity size={18} className="text-brand-primary" /> Tareas de Seguimiento
             </h2>
+            <button
+              type="button"
+              onClick={() => navigate('/alerts')}
+              className="text-[12px] font-semibold text-brand-primary hover:underline cursor-pointer"
+            >
+              Gestionar
+            </button>
           </div>
-          <div className="flex-1 p-6">
-            <EmptyState
-              title="Sin tareas pendientes"
-              message="Las actividades programadas de vacunación o destete aparecerán aquí."
-              icon={Activity}
-            />
+          <div className="flex-1 p-4">
+            {alertSummary.activePending.length === 0 ? (
+              <EmptyState
+                title="Sin tareas pendientes"
+                message="Las actividades programadas de vacunación o manejo aparecerán aquí."
+                icon={Activity}
+              />
+            ) : (
+              <ul className="divide-y divide-border-light text-[13px]">
+                {alertSummary.activePending.slice(0, 4).map((a) => (
+                  <li key={a.id} className="py-2.5 space-y-0.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-brand-forest">{a.tipo}</span>
+                      <span className="text-[11px] font-semibold text-brand-slate/70">
+                        {formatAlertRelativeTiming(a)}
+                      </span>
+                    </div>
+                    <p className="text-[12px] text-brand-slate/75 line-clamp-2">{a.descripcion}</p>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
       </div>
