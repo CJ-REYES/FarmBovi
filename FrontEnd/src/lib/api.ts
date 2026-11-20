@@ -4,6 +4,7 @@ import type {
   BackendLoteDto,
   BackendRanchoDto
 } from '../types/cattle';
+import type { BackendLotePayload } from '../types/lot';
 
 export const API_BASE_URL = (
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ||
@@ -295,6 +296,36 @@ export const lotsApi = {
       method: 'GET'
     });
     return Array.isArray(res.data) ? res.data : [];
+  },
+
+  async getById(id: string): Promise<BackendLoteDto> {
+    const res = await apiRequest<BackendLoteDto>(`${BACKEND_ROUTES.LOTES}/${id}`, {
+      method: 'GET'
+    });
+    return res.data;
+  },
+
+  async create(input: BackendLotePayload): Promise<BackendLoteDto> {
+    const res = await apiRequest<BackendLoteDto>(BACKEND_ROUTES.LOTES, {
+      method: 'POST',
+      body: input
+    });
+    return res.data;
+  },
+
+  async update(id: string, input: BackendLotePayload): Promise<void> {
+    await apiRequest<unknown>(`${BACKEND_ROUTES.LOTES}/${id}`, {
+      method: 'PUT',
+      body: input,
+      allowEmptyResponse: true
+    });
+  },
+
+  async remove(id: string): Promise<void> {
+    await apiRequest<unknown>(`${BACKEND_ROUTES.LOTES}/${id}`, {
+      method: 'DELETE',
+      allowEmptyResponse: true
+    });
   }
 };
 

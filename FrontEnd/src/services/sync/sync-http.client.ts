@@ -182,6 +182,43 @@ function normalizeCattlePayloadForBackend(
   return backendPayload;
 }
 
+function normalizeLotPayloadForBackend(
+  rawPayload: unknown,
+  idRegistro: string,
+  idRancho: string,
+  tipoOperacion: OutboxOperationType
+): Record<string, unknown> {
+  if (tipoOperacion === 'DELETE') {
+    return { idLote: idRegistro };
+  }
+  if (!isPlainRecord(rawPayload)) {
+    return {};
+  }
+
+  const backendPayload: Record<string, unknown> = {};
+  if (tipoOperacion === 'CREATE') {
+    backendPayload.idLote = idRegistro;
+    backendPayload.idRancho = idRancho;
+  }
+
+  if (typeof rawPayload.nombre === 'string') {
+    backendPayload.nombre = rawPayload.nombre.trim();
+  }
+  if (rawPayload.ubicacion !== undefined) {
+    backendPayload.ubicacion =
+      typeof rawPayload.ubicacion === 'string' && rawPayload.ubicacion.trim().length > 0
+        ? rawPayload.ubicacion.trim()
+        : null;
+  }
+  if (typeof rawPayload.estado === 'string' && rawPayload.estado.trim().length > 0) {
+    backendPayload.estado = rawPayload.estado.trim();
+  } else if (tipoOperacion === 'CREATE') {
+    backendPayload.estado = 'Activo';
+  }
+
+  return backendPayload;
+}
+
 function buildBackendPushBody(dto: SyncOperationRequestDto): {
   body: Record<string, unknown>;
   deviceId: string;
@@ -198,9 +235,11 @@ function buildBackendPushBody(dto: SyncOperationRequestDto): {
   const normalizedPayload =
     dto.entidad === 'cattle'
       ? normalizeCattlePayloadForBackend(dto.payload, idRegistro, idRancho, dto.tipoOperacion)
-      : isPlainRecord(dto.payload)
-        ? dto.payload
-        : {};
+      : dto.entidad === 'lots'
+        ? normalizeLotPayloadForBackend(dto.payload, idRegistro, idRancho, dto.tipoOperacion)
+        : isPlainRecord(dto.payload)
+          ? dto.payload
+          : {};
 
   return {
     deviceId,

@@ -328,8 +328,10 @@ export async function mapRemoteChangeToLocalEntity(
     }
 
     case 'lots': {
+      const existingLot = existing as LocalLot | undefined;
       const nombre = readString(data, ['nombre', 'name']);
-      const capacidad = readNumber(data, ['capacidad', 'capacity']) ?? 0;
+      const capacidad = readNumber(data, ['capacidad', 'capacity']) ?? existingLot?.capacidad ?? 0;
+      const estado = readString(data, ['estado'], existingLot?.estado ?? 'Activo') ?? 'Activo';
 
       if (!nombre) {
         throw new Error(`Registro remoto de lote inválido (remoteId=${String(change.remoteId)}).`);
@@ -339,7 +341,8 @@ export async function mapRemoteChangeToLocalEntity(
         ...baseFields,
         nombre,
         capacidad,
-        ubicacion: readString(data, ['ubicacion', 'location'])
+        ubicacion: readString(data, ['ubicacion', 'location']),
+        estado
       };
       return lotRecord;
     }
