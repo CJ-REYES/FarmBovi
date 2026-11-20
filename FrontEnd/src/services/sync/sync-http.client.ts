@@ -219,6 +219,85 @@ function normalizeLotPayloadForBackend(
   return backendPayload;
 }
 
+function normalizeMovementPayloadForBackend(
+  rawPayload: unknown,
+  idRegistro: string,
+  tipoOperacion: OutboxOperationType
+): Record<string, unknown> {
+  if (tipoOperacion === 'DELETE') {
+    return { idMovimiento: idRegistro };
+  }
+  if (!isPlainRecord(rawPayload)) {
+    return {};
+  }
+
+  const readGuidOrNull = (keys: readonly string[]): string | null | undefined => {
+    for (const key of keys) {
+      if (rawPayload[key] !== undefined) {
+        const val = rawPayload[key];
+        if (val === null) return null;
+        if (typeof val === 'string') {
+          const trimmed = val.trim();
+          return trimmed.length > 0 ? trimmed : null;
+        }
+      }
+    }
+    return undefined;
+  };
+
+  const readTextOrNull = (keys: readonly string[]): string | null | undefined => {
+    for (const key of keys) {
+      if (rawPayload[key] !== undefined) {
+        const val = rawPayload[key];
+        if (val === null) return null;
+        if (typeof val === 'string') {
+          const trimmed = val.trim();
+          return trimmed.length > 0 ? trimmed : null;
+        }
+      }
+    }
+    return undefined;
+  };
+
+  const backendPayload: Record<string, unknown> = {};
+  if (tipoOperacion === 'CREATE') {
+    backendPayload.idMovimiento = idRegistro;
+    const idAnimal = readGuidOrNull(['idAnimal', 'cattleId']);
+    if (typeof idAnimal === 'string') {
+      backendPayload.idAnimal = idAnimal;
+    }
+  }
+
+  const idLoteOrigen = readGuidOrNull(['idLoteOrigen', 'origenLotId']);
+  if (idLoteOrigen !== undefined) backendPayload.idLoteOrigen = idLoteOrigen;
+
+  const idLoteDestino = readGuidOrNull(['idLoteDestino', 'destinoLotId']);
+  if (idLoteDestino !== undefined) backendPayload.idLoteDestino = idLoteDestino;
+
+  const tipo = readTextOrNull(['tipo']);
+  if (typeof tipo === 'string') {
+    backendPayload.tipo = tipo;
+  } else if (tipoOperacion === 'CREATE') {
+    backendPayload.tipo = 'CambioInterno';
+  }
+
+  const fecha = readTextOrNull(['fecha']);
+  if (typeof fecha === 'string') {
+    backendPayload.fecha = fecha;
+  }
+
+  const origenExterno = readTextOrNull(['origenExterno']);
+  if (origenExterno !== undefined) backendPayload.origenExterno = origenExterno;
+
+  const destinoExterno = readTextOrNull(['destinoExterno']);
+  if (destinoExterno !== undefined) backendPayload.destinoExterno = destinoExterno;
+
+  const motivo = readTextOrNull(['motivo']);
+  if (motivo !== undefined) backendPayload.motivo = motivo;
+
+  return backendPayload;
+}
+
 function buildBackendPushBody(dto: SyncOperationRequestDto): {
   body: Record<string, unknown>;
   deviceId: string;
@@ -237,9 +316,11 @@ function buildBackendPushBody(dto: SyncOperationRequestDto): {
       ? normalizeCattlePayloadForBackend(dto.payload, idRegistro, idRancho, dto.tipoOperacion)
       : dto.entidad === 'lots'
         ? normalizeLotPayloadForBackend(dto.payload, idRegistro, idRancho, dto.tipoOperacion)
-        : isPlainRecord(dto.payload)
-          ? dto.payload
-          : {};
+        : dto.entidad === 'movements'
+          ? normalizeMovementPayloadForBackend(dto.payload, idRegistro, dto.tipoOperacion)
+          : isPlainRecord(dto.payload)
+            ? dto.payload
+            : {};
 
   return {
     deviceId,

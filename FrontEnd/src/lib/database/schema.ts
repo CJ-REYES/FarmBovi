@@ -137,6 +137,10 @@ export interface LocalMovement extends BaseLocalEntity {
   cattleId: string;
   origenLotId?: string;
   destinoLotId?: string;
+  /** Tipo de movimiento real del Backend (`Alta` | `CambioInterno` | `Traslado` | `Venta` | `Baja`). */
+  tipo?: string;
+  origenExterno?: string;
+  destinoExterno?: string;
   fecha: string;
   motivo: string;
 }

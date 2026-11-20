@@ -5,6 +5,10 @@ import type {
   BackendRanchoDto
 } from '../types/cattle';
 import type { BackendLotePayload } from '../types/lot';
+import type {
+  BackendMovimientoAnimalDto,
+  BackendMovimientoAnimalPayload
+} from '../types/movement';
 
 export const API_BASE_URL = (
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ||
@@ -336,5 +340,47 @@ export const ranchesApi = {
       method: 'GET'
     });
     return Array.isArray(res.data) ? res.data : [];
+  }
+};
+
+export const movementsApi = {
+  async list(incluirEliminados = false): Promise<BackendMovimientoAnimalDto[]> {
+    const query = incluirEliminados ? '?incluirEliminados=true' : '';
+    const res = await apiRequest<BackendMovimientoAnimalDto[]>(
+      `${BACKEND_ROUTES.MOVIMIENTOS}${query}`,
+      { method: 'GET' }
+    );
+    return Array.isArray(res.data) ? res.data : [];
+  },
+
+  async getById(id: string): Promise<BackendMovimientoAnimalDto> {
+    const res = await apiRequest<BackendMovimientoAnimalDto>(
+      `${BACKEND_ROUTES.MOVIMIENTOS}/${id}`,
+      { method: 'GET' }
+    );
+    return res.data;
+  },
+
+  async create(input: BackendMovimientoAnimalPayload): Promise<BackendMovimientoAnimalDto> {
+    const res = await apiRequest<BackendMovimientoAnimalDto>(BACKEND_ROUTES.MOVIMIENTOS, {
+      method: 'POST',
+      body: input
+    });
+    return res.data;
+  },
+
+  async update(id: string, input: BackendMovimientoAnimalPayload): Promise<void> {
+    await apiRequest<unknown>(`${BACKEND_ROUTES.MOVIMIENTOS}/${id}`, {
+      method: 'PUT',
+      body: input,
+      allowEmptyResponse: true
+    });
+  },
+
+  async remove(id: string): Promise<void> {
+    await apiRequest<unknown>(`${BACKEND_ROUTES.MOVIMIENTOS}/${id}`, {
+      method: 'DELETE',
+      allowEmptyResponse: true
+    });
   }
 };

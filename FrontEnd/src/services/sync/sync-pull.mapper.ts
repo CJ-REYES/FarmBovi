@@ -348,11 +348,15 @@ export async function mapRemoteChangeToLocalEntity(
     }
 
     case 'movements': {
-      const rawCattleId = readString(data, ['cattleId', 'animalId', 'bovinoId']);
+      const existingMovement = existing as LocalMovement | undefined;
+      const rawCattleId = readString(data, ['idAnimal', 'cattleId', 'animalId', 'bovinoId']);
       const fecha = readString(data, ['fecha', 'date'], change.actualizadoEnServidor);
-      const motivo = readString(data, ['motivo', 'reason'], 'Movimiento registrado') ?? 'Movimiento registrado';
-      const rawOrigen = readString(data, ['origenLotId', 'originLotId']);
-      const rawDestino = readString(data, ['destinoLotId', 'destinationLotId']);
+      const motivo = readString(data, ['motivo', 'reason'], existingMovement?.motivo ?? '') ?? '';
+      const rawOrigen = readString(data, ['idLoteOrigen', 'origenLotId', 'originLotId']);
+      const rawDestino = readString(data, ['idLoteDestino', 'destinoLotId', 'destinationLotId']);
+      const tipo = readString(data, ['tipo'], existingMovement?.tipo ?? 'CambioInterno');
+      const origenExterno = readString(data, ['origenExterno'], existingMovement?.origenExterno);
+      const destinoExterno = readString(data, ['destinoExterno'], existingMovement?.destinoExterno);
 
       if (!rawCattleId || !fecha) {
         throw new Error(
@@ -371,6 +375,9 @@ export async function mapRemoteChangeToLocalEntity(
         cattleId,
         origenLotId: rawOrigen ? await resolveLocalForeignUuid(lotsTable, rawOrigen) : undefined,
         destinoLotId: rawDestino ? await resolveLocalForeignUuid(lotsTable, rawDestino) : undefined,
+        tipo,
+        origenExterno,
+        destinoExterno,
         fecha,
         motivo
       };
