@@ -13,7 +13,10 @@ namespace FarmBovi.Api.Controllers;
 public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValidationService validator) : ControllerBase
 {
     [HttpGet]
-    public Task<List<MovimientoAnimal>> GetAll([FromServices] RanchAccessService access, [FromQuery] bool incluirEliminados = false, CancellationToken ct = default)
+    [ProducesResponseType(typeof(List<MovimientoAnimalResponseDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    public async Task<ActionResult<List<MovimientoAnimalResponseDto>>> GetAll([FromServices] RanchAccessService access, [FromQuery] bool incluirEliminados = false, CancellationToken ct = default)
     {
         var query = db.MovimientosAnimales.AsNoTracking();
         if (!incluirEliminados)
@@ -23,17 +26,28 @@ public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValid
         var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
         query = query.Where(x => db.Animales.Any(a => a.IdAnimal == x.IdAnimal && ranchIds.Contains(a.IdRancho)));
 
-        return query.OrderBy(m => m.Fecha).ToListAsync(ct);
+        var items = await query.OrderBy(m => m.Fecha).Select(m => ToResponseDto(m)).ToListAsync(ct);
+        return Ok(items);
     }
 
     [HttpGet("{id:guid}")]
-    public async Task<ActionResult<MovimientoAnimal>> Get(Guid id, CancellationToken ct) =>
+    [ProducesResponseType(typeof(MovimientoAnimalResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<MovimientoAnimalResponseDto>> Get(Guid id, CancellationToken ct) =>
         await db.MovimientosAnimales.AsNoTracking().FirstOrDefaultAsync(m => m.IdMovimiento == id, ct) is { } item
-            ? Ok(item)
+            ? Ok(ToResponseDto(item))
             : NotFound();
 
     [HttpPost]
-    public async Task<ActionResult<MovimientoAnimal>> Create(MovimientoAnimalCreateDto dto, CancellationToken ct)
+    [ProducesResponseType(typeof(MovimientoAnimalResponseDto), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(MovimientoAnimalResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<MovimientoAnimalResponseDto>> Create(MovimientoAnimalCreateDto dto, CancellationToken ct)
     {
         var id = dto.IdMovimiento is { } clientId && clientId != Guid.Empty
             ? clientId
@@ -41,7 +55,7 @@ public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValid
 
         var existing = await db.MovimientosAnimales.AsNoTracking().FirstOrDefaultAsync(m => m.IdMovimiento == id, ct);
         if (existing is not null)
-            return Ok(existing);
+            return Ok(ToResponseDto(existing));
 
         var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor, ct);
         if (authorError is not null) return BadRequest(authorError);
@@ -99,10 +113,16 @@ public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValid
             return Conflict("No se pudo registrar el movimiento; verifica las referencias.");
         }
 
-        return CreatedAtAction(nameof(Get), new { id = movimiento.IdMovimiento }, movimiento);
+        return CreatedAtAction(nameof(Get), new { id = movimiento.IdMovimiento }, ToResponseDto(movimiento));
     }
 
     [HttpPut("{id:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Update(Guid id, MovimientoAnimalUpdateDto dto, CancellationToken ct)
     {
         await using var tx = await db.Database.BeginTransactionAsync(ct);
@@ -143,6 +163,10 @@ public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValid
     }
 
     [HttpDelete("{id:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         // Regla 06 y 08: Conservar historial de movimientos mediante borrado lógico.
@@ -158,4 +182,20 @@ public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValid
 
         return NoContent();
     }
+
+    private static MovimientoAnimalResponseDto ToResponseDto(MovimientoAnimal m) => new()
+    {
+        IdMovimiento = m.IdMovimiento,
+        IdAnimal = m.IdAnimal,
+        IdLoteOrigen = m.IdLoteOrigen,
+        IdLoteDestino = m.IdLoteDestino,
+        Tipo = m.Tipo,
+        Fecha = m.Fecha,
+        OrigenExterno = m.OrigenExterno,
+        DestinoExterno = m.DestinoExterno,
+        Motivo = m.Motivo,
+        IdAutor = m.IdAutor,
+        CreadoEn = m.CreadoEn,
+        VersionRegistro = m.VersionRegistro
+    };
 }

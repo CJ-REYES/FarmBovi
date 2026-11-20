@@ -61,3 +61,21 @@ public sealed class AlimentacionUpdateDto
     public Guid IdAutor { get; set; }
     public DateTime? EliminadoEn { get; set; }
 }
+
+public sealed class AlimentacionResponseDto
+{
+    public Guid IdAlimentacion { get; set; }
+    public Guid? IdAnimal { get; set; }
+    public Guid? IdLote { get; set; }
+    public string Alimento { get; set; } = string.Empty;
+    public string Racion { get; set; } = string.Empty;
+    public decimal Cantidad { get; set; }
+    public string Unidad { get; set; } = string.Empty;
+    public string Frecuencia { get; set; } = string.Empty;
+    public DateTime Inicio { get; set; }
+    public DateTime? Fin { get; set; }
+    public string? CambioDieta { get; set; }
+    public Guid IdAutor { get; set; }
+    public DateTime CreadoEn { get; set; }
+    public long VersionRegistro { get; set; }
+}

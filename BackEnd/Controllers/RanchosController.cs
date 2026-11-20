@@ -1,4 +1,5 @@
 using FarmBovi.Api.Data;
+using FarmBovi.Api.DTOs;
 using FarmBovi.Api.Models;
 using FarmBovi.Api.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -12,7 +13,10 @@ namespace FarmBovi.Api.Controllers;
 public sealed class RanchosController(FarmDbContext db, FarmDomainValidationService validator) : ControllerBase
 {
     [HttpGet]
-    public Task<List<Rancho>> GetAll([FromServices] RanchAccessService access, [FromQuery] bool incluirEliminados = false, CancellationToken ct = default)
+    [ProducesResponseType(typeof(List<RanchoResponseDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    public async Task<ActionResult<List<RanchoResponseDto>>> GetAll([FromServices] RanchAccessService access, [FromQuery] bool incluirEliminados = false, CancellationToken ct = default)
     {
         var query = db.Ranchos.AsNoTracking();
         if (!incluirEliminados)
@@ -22,41 +26,57 @@ public sealed class RanchosController(FarmDbContext db, FarmDomainValidationServ
         var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
         query = query.Where(x => ranchIds.Contains(x.IdRancho));
 
-        return query.ToListAsync(ct);
+        var items = await query.Select(r => ToResponseDto(r)).ToListAsync(ct);
+        return Ok(items);
     }
 
     [HttpGet("{id:guid}")]
-    public async Task<ActionResult<Rancho>> Get(Guid id, CancellationToken ct) =>
+    [ProducesResponseType(typeof(RanchoResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<RanchoResponseDto>> Get(Guid id, CancellationToken ct) =>
         await db.Ranchos.AsNoTracking().FirstOrDefaultAsync(r => r.IdRancho == id, ct) is { } item
-            ? Ok(item)
+            ? Ok(ToResponseDto(item))
             : NotFound();
 
     [HttpPost]
-    public async Task<ActionResult<Rancho>> Create(Rancho item, CancellationToken ct)
+    [ProducesResponseType(typeof(RanchoResponseDto), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(RanchoResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<RanchoResponseDto>> Create(RanchoCreateDto dto, CancellationToken ct)
     {
-        if (item.IdRancho == Guid.Empty)
-            item.IdRancho = Guid.NewGuid();
+        var id = dto.IdRancho is { } clientId && clientId != Guid.Empty
+            ? clientId
+            : Guid.NewGuid();
 
-        var existing = await db.Ranchos.AsNoTracking().FirstOrDefaultAsync(r => r.IdRancho == item.IdRancho, ct);
+        var existing = await db.Ranchos.AsNoTracking().FirstOrDefaultAsync(r => r.IdRancho == id, ct);
         if (existing is not null)
-            return Ok(existing);
+            return Ok(ToResponseDto(existing));
 
-        if (string.IsNullOrWhiteSpace(item.Nombre) ||
-            string.IsNullOrWhiteSpace(item.UbicacionGeneral) ||
-            string.IsNullOrWhiteSpace(item.Estado))
+        if (string.IsNullOrWhiteSpace(dto.Nombre) ||
+            string.IsNullOrWhiteSpace(dto.UbicacionGeneral) ||
+            string.IsNullOrWhiteSpace(dto.Estado))
         {
             return BadRequest("Nombre, ubicación general y estado del rancho son obligatorios.");
         }
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, item.IdAutor, ct);
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor, ct);
         if (authorError is not null) return BadRequest(authorError);
 
-        item.IdAutor = authorId;
-        item.Nombre = item.Nombre.Trim();
-        item.UbicacionGeneral = item.UbicacionGeneral.Trim();
-        item.Estado = item.Estado.Trim();
-        if (item.CreadoEn == default) item.CreadoEn = DateTime.UtcNow;
-        if (item.VersionRegistro <= 0) item.VersionRegistro = 1;
+        var item = new Rancho
+        {
+            IdRancho = id,
+            Nombre = dto.Nombre.Trim(),
+            UbicacionGeneral = dto.UbicacionGeneral.Trim(),
+            Estado = dto.Estado.Trim(),
+            IdAutor = authorId,
+            CreadoEn = DateTime.UtcNow,
+            VersionRegistro = 1
+        };
 
         db.Ranchos.Add(item);
         // Quien crea el rancho queda como su administrador para poder operarlo con las reglas por rancho.
@@ -81,23 +101,28 @@ public sealed class RanchosController(FarmDbContext db, FarmDomainValidationServ
             return Conflict("No se pudo crear el rancho.");
         }
 
-        return CreatedAtAction(nameof(Get), new { id = item.IdRancho }, item);
+        return CreatedAtAction(nameof(Get), new { id = item.IdRancho }, ToResponseDto(item));
     }
 
     [HttpPut("{id:guid}")]
-    public async Task<IActionResult> Update(Guid id, Rancho input, CancellationToken ct)
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Update(Guid id, RanchoUpdateDto dto, CancellationToken ct)
     {
         var item = await db.Ranchos.FindAsync([id], ct);
         if (item is null) return NotFound();
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, input.IdAutor, ct);
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, Guid.Empty, ct);
         if (authorError is not null) return BadRequest(authorError);
 
-        item.Nombre = input.Nombre.Trim();
-        item.UbicacionGeneral = input.UbicacionGeneral.Trim();
-        item.Estado = input.Estado.Trim();
+        item.Nombre = dto.Nombre.Trim();
+        item.UbicacionGeneral = dto.UbicacionGeneral.Trim();
+        item.Estado = dto.Estado.Trim();
         item.IdAutor = authorId;
-        item.EliminadoEn = input.EliminadoEn;
         item.VersionRegistro++;
 
         try
@@ -113,6 +138,11 @@ public sealed class RanchosController(FarmDbContext db, FarmDomainValidationServ
     }
 
     [HttpDelete("{id:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         var item = await db.Ranchos.FindAsync([id], ct);
@@ -135,4 +165,15 @@ public sealed class RanchosController(FarmDbContext db, FarmDomainValidationServ
 
         return NoContent();
     }
+
+    private static RanchoResponseDto ToResponseDto(Rancho r) => new()
+    {
+        IdRancho = r.IdRancho,
+        Nombre = r.Nombre,
+        UbicacionGeneral = r.UbicacionGeneral,
+        Estado = r.Estado,
+        IdAutor = r.IdAutor,
+        CreadoEn = r.CreadoEn,
+        VersionRegistro = r.VersionRegistro
+    };
 }

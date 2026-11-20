@@ -54,3 +54,19 @@ public sealed class MovimientoAnimalUpdateDto
     public Guid IdAutor { get; set; }
     public DateTime? EliminadoEn { get; set; }
 }
+
+public sealed class MovimientoAnimalResponseDto
+{
+    public Guid IdMovimiento { get; set; }
+    public Guid IdAnimal { get; set; }
+    public Guid? IdLoteOrigen { get; set; }
+    public Guid? IdLoteDestino { get; set; }
+    public string Tipo { get; set; } = string.Empty;
+    public DateTime Fecha { get; set; }
+    public string? OrigenExterno { get; set; }
+    public string? DestinoExterno { get; set; }
+    public string? Motivo { get; set; }
+    public Guid IdAutor { get; set; }
+    public DateTime CreadoEn { get; set; }
+    public long VersionRegistro { get; set; }
+}
