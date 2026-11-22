@@ -143,8 +143,20 @@ export const PermissionsManagerService = {
     state: ManagedPermissionState;
     userMessage?: string;
   }> {
-    const device = DeviceCapabilitiesService.getSnapshot();
-    if (!device.capabilities.cameraAvailable || !navigator.mediaDevices?.getUserMedia) {
+    if (typeof window !== 'undefined' && window.isSecureContext === false) {
+      return {
+        stream: null,
+        state: 'unavailable',
+        userMessage:
+          'El acceso directo a la cámara requiere HTTPS o localhost. Utiliza el selector de archivos para adjuntar una fotografía.'
+      };
+    }
+
+    if (
+      typeof navigator === 'undefined' ||
+      !navigator.mediaDevices ||
+      typeof navigator.mediaDevices.getUserMedia !== 'function'
+    ) {
       await this.refreshPassiveStates();
       return {
         stream: null,
@@ -154,15 +166,88 @@ export const PermissionsManagerService = {
       };
     }
 
-    try {
-      const constraints: MediaStreamConstraints = {
+    const maximizeVideoTrackResolution = async (stream: MediaStream): Promise<void> => {
+      const videoTrack =
+        typeof stream.getVideoTracks === 'function' ? stream.getVideoTracks()[0] : undefined;
+      if (
+        !videoTrack ||
+        typeof videoTrack.getCapabilities !== 'function' ||
+        typeof videoTrack.applyConstraints !== 'function'
+      ) {
+        return;
+      }
+
+      try {
+        const capabilities = videoTrack.getCapabilities() as MediaTrackCapabilities & {
+          focusMode?: string[];
+        };
+        const currentSettings =
+          typeof videoTrack.getSettings === 'function' ? videoTrack.getSettings() : {};
+
+        const maxWidth = capabilities.width?.max;
+        const maxHeight = capabilities.height?.max;
+        const nextConstraints: Record<string, unknown> = {};
+
+        if (typeof maxWidth === 'number' && maxWidth > (currentSettings.width ?? 0)) {
+          nextConstraints.width = { ideal: maxWidth };
+        }
+        if (typeof maxHeight === 'number' && maxHeight > (currentSettings.height ?? 0)) {
+          nextConstraints.height = { ideal: maxHeight };
+        }
+        if (
+          Array.isArray(capabilities.focusMode) &&
+          capabilities.focusMode.includes('continuous')
+        ) {
+          nextConstraints.focusMode = 'continuous';
+        }
+
+        if (Object.keys(nextConstraints).length > 0) {
+          await videoTrack.applyConstraints(nextConstraints as MediaTrackConstraints);
+        }
+      } catch {
+        // Ignorar si el controlador o navegador no admite ajustar dinámicamente el track de video
+      }
+    };
+
+    const requestWithFallback = async (): Promise<MediaStream> => {
+      const preferredFacing = preferRearCamera ? 'environment' : 'user';
+      const preferredConstraints: MediaStreamConstraints = {
         audio: false,
-        video: preferRearCamera
-          ? { facingMode: { ideal: 'environment' } }
-          : true
+        video: {
+          facingMode: { ideal: preferredFacing },
+          width: { ideal: 4096 },
+          height: { ideal: 2160 }
+        }
       };
 
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      try {
+        return await navigator.mediaDevices.getUserMedia(preferredConstraints);
+      } catch (firstErr) {
+        const name = firstErr instanceof Error ? firstErr.name : '';
+        if (name === 'OverconstrainedError' || name === 'ConstraintNotSatisfiedError') {
+          try {
+            return await navigator.mediaDevices.getUserMedia({
+              audio: false,
+              video: { facingMode: { ideal: preferredFacing } }
+            });
+          } catch (secondErr) {
+            const secondName = secondErr instanceof Error ? secondErr.name : '';
+            if (
+              secondName === 'OverconstrainedError' ||
+              secondName === 'ConstraintNotSatisfiedError'
+            ) {
+              return await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+            }
+            throw secondErr;
+          }
+        }
+        throw firstErr;
+      }
+    };
+
+    try {
+      const stream = await requestWithFallback();
+      await maximizeVideoTrackResolution(stream);
       emit({
         ...currentPermissions,
         camera: 'granted',
@@ -170,8 +255,12 @@ export const PermissionsManagerService = {
       });
       return { stream, state: 'granted' };
     } catch (err) {
-      const errorName = err instanceof DOMException ? err.name : '';
-      if (errorName === 'NotAllowedError' || errorName === 'PermissionDeniedError') {
+      const errorName = err instanceof Error ? err.name : '';
+      if (
+        errorName === 'NotAllowedError' ||
+        errorName === 'PermissionDeniedError' ||
+        errorName === 'SecurityError'
+      ) {
         emit({
           ...currentPermissions,
           camera: 'denied',
@@ -181,7 +270,7 @@ export const PermissionsManagerService = {
           stream: null,
           state: 'denied',
           userMessage:
-            'Permiso de cámara rechazado. Puedes habilitarlo en la configuración del navegador o adjuntar una fotografía desde el selector de archivos.'
+            'Permiso de cámara rechazado. Habilítalo en la configuración del navegador o adjunta una fotografía desde el selector de archivos.'
         };
       }
 
@@ -195,7 +284,16 @@ export const PermissionsManagerService = {
           stream: null,
           state: 'unavailable',
           userMessage:
-            'No se detectó ninguna cámara física conectada. Usa el selector de archivos para adjuntar evidencia.'
+            'No se detectó ninguna cámara física conectada. Usa el selector de archivos para adjuntar una fotografía.'
+        };
+      }
+
+      if (errorName === 'NotReadableError' || errorName === 'TrackStartError') {
+        return {
+          stream: null,
+          state: 'unknown',
+          userMessage:
+            'La cámara está siendo utilizada por otra aplicación o no respondió. Cierra otras apps o adjunta la foto desde archivos.'
         };
       }
 
@@ -203,7 +301,7 @@ export const PermissionsManagerService = {
         stream: null,
         state: 'unknown',
         userMessage:
-          'No fue posible iniciar la cámara en este momento (puede estar ocupada por otra aplicación). Puedes seleccionar una foto desde archivos.'
+          'No fue posible iniciar la cámara en este momento. Puedes seleccionar una foto desde tus archivos.'
       };
     }
   },

@@ -3,6 +3,8 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { db } from '../../lib/database/db';
+import { SyncScheduler } from '../../services/sync/sync-scheduler';
+import { SystemNotificationsService } from '../../services/system-notifications.service';
 import AlertsPage from './AlertsPage';
 
 const RANCH_ID = '11111111-1111-4111-8111-111111111111';
@@ -113,6 +115,7 @@ describe('AlertsPage — Recordatorios, vencidas/próximas, filtros y tratamient
   beforeEach(async () => {
     vi.restoreAllMocks();
     window.localStorage.clear();
+    SystemNotificationsService.resetInMemoryCache();
     await db.alerts.clear();
     await db.outbox.clear();
     await db.ranches.clear();
@@ -230,5 +233,23 @@ describe('AlertsPage — Recordatorios, vencidas/próximas, filtros y tratamient
       const remaining = await db.alerts.filter((a) => !a.deletedAt).count();
       expect(remaining).toBe(1);
     });
+  });
+
+  it('permite consultar y buscar el aviso de Modo Offline en Alertas del Sistema', async () => {
+    const user = userEvent.setup();
+    await SyncScheduler.refreshState(false);
+
+    renderPage();
+    await screen.findByText(/Alertas del Sistema/i);
+
+    const searchInput = screen.getByPlaceholderText(/Buscar recordatorio, arete, offline/i);
+    await user.type(searchInput, 'offline');
+
+    expect((await screen.findAllByText(/Modo Offline Activo/i)).length).toBeGreaterThan(0);
+
+    // También accesible desde el filtro "Sistema"
+    const timingGroup = screen.getByRole('group', { name: /Filtrar por vencimiento/i });
+    await user.click(within(timingGroup).getByRole('button', { name: /Sistema/i }));
+    expect(screen.getAllByText(/Modo Offline Activo/i).length).toBeGreaterThan(0);
   });
 });

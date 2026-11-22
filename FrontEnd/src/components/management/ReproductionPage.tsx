@@ -16,7 +16,6 @@ import {
   Search,
   Sparkles,
   Trash2,
-  WifiOff,
   X
 } from 'lucide-react';
 import { useConnectivity } from '../../hooks/useConnectivity';
@@ -414,19 +413,6 @@ export default function ReproductionPage() {
           </button>
         </div>
       </header>
-
-      {!isOnline && (
-        <div
-          role="status"
-          className="p-3 rounded-xl bg-status-warning/15 border border-status-warning/35 text-brand-dark text-[12px] flex items-center gap-2"
-        >
-          <WifiOff size={16} className="text-status-warning shrink-0" />
-          <span>
-            Trabajando sin conexión. Los eventos reproductivos se guardan localmente en IndexedDB y
-            permanecen en cola pendiente.
-          </span>
-        </div>
-      )}
 
       {backendNotice && (
         <div

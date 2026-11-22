@@ -69,7 +69,8 @@ const CLIENT_ENTITY_TO_BACKEND: Partial<Record<SyncEntityName, string>> = {
   feedingRecords: 'Alimentacion',
   reproductionRecords: 'EventoReproductivo',
   movements: 'MovimientoAnimal',
-  alerts: 'Recordatorio'
+  alerts: 'Recordatorio',
+  media: 'ArchivoMultimedia'
 };
 
 function mapOperationToBackend(op: OutboxOperationType): 'Crear' | 'Actualizar' | 'Eliminar' {

@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { db } from '../../lib/database/db';
 import { CattleProvider } from '../../context/CattleContext';
 import { SyncScheduler } from '../../services/sync/sync-scheduler';
+import { SystemNotificationsService } from '../../services/system-notifications.service';
 import { PwaUpdateManager } from '../../pwa/update-manager';
 import Topbar from '../layout/Topbar';
 import PwaStatus from './PwaStatus';
@@ -16,6 +17,8 @@ const ANIMAL_ID = '22222222-2222-4222-8222-222222222222';
 describe('FE-03 — Experiencia Offline (Topbar, PwaStatus, Reconexión y Datos Locales)', () => {
   beforeEach(async () => {
     vi.restoreAllMocks();
+    window.localStorage.clear();
+    SystemNotificationsService.resetInMemoryCache();
     await db.ranches.clear();
     await db.cattle.clear();
     await db.outbox.clear();
@@ -111,5 +114,34 @@ describe('FE-03 — Experiencia Offline (Topbar, PwaStatus, Reconexión y Datos 
       expect(screen.getByText(/Datos Disponibles Localmente \(2\)/i)).toBeInTheDocument();
     });
     expect(screen.getByText(/Bovinos:/i)).toBeInTheDocument();
+  });
+
+  it('al entrar offline muestra notificación emergente temporal que se oculta automáticamente y queda registrada en Alertas del Sistema', async () => {
+    await SyncScheduler.refreshState(false);
+    vi.useFakeTimers();
+
+    try {
+      render(
+        <MemoryRouter>
+          <PwaStatus />
+        </MemoryRouter>
+      );
+
+      // Al entrar offline aparece inmediatamente el toast emergente
+      expect(screen.getByText('Modo Offline Activo')).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /Ver en Alertas del sistema/i })).toBeInTheDocument();
+
+      // Tras unos segundos el toast desaparece automáticamente
+      act(() => {
+        vi.advanceTimersByTime(6000);
+      });
+      expect(screen.queryByText('Modo Offline Activo')).not.toBeInTheDocument();
+
+      // Queda registrada en el historial de alertas del sistema
+      const history = SystemNotificationsService.getHistory();
+      expect(history.some((item) => item.titulo === 'Modo Offline Activo')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -67,7 +67,9 @@ const SERVER_ENTITY_TO_CLIENT: Record<string, SyncEntityName> = {
   movements: 'movements',
   recordatorio: 'alerts',
   recordatorios: 'alerts',
-  alerts: 'alerts'
+  alerts: 'alerts',
+  archivomultimedia: 'media',
+  media: 'media'
 };
 
 function resolveClientEntityName(rawEntity: unknown): SyncEntityName | null {

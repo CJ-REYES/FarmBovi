@@ -16,7 +16,11 @@ import {
   AlertCircle,
   AlertOctagon,
   Archive,
+  Camera,
   CheckCircle2,
+  Clock,
+  Eye,
+  Image as ImageIcon,
   Loader2,
   X
 } from 'lucide-react';
@@ -25,6 +29,7 @@ import type { Cattle } from '../../types/cattle';
 import type {
   LocalGenealogy,
   LocalHealthRecord,
+  LocalMedia,
   LocalMovement,
   LocalReproductionRecord,
   LocalWeighing
@@ -32,11 +37,14 @@ import type {
 import {
   GenealogyRepository,
   HealthRepository,
+  MediaRepository,
   MovementRepository,
   ReproductionRepository,
   WeighingRepository
 } from '../../lib/database/repositories';
 import { calculateAnimalAge } from '../../services/cattle.validation';
+import { formatBytesHuman } from '../../services/photo-capture.service';
+import BlobImage from '../shared/BlobImage';
 import EmptyState from '../ui/EmptyState';
 
 interface DetailLocationState {
@@ -50,6 +58,7 @@ interface AnimalHistory {
   reproductionRecords: LocalReproductionRecord[];
   genealogy?: LocalGenealogy;
   descendantsCount: number;
+  photos: LocalMedia[];
 }
 
 function formatDateDisplay(value: string | null | undefined): string {
@@ -74,8 +83,10 @@ export default function CattleDetailPage() {
     weighings: [],
     healthRecords: [],
     reproductionRecords: [],
-    descendantsCount: 0
+    descendantsCount: 0,
+    photos: []
   });
+  const [inspectPhoto, setInspectPhoto] = useState<LocalMedia | null>(null);
   const [loading, setLoading] = useState<boolean>(Boolean(id));
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(
@@ -102,15 +113,23 @@ export default function CattleDetailPage() {
         setAnimal(record);
         setErrorMsg(null);
 
-        const [movements, weighings, healthRecords, reproductionRecords, genealogy, descendants] =
-          await Promise.all([
-            MovementRepository.getByCattleId(record.id),
-            WeighingRepository.getByCattleId(record.id),
-            HealthRepository.getByCattleId(record.id),
-            ReproductionRepository.getByCattleId(record.id),
-            GenealogyRepository.getByCattleId(record.id),
-            GenealogyRepository.getDescendantsOf(record.id)
-          ]);
+        const [
+          movements,
+          weighings,
+          healthRecords,
+          reproductionRecords,
+          genealogy,
+          descendants,
+          photos
+        ] = await Promise.all([
+          MovementRepository.getByCattleId(record.id),
+          WeighingRepository.getByCattleId(record.id),
+          HealthRepository.getByCattleId(record.id),
+          ReproductionRepository.getByCattleId(record.id),
+          GenealogyRepository.getByCattleId(record.id),
+          GenealogyRepository.getDescendantsOf(record.id),
+          MediaRepository.getByCattleId(record.id)
+        ]);
 
         if (!active) return;
         setHistory({
@@ -119,7 +138,8 @@ export default function CattleDetailPage() {
           healthRecords,
           reproductionRecords,
           genealogy,
-          descendantsCount: descendants.length
+          descendantsCount: descendants.length,
+          photos
         });
       } catch (err) {
         if (!active) return;
@@ -147,6 +167,16 @@ export default function CattleDetailPage() {
     if (!animal?.idLote) return 'Sin potrero / lote asignado';
     return lots.find((l) => l.id === animal.idLote)?.nombre || animal.idLote;
   }, [animal, lots]);
+
+  const profilePhoto = useMemo(
+    () => history.photos.find((p) => p.tipo === 'FotoPerfil') ?? null,
+    [history.photos]
+  );
+
+  const boviScalePhotos = useMemo(
+    () => history.photos.filter((p) => p.tipo === 'BoviScaleVision'),
+    [history.photos]
+  );
 
   const handleDeactivate = async () => {
     if (!animal || isDeactivating) return;
@@ -333,10 +363,72 @@ export default function CattleDetailPage() {
           <div className="bg-surface-white border border-border-light rounded-xl shadow-sm overflow-hidden">
             <div className="h-2 bg-brand-primary w-full" />
             <div className="p-6 space-y-5">
-              <div className="flex items-center gap-2.5 text-brand-slate border-b border-border-light pb-3">
-                <Info size={18} className="text-brand-primary" />
-                <h2 className="font-bold text-[16px]">Ficha de Identificación</h2>
+              <div className="flex items-center justify-between gap-2 text-brand-slate border-b border-border-light pb-3">
+                <div className="flex items-center gap-2.5">
+                  <Info size={18} className="text-brand-primary" />
+                  <h2 className="font-bold text-[16px]">Ficha de Identificación</h2>
+                </div>
+                {!animal.deletedAt && (
+                  <Link
+                    to={`/boviscale?animal=${animal.id}&tipo=FotoPerfil`}
+                    className="text-[11px] font-semibold text-brand-primary hover:underline inline-flex items-center gap-1"
+                  >
+                    <Camera size={13} />
+                    {profilePhoto ? 'Cambiar foto' : 'Añadir foto'}
+                  </Link>
+                )}
               </div>
+
+              {/* Foto de perfil del animal (identificación visual) */}
+              {profilePhoto ? (
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => setInspectPhoto(profilePhoto)}
+                    aria-label={`Ampliar foto de perfil de ${animal.arete}`}
+                    className="group relative block w-full h-52 rounded-lg overflow-hidden border border-border-light bg-black/5 cursor-pointer"
+                  >
+                    <BlobImage
+                      blob={profilePhoto.blobData}
+                      alt={`Foto de perfil de ${animal.arete}`}
+                      className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-200"
+                    />
+                    <span className="absolute bottom-2 right-2 px-2 py-1 rounded-md bg-black/65 text-white text-[11px] font-semibold inline-flex items-center gap-1">
+                      <Eye size={12} /> Ampliar
+                    </span>
+                  </button>
+                  <div className="flex items-center justify-between gap-2 text-[11px] text-brand-slate/65">
+                    <span>
+                      Foto de perfil · {formatDateDisplay(profilePhoto.fechaCaptura)}
+                    </span>
+                    <span
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-semibold ${
+                        profilePhoto.estadoArchivo === 'subido'
+                          ? 'bg-status-success/15 text-status-success'
+                          : 'bg-status-warning/20 text-brand-dark'
+                      }`}
+                    >
+                      <Clock size={10} />
+                      {profilePhoto.estadoArchivo === 'subido' ? 'Sincronizada' : 'Pendiente subida'}
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-dashed border-border-dark/60 bg-surface-app/40 p-4 text-center space-y-2">
+                  <ImageIcon size={26} className="mx-auto text-brand-slate/35" />
+                  <p className="text-[12px] font-semibold text-brand-slate/75">
+                    Sin fotografía de perfil
+                  </p>
+                  {!animal.deletedAt && (
+                    <Link
+                      to={`/boviscale?animal=${animal.id}&tipo=FotoPerfil`}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-brand-primary/10 hover:bg-brand-primary/20 text-brand-primary text-[12px] font-semibold transition-colors"
+                    >
+                      <Camera size={13} /> Tomar o subir foto de perfil
+                    </Link>
+                  )}
+                </div>
+              )}
 
               <dl className="grid grid-cols-2 gap-4 text-[14px]">
                 <div>
@@ -432,6 +524,57 @@ export default function CattleDetailPage() {
                 </p>
                 <p>Versión de registro: v{animal.versionRegistro}</p>
               </div>
+            </div>
+          </div>
+
+          {/* Evidencia fotográfica BoviScale (perfil lateral para pesaje) */}
+          <div className="bg-surface-white border border-border-light rounded-xl shadow-sm overflow-hidden">
+            <div className="px-5 py-3.5 border-b border-border-light bg-surface-app/30 flex items-center justify-between gap-2">
+              <h3 className="font-bold text-[14px] text-brand-slate flex items-center gap-2">
+                <Camera size={16} className="text-brand-primary" />
+                Fotos BoviScale ({boviScalePhotos.length})
+              </h3>
+              {!animal.deletedAt && (
+                <Link
+                  to={`/boviscale?animal=${animal.id}&tipo=BoviScaleVision`}
+                  className="text-[12px] font-semibold text-brand-primary hover:underline"
+                >
+                  Capturar
+                </Link>
+              )}
+            </div>
+            <div className="p-4">
+              {boviScalePhotos.length === 0 ? (
+                <p className="text-[12px] text-brand-slate/65 text-center py-3">
+                  Sin capturas laterales de BoviScale registradas para este animal.
+                </p>
+              ) : (
+                <div className="grid grid-cols-2 gap-2.5">
+                  {boviScalePhotos.slice(0, 4).map((photo) => (
+                    <button
+                      key={photo.id}
+                      type="button"
+                      onClick={() => setInspectPhoto(photo)}
+                      aria-label={`Ver foto BoviScale ${photo.nombreArchivo}`}
+                      className="group text-left rounded-lg overflow-hidden border border-border-light bg-surface-app/30 hover:border-brand-primary transition-colors cursor-pointer"
+                    >
+                      <div className="h-24 w-full overflow-hidden bg-black/5">
+                        <BlobImage
+                          blob={photo.blobData}
+                          alt={`Foto BoviScale de ${animal.arete}`}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                        />
+                      </div>
+                      <div className="px-2 py-1.5 text-[10px] text-brand-slate/70">
+                        <p className="font-semibold text-brand-slate truncate">
+                          {formatDateDisplay(photo.fechaCaptura)}
+                        </p>
+                        <p>{formatBytesHuman(photo.tamanoBytes)}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -616,6 +759,55 @@ export default function CattleDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Modal de inspección ampliada de fotografía */}
+      {inspectPhoto && (
+        <div
+          className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="cattle-inspect-photo-title"
+          onClick={() => setInspectPhoto(null)}
+        >
+          <div
+            className="bg-surface-white border border-border-light rounded-xl shadow-2xl max-w-2xl w-full overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-3.5 border-b border-border-light flex items-center justify-between gap-2">
+              <div>
+                <h3
+                  id="cattle-inspect-photo-title"
+                  className="font-bold text-[15px] text-brand-forest"
+                >
+                  {animal.arete} —{' '}
+                  {inspectPhoto.tipo === 'FotoPerfil'
+                    ? 'Foto de perfil'
+                    : 'BoviScale (Perfil lateral)'}
+                </h3>
+                <p className="text-[11px] text-brand-slate/65">
+                  {inspectPhoto.nombreArchivo} · {formatBytesHuman(inspectPhoto.tamanoBytes)} ·{' '}
+                  {formatDateDisplay(inspectPhoto.fechaCaptura)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setInspectPhoto(null)}
+                aria-label="Cerrar vista ampliada"
+                className="p-1.5 rounded-md text-brand-slate/70 hover:bg-surface-secondary cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-4 bg-black/5 flex items-center justify-center max-h-[70vh]">
+              <BlobImage
+                blob={inspectPhoto.blobData}
+                alt={inspectPhoto.nombreArchivo}
+                className="max-w-full max-h-[62vh] object-contain rounded-lg"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
