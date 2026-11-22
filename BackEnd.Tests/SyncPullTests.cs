@@ -17,7 +17,7 @@ public sealed class SyncPullTests
             .UseInMemoryDatabase(name)
             .Options);
 
-    private static SyncController Controller(FarmDbContext db, Guid userId) => new(db)
+    private static SyncController Controller(FarmDbContext db, int userId) => new(db)
     {
         ControllerContext = new ControllerContext
         {
@@ -32,16 +32,16 @@ public sealed class SyncPullTests
         }
     };
 
-    private static async Task<(Guid UserA, Guid UserB, Guid RanchA, Guid RanchB)> SeedAsync(
+    private static async Task<(int UserA, int UserB, Guid RanchA, Guid RanchB)> SeedAsync(
         FarmDbContext db)
     {
-        var userA = Guid.NewGuid();
-        var userB = Guid.NewGuid();
+        const int userA = 1;
+        const int userB = 2;
         var ranchA = Guid.NewGuid();
         var ranchB = Guid.NewGuid();
         db.Usuarios.AddRange(
-            new Usuario { IdUsuario = userA, Nombre = "A", Correo = $"a-{userA:N}@test.local", Contrasena = "hash", Estado = "Activo" },
-            new Usuario { IdUsuario = userB, Nombre = "B", Correo = $"b-{userB:N}@test.local", Contrasena = "hash", Estado = "Activo" });
+            new Usuario { Id = userA, Nombre = "A", Correo = $"a-{userA}@test.local", Contrasena = "hash", Estado = "Activo" },
+            new Usuario { Id = userB, Nombre = "B", Correo = $"b-{userB}@test.local", Contrasena = "hash", Estado = "Activo" });
         db.Ranchos.AddRange(
             new Rancho { IdRancho = ranchA, Nombre = "Rancho A", Estado = "Activo", IdAutor = userA },
             new Rancho { IdRancho = ranchB, Nombre = "Rancho B", Estado = "Activo", IdAutor = userB });
@@ -93,7 +93,7 @@ public sealed class SyncPullTests
             Change(Guid.NewGuid(), nameof(Animal), Guid.NewGuid(), "Crear", timestamp, "{}"));
         await db.SaveChangesAsync();
 
-        var controller = Controller(db, db.Usuarios.Single(u => u.Nombre == "A").IdUsuario);
+        var controller = Controller(db, db.Usuarios.Single(u => u.Nombre == "A").Id);
         var first = OkValue(await controller.GetCambios("cattle", null, ranchId, null, null, 1));
         Assert.Equal("cattle", first.Entidad);
         Assert.Single(first.Cambios);
@@ -131,7 +131,7 @@ public sealed class SyncPullTests
         var forbidden = await controller.GetCambios("cattle", ranchA, null, null, null, 100);
         Assert.IsType<ForbidResult>(forbidden.Result);
 
-        var invalidCursor = await Controller(db, db.Usuarios.First().IdUsuario)
+        var invalidCursor = await Controller(db, db.Usuarios.First().Id)
             .GetCambios("cattle", ranchA, null, "no-es-un-cursor", null, 100);
         Assert.IsType<BadRequestObjectResult>(invalidCursor.Result);
     }
@@ -196,7 +196,7 @@ public sealed class SyncPullTests
     private static string TreatmentJson(Guid eventId) =>
         "{\"IdEventoSanitario\":\"" + eventId + "\",\"Producto\":\"Ivermectina\",\"Dosis\":5,\"UnidadDosis\":\"ml\",\"FechaInicio\":\"2026-11-17T00:00:00Z\"}";
 
-    private static async Task<Guid> SeedHealthEventAsync(FarmDbContext db, Guid userId, Guid ranchId)
+    private static async Task<Guid> SeedHealthEventAsync(FarmDbContext db, int userId, Guid ranchId)
     {
         var animalId = Guid.NewGuid();
         var eventId = Guid.NewGuid();

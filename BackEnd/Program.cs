@@ -98,20 +98,13 @@ if (app.Environment.IsDevelopment())
 {
     app.UseDeveloperExceptionPage();
 
-    await using var scope = app.Services.CreateAsyncScope();
-    var dbContext = scope.ServiceProvider.GetRequiredService<FarmDbContext>();
-    
-    // 1. Aplica migraciones automáticamente al iniciar
-    await dbContext.Database.MigrateAsync();
-
-    // 2. Genera un hash criptográfico válido con PasswordHasher y lo actualiza directamente en la BD
-    var hasher = new Microsoft.AspNetCore.Identity.PasswordHasher<object>();
-    var hashedPassword = hasher.HashPassword(new object(), "miPassword123");
-
-    await dbContext.Database.ExecuteSqlRawAsync(
-        "UPDATE usuario SET Contrasena = {0} WHERE Correo = 'prueba@farmbovi.com';", 
-        hashedPassword
-    );
+    var applyMigrationsOnStartup = builder.Configuration.GetValue<bool>("Database:ApplyMigrationsOnStartup");
+    if (applyMigrationsOnStartup)
+    {
+        await using var scope = app.Services.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FarmDbContext>();
+        await dbContext.Database.MigrateAsync();
+    }
 
     app.UseSwagger();
     app.UseSwaggerUI();

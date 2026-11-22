@@ -1,10 +1,9 @@
 using FarmBovi.Api.Data;
 using FarmBovi.Api.Models;
+using FarmBovi.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using System.Security.Claims;
-using System.IdentityModel.Tokens.Jwt;
 
 namespace FarmBovi.Api.Controllers;
 
@@ -12,64 +11,61 @@ namespace FarmBovi.Api.Controllers;
 [ApiController]
 [Route("api/alimentacion")]
 [Route("api/feeding")]
-public sealed class AlimentacionController(FarmDbContext db) : ControllerBase
+public sealed class AlimentacionController(FarmDbContext db, RanchAccessService access) : ControllerBase
 {
-    private int? GetCurrentUserId()
+    private async Task<(Guid? RanchId, IActionResult? Error)> ResolveAndValidateTargetRanchAsync(
+        int userId,
+        Guid? idAnimal,
+        Guid? idLote,
+        CancellationToken ct)
     {
-        var rawClaim = User.FindFirstValue(ClaimTypes.NameIdentifier)
-            ?? User.FindFirstValue(JwtRegisteredClaimNames.Sub)
-            ?? User.FindFirstValue("sub")
-            ?? User.FindFirstValue("idUsuario");
-
-        if (!string.IsNullOrWhiteSpace(rawClaim) && int.TryParse(rawClaim, out var userId) && userId > 0)
-            return userId;
-
-        return null;
-    }
-
-    private async Task<bool> UserHasAccessToRanchoAsync(int userId, Guid idRancho, CancellationToken ct)
-    {
-        return await db.UsuarioRanchos
-            .AnyAsync(ur => ur.IdUsuario == userId && ur.IdRancho == idRancho, ct);
-    }
-
-    private async Task<bool> UserHasAccessToAlimentacionAsync(int userId, Alimentacion item, CancellationToken ct)
-    {
-        if (item.IdAnimal.HasValue)
+        Guid? animalRanchId = null;
+        if (idAnimal.HasValue && idAnimal.Value != Guid.Empty)
         {
-            var idRancho = await db.Animales
-                .Where(a => a.IdAnimal == item.IdAnimal.Value)
+            animalRanchId = await db.Animales.AsNoTracking()
+                .Where(a => a.IdAnimal == idAnimal.Value)
                 .Select(a => (Guid?)a.IdRancho)
                 .FirstOrDefaultAsync(ct);
 
-            if (idRancho.HasValue)
-                return await UserHasAccessToRanchoAsync(userId, idRancho.Value, ct);
+            if (!animalRanchId.HasValue || animalRanchId.Value == Guid.Empty)
+                return (null, BadRequest("El animal indicado no existe."));
         }
 
-        if (item.IdLote.HasValue)
+        Guid? loteRanchId = null;
+        if (idLote.HasValue && idLote.Value != Guid.Empty)
         {
-            var idRancho = await db.Lotes
-                .Where(l => l.IdLote == item.IdLote.Value)
+            loteRanchId = await db.Lotes.AsNoTracking()
+                .Where(l => l.IdLote == idLote.Value)
                 .Select(l => (Guid?)l.IdRancho)
                 .FirstOrDefaultAsync(ct);
 
-            if (idRancho.HasValue)
-                return await UserHasAccessToRanchoAsync(userId, idRancho.Value, ct);
+            if (!loteRanchId.HasValue || loteRanchId.Value == Guid.Empty)
+                return (null, BadRequest("El lote indicado no existe."));
         }
 
-        return false;
+        if (animalRanchId.HasValue && loteRanchId.HasValue && animalRanchId.Value != loteRanchId.Value)
+            return (null, BadRequest("El animal y el lote indicados pertenecen a ranchos distintos."));
+
+        var targetRanchId = animalRanchId ?? loteRanchId;
+        if (!targetRanchId.HasValue)
+            return (null, BadRequest("Debe indicar un idAnimal o idLote válido."));
+
+        if (!await access.CanAccessAsync(userId, targetRanchId.Value, ct))
+            return (null, Forbid());
+
+        return (targetRanchId.Value, null);
     }
 
     [HttpGet]
-    public async Task<ActionResult<List<Alimentacion>>> GetAll([FromQuery] Guid? idRancho, [FromQuery] bool incluirEliminados = false, CancellationToken ct = default)
+    public async Task<ActionResult<List<Alimentacion>>> GetAll(
+        [FromQuery] Guid? idRancho,
+        [FromQuery] bool incluirEliminados = false,
+        CancellationToken ct = default)
     {
-        var userId = GetCurrentUserId();
-        if (userId == null) return Unauthorized();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
-        var ranchosAutorizadosIds = await db.UsuarioRanchos
-            .Where(ur => ur.IdUsuario == userId.Value)
-            .Select(ur => ur.IdRancho)
-            .ToListAsync(ct);
+        var ranchosAutorizadosIds = await access.ActiveRanchIds(userId.Value).Distinct().ToListAsync(ct);
 
         var query = db.Alimentaciones.AsNoTracking();
         if (!incluirEliminados)
@@ -78,17 +74,16 @@ public sealed class AlimentacionController(FarmDbContext db) : ControllerBase
         if (idRancho.HasValue && idRancho.Value != Guid.Empty)
         {
             if (!ranchosAutorizadosIds.Contains(idRancho.Value))
-            {
                 return Forbid();
-            }
-            query = query.Where(a => 
+
+            query = query.Where(a =>
                 (a.IdAnimal.HasValue && db.Animales.Any(an => an.IdAnimal == a.IdAnimal.Value && an.IdRancho == idRancho.Value)) ||
                 (a.IdLote.HasValue && db.Lotes.Any(l => l.IdLote == a.IdLote.Value && l.IdRancho == idRancho.Value))
             );
         }
         else
         {
-            query = query.Where(a => 
+            query = query.Where(a =>
                 (a.IdAnimal.HasValue && db.Animales.Any(an => an.IdAnimal == a.IdAnimal.Value && ranchosAutorizadosIds.Contains(an.IdRancho))) ||
                 (a.IdLote.HasValue && db.Lotes.Any(l => l.IdLote == a.IdLote.Value && ranchosAutorizadosIds.Contains(l.IdRancho)))
             );
@@ -99,37 +94,34 @@ public sealed class AlimentacionController(FarmDbContext db) : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
-    public async Task<ActionResult<Alimentacion>> Get(Guid id, CancellationToken ct)
+    public async Task<IActionResult> Get(Guid id, CancellationToken ct)
     {
-        var userId = GetCurrentUserId();
-        if (userId == null) return Unauthorized();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
         var item = await db.Alimentaciones.AsNoTracking().FirstOrDefaultAsync(a => a.IdAlimentacion == id, ct);
         if (item is null) return NotFound();
 
-        if (!await UserHasAccessToAlimentacionAsync(userId.Value, item, ct))
-        {
-            return Forbid();
-        }
+        var (_, error) = await ResolveAndValidateTargetRanchAsync(userId.Value, item.IdAnimal, item.IdLote, ct);
+        if (error is not null) return error;
 
         return Ok(item);
     }
 
     [HttpPost]
-    public async Task<ActionResult<Alimentacion>> Create(Alimentacion item, CancellationToken ct)
+    public async Task<IActionResult> Create(Alimentacion item, CancellationToken ct)
     {
-        var userId = GetCurrentUserId();
-        if (userId == null) return Unauthorized();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
-        if (!await UserHasAccessToAlimentacionAsync(userId.Value, item, ct))
-        {
-            return Forbid();
-        }
+        var (_, error) = await ResolveAndValidateTargetRanchAsync(userId.Value, item.IdAnimal, item.IdLote, ct);
+        if (error is not null) return error;
 
         if (item.IdAlimentacion == Guid.Empty)
             item.IdAlimentacion = Guid.NewGuid();
 
-        var existing = await db.Alimentaciones.AsNoTracking().FirstOrDefaultAsync(a => a.IdAlimentacion == item.IdAlimentacion, ct);
+        var existing = await db.Alimentaciones.AsNoTracking()
+            .FirstOrDefaultAsync(a => a.IdAlimentacion == item.IdAlimentacion, ct);
         if (existing is not null)
             return Ok(existing);
 
@@ -158,21 +150,17 @@ public sealed class AlimentacionController(FarmDbContext db) : ControllerBase
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(Guid id, Alimentacion input, CancellationToken ct)
     {
-        var userId = GetCurrentUserId();
-        if (userId == null) return Unauthorized();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
         var item = await db.Alimentaciones.FindAsync([id], ct);
         if (item is null) return NotFound();
 
-        if (!await UserHasAccessToAlimentacionAsync(userId.Value, item, ct))
-        {
-            return Forbid();
-        }
+        var (_, existingError) = await ResolveAndValidateTargetRanchAsync(userId.Value, item.IdAnimal, item.IdLote, ct);
+        if (existingError is not null) return existingError;
 
-        if (!await UserHasAccessToAlimentacionAsync(userId.Value, input, ct))
-        {
-            return Forbid();
-        }
+        var (_, newError) = await ResolveAndValidateTargetRanchAsync(userId.Value, input.IdAnimal, input.IdLote, ct);
+        if (newError is not null) return newError;
 
         item.IdAnimal = input.IdAnimal;
         item.IdLote = input.IdLote;
@@ -203,16 +191,14 @@ public sealed class AlimentacionController(FarmDbContext db) : ControllerBase
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
-        var userId = GetCurrentUserId();
-        if (userId == null) return Unauthorized();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
         var item = await db.Alimentaciones.FindAsync([id], ct);
         if (item is null) return NotFound();
 
-        if (!await UserHasAccessToAlimentacionAsync(userId.Value, item, ct))
-        {
-            return Forbid();
-        }
+        var (_, error) = await ResolveAndValidateTargetRanchAsync(userId.Value, item.IdAnimal, item.IdLote, ct);
+        if (error is not null) return error;
 
         if (item.EliminadoEn is null)
         {

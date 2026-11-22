@@ -1,3 +1,4 @@
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using FarmBovi.Api.Data;
 using Microsoft.EntityFrameworkCore;
@@ -14,9 +15,12 @@ public sealed class RanchAccessService(FarmDbContext db)
     /// <summary>Roles (comparados en minúsculas) con permisos de administración sobre un rancho.</summary>
     public static readonly string[] AdminRoles = ["admin", "administrador", "propietario"];
 
-   public static int? GetUserId(ClaimsPrincipal user)
+    public static int? GetUserId(ClaimsPrincipal user)
     {
-        var text = user.FindFirstValue(ClaimTypes.NameIdentifier) ?? user.FindFirstValue("sub");
+        var text = user.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? user.FindFirstValue(JwtRegisteredClaimNames.Sub)
+            ?? user.FindFirstValue("sub")
+            ?? user.FindFirstValue("idUsuario");
         return int.TryParse(text, out var id) && id > 0 ? id : null;
     }
 
@@ -117,6 +121,18 @@ public sealed class RanchAccessService(FarmDbContext db)
         (from m in db.MovimientosAnimales.AsNoTracking()
          join a in db.Animales.AsNoTracking() on m.IdAnimal equals a.IdAnimal
          where m.IdMovimiento == id
+         select (Guid?)a.IdRancho).FirstOrDefaultAsync(ct);
+
+    public Task<Guid?> RanchOfReproduccionAsync(Guid id, CancellationToken ct) =>
+        (from r in db.Reproduccion.AsNoTracking()
+         join a in db.Animales.AsNoTracking() on r.IdAnimal equals a.IdAnimal
+         where r.IdReproduccion == id
+         select (Guid?)a.IdRancho).FirstOrDefaultAsync(ct);
+
+    public Task<Guid?> RanchOfPesajeAsync(Guid id, CancellationToken ct) =>
+        (from p in db.Pesajes.AsNoTracking()
+         join a in db.Animales.AsNoTracking() on p.IdAnimal equals a.IdAnimal
+         where p.IdPesaje == id
          select (Guid?)a.IdRancho).FirstOrDefaultAsync(ct);
 
     public Task<Guid?> RanchOfUsuarioRanchoAsync(Guid id, CancellationToken ct) =>

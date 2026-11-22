@@ -5,70 +5,61 @@ using FarmBovi.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using System.Security.Claims;
-using System.IdentityModel.Tokens.Jwt;
 
 namespace FarmBovi.Api.Controllers;
 
 [Authorize]
 [ApiController]
 [Route("api/movimientos-animales")]
-public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValidationService validator) : ControllerBase
+public sealed class MovimientoAnimalController(
+    FarmDbContext db,
+    FarmDomainValidationService validator,
+    RanchAccessService access) : ControllerBase
 {
-    private int? GetCurrentUserId()
+    private async Task<(Guid? RanchId, IActionResult? Error)> ResolveAnimalRanchAsync(
+        int userId,
+        Guid idAnimal,
+        CancellationToken ct)
     {
-        var rawClaim = User.FindFirstValue(ClaimTypes.NameIdentifier)
-            ?? User.FindFirstValue(JwtRegisteredClaimNames.Sub)
-            ?? User.FindFirstValue("sub")
-            ?? User.FindFirstValue("idUsuario");
+        if (idAnimal == Guid.Empty)
+            return (null, BadRequest("El campo idAnimal es obligatorio."));
 
-        if (!string.IsNullOrWhiteSpace(rawClaim) && int.TryParse(rawClaim, out var userId) && userId > 0)
-            return userId;
-
-        return null;
-    }
-
-    private async Task<bool> UserHasAccessToRanchoAsync(int userId, Guid idRancho, CancellationToken ct)
-    {
-        return await db.UsuarioRanchos
-            .AnyAsync(ur => ur.IdUsuario == userId && ur.IdRancho == idRancho, ct);
-    }
-
-    private async Task<bool> UserHasAccessToMovimientoAsync(int userId, MovimientoAnimal item, CancellationToken ct)
-    {
-        var idRancho = await db.Animales
-            .Where(a => a.IdAnimal == item.IdAnimal)
+        var idRancho = await db.Animales.AsNoTracking()
+            .Where(a => a.IdAnimal == idAnimal)
             .Select(a => (Guid?)a.IdRancho)
             .FirstOrDefaultAsync(ct);
 
-        if (!idRancho.HasValue) return false;
-        return await UserHasAccessToRanchoAsync(userId, idRancho.Value, ct);
+        if (!idRancho.HasValue || idRancho.Value == Guid.Empty)
+            return (null, BadRequest("El animal indicado no existe."));
+
+        if (!await access.CanAccessAsync(userId, idRancho.Value, ct))
+            return (null, Forbid());
+
+        return (idRancho.Value, null);
     }
 
     [HttpGet]
-    public async Task<ActionResult<List<MovimientoAnimal>>> GetAll([FromQuery] Guid? idRancho, [FromQuery] bool incluirEliminados = false, CancellationToken ct = default)
+    public async Task<ActionResult<List<MovimientoAnimal>>> GetAll(
+        [FromQuery] Guid? idRancho,
+        [FromQuery] bool incluirEliminados = false,
+        CancellationToken ct = default)
     {
-        var userId = GetCurrentUserId();
-        if (userId == null) return Unauthorized();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
-        var ranchosAutorizadosIds = await db.UsuarioRanchos
-            .Where(ur => ur.IdUsuario == userId.Value)
-            .Select(ur => ur.IdRancho)
-            .ToListAsync(ct);
+        var ranchosAutorizadosIds = await access.ActiveRanchIds(userId.Value).Distinct().ToListAsync(ct);
 
-        var query = db.MovimientosAnimales.AsNoTracking();
+        var query = db.MovimientosAnimales.AsNoTracking()
+            .Where(m => db.Animales.Any(a => a.IdAnimal == m.IdAnimal && ranchosAutorizadosIds.Contains(a.IdRancho)));
+
         if (!incluirEliminados)
             query = query.Where(m => m.EliminadoEn == null);
-
-        // Filtrar movimientos cuyos animales pertenezcan a los ranchos autorizados
-        query = query.Where(m => db.Animales.Any(a => a.IdAnimal == m.IdAnimal && ranchosAutorizadosIds.Contains(a.IdRancho)));
 
         if (idRancho.HasValue && idRancho.Value != Guid.Empty)
         {
             if (!ranchosAutorizadosIds.Contains(idRancho.Value))
-            {
                 return Forbid();
-            }
+
             query = query.Where(m => db.Animales.Any(a => a.IdAnimal == m.IdAnimal && a.IdRancho == idRancho.Value));
         }
 
@@ -77,38 +68,28 @@ public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValid
     }
 
     [HttpGet("{id:guid}")]
-    public async Task<ActionResult<MovimientoAnimal>> Get(Guid id, CancellationToken ct)
+    public async Task<IActionResult> Get(Guid id, CancellationToken ct)
     {
-        var userId = GetCurrentUserId();
-        if (userId == null) return Unauthorized();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
         var item = await db.MovimientosAnimales.AsNoTracking().FirstOrDefaultAsync(m => m.IdMovimiento == id, ct);
         if (item is null) return NotFound();
 
-        if (!await UserHasAccessToMovimientoAsync(userId.Value, item, ct))
-        {
-            return Forbid();
-        }
+        var (_, error) = await ResolveAnimalRanchAsync(userId.Value, item.IdAnimal, ct);
+        if (error is not null) return error;
 
         return Ok(item);
     }
 
     [HttpPost]
-    public async Task<ActionResult<MovimientoAnimal>> Create(MovimientoAnimalCreateDto dto, CancellationToken ct)
+    public async Task<IActionResult> Create(MovimientoAnimalCreateDto dto, CancellationToken ct)
     {
-        var userId = GetCurrentUserId();
-        if (userId == null) return Unauthorized();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
-        // Validar acceso al rancho del animal asociado al movimiento
-        var idRanchoAnimal = await db.Animales
-            .Where(a => a.IdAnimal == dto.IdAnimal)
-            .Select(a => (Guid?)a.IdRancho)
-            .FirstOrDefaultAsync(ct);
-
-        if (!idRanchoAnimal.HasValue || !await UserHasAccessToRanchoAsync(userId.Value, idRanchoAnimal.Value, ct))
-        {
-            return Forbid();
-        }
+        var (_, ranchError) = await ResolveAnimalRanchAsync(userId.Value, dto.IdAnimal, ct);
+        if (ranchError is not null) return ranchError;
 
         var id = dto.IdMovimiento is { } clientId && clientId != Guid.Empty
             ? clientId
@@ -140,7 +121,10 @@ public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValid
 
         var (animal, validationError) = await validator.ValidateAndPrepareMovimientoAsync(movimiento, ct);
         if (validationError is not null || animal is null)
+        {
+            await tx.RollbackAsync(ct);
             return BadRequest(validationError);
+        }
 
         var tipoNorm = movimiento.Tipo;
         if (movimiento.IdLoteDestino.HasValue &&
@@ -178,28 +162,36 @@ public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValid
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(Guid id, MovimientoAnimalUpdateDto dto, CancellationToken ct)
     {
-        var userId = GetCurrentUserId();
-        if (userId == null) return Unauthorized();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
         await using var tx = await db.Database.BeginTransactionAsync(ct);
 
         var item = await db.MovimientosAnimales.FindAsync([id], ct);
-        if (item is null) return NotFound();
-
-        if (!await UserHasAccessToMovimientoAsync(userId.Value, item, ct))
+        if (item is null)
         {
-            return Forbid();
+            await tx.RollbackAsync(ct);
+            return NotFound();
         }
 
-        // Validar acceso al nuevo animal si cambió
-        var idRanchoNuevoAnimal = await db.Animales
-            .Where(a => a.IdAnimal == dto.IdAnimal)
-            .Select(a => (Guid?)a.IdRancho)
-            .FirstOrDefaultAsync(ct);
-
-        if (!idRanchoNuevoAnimal.HasValue || !await UserHasAccessToRanchoAsync(userId.Value, idRanchoNuevoAnimal.Value, ct))
+        var (currentRanchId, currentError) = await ResolveAnimalRanchAsync(userId.Value, item.IdAnimal, ct);
+        if (currentError is not null)
         {
-            return Forbid();
+            await tx.RollbackAsync(ct);
+            return currentError;
+        }
+
+        var (newRanchId, newError) = await ResolveAnimalRanchAsync(userId.Value, dto.IdAnimal, ct);
+        if (newError is not null)
+        {
+            await tx.RollbackAsync(ct);
+            return newError;
+        }
+
+        if (currentRanchId != newRanchId)
+        {
+            await tx.RollbackAsync(ct);
+            return BadRequest("No se puede reasignar el movimiento a un animal de otro rancho.");
         }
 
         int authorId = userId.Value;
@@ -217,7 +209,11 @@ public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValid
         item.VersionRegistro++;
 
         var (_, validationError) = await validator.ValidateAndPrepareMovimientoAsync(item, ct);
-        if (validationError is not null) return BadRequest(validationError);
+        if (validationError is not null)
+        {
+            await tx.RollbackAsync(ct);
+            return BadRequest(validationError);
+        }
 
         try
         {
@@ -236,16 +232,14 @@ public sealed class MovimientoAnimalController(FarmDbContext db, FarmDomainValid
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
-        var userId = GetCurrentUserId();
-        if (userId == null) return Unauthorized();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
         var item = await db.MovimientosAnimales.FindAsync([id], ct);
         if (item is null) return NotFound();
 
-        if (!await UserHasAccessToMovimientoAsync(userId.Value, item, ct))
-        {
-            return Forbid();
-        }
+        var (_, error) = await ResolveAnimalRanchAsync(userId.Value, item.IdAnimal, ct);
+        if (error is not null) return error;
 
         if (item.EliminadoEn is null)
         {

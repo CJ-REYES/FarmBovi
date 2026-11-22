@@ -5,9 +5,14 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <OutputPath>bin\CustomBuild\</OutputPath>
+    <SignAssemblyOnBuild Condition="'$(SignAssemblyOnBuild)' == ''">false</SignAssemblyOnBuild>
   </PropertyGroup>
-  <Target Name="SignMyAssembly" AfterTargets="Build">
-    <Exec Command="powershell -Command &quot;&amp; { $cert = Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Subject -like '*FarmBoviLocalCert*' } | Select-Object -First 1; Set-AuthenticodeSignature -FilePath '$(OutputPath)FarmBovi.Api.dll' -Certificate $cert }&quot;" />
+
+  
+<Target Name="SignMyAssembly"
+          AfterTargets="Build"
+          Condition="'$(OS)' == 'Windows_NT' and '$(SignAssemblyOnBuild)' == 'true' and Exists('$(TargetPath)')">
+    <Exec Command="powershell -NoProfile -NonInteractive -Command &quot;&amp; { $cert = Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Subject -like '*FarmBoviLocalCert*' } | Select-Object -First 1; Set-AuthenticodeSignature -FilePath '$(TargetPath)' -Certificate $cert }&quot;" />
   </Target>
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.12" />

@@ -1,6 +1,6 @@
-using System.Security.Claims;
 using FarmBovi.Api.Data;
 using FarmBovi.Api.Models;
+using FarmBovi.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -11,52 +11,48 @@ namespace FarmBovi.Api.Controllers;
 [ApiController]
 [Route("api/reproduccion")]
 [Route("api/reproduction")]
-public sealed class ReproduccionController(FarmDbContext db) : ControllerBase
+public sealed class ReproduccionController(FarmDbContext db, RanchAccessService access) : ControllerBase
 {
-    private int? GetCurrentUserId()
+    private async Task<(Guid? RanchId, IActionResult? Error)> ResolveAnimalRanchAsync(
+        int userId,
+        Guid idAnimal,
+        CancellationToken ct)
     {
-        var rawClaim = User.FindFirstValue(ClaimTypes.NameIdentifier)
-            ?? User.FindFirstValue("sub")
-            ?? User.FindFirstValue("idUsuario");
+        if (idAnimal == Guid.Empty)
+            return (null, BadRequest("El campo idAnimal es obligatorio."));
 
-        if (!string.IsNullOrWhiteSpace(rawClaim) && int.TryParse(rawClaim, out var userId) && userId > 0)
-            return userId;
+        var idRancho = await db.Animales.AsNoTracking()
+            .Where(a => a.IdAnimal == idAnimal)
+            .Select(a => (Guid?)a.IdRancho)
+            .FirstOrDefaultAsync(ct);
 
-        return null;
-    }
+        if (!idRancho.HasValue || idRancho.Value == Guid.Empty)
+            return (null, BadRequest("El animal especificado no existe."));
 
-    private async Task<bool> UserHasAccessToRanchoAsync(int userId, Guid idRancho, CancellationToken ct)
-    {
-        return await db.UsuarioRanchos
-            .AnyAsync(ur => ur.IdUsuario == userId && ur.IdRancho == idRancho, ct);
+        if (!await access.CanAccessAsync(userId, idRancho.Value, ct))
+            return (null, Forbid());
+
+        return (idRancho.Value, null);
     }
 
     [HttpGet]
     public async Task<ActionResult<List<Reproduccion>>> GetAll([FromQuery] Guid? idRancho, CancellationToken ct)
     {
-        var userId = GetCurrentUserId();
-        if (userId == null) return Unauthorized();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
-        // Obtener los ranchos autorizados para este usuario (int a int)
-        var ranchosAutorizadosIds = await db.UsuarioRanchos
-            .Where(ur => ur.IdUsuario == userId.Value)
-            .Select(ur => ur.IdRancho)
-            .ToListAsync(ct);
+        var ranchosAutorizadosIds = await access.ActiveRanchIds(userId.Value).Distinct().ToListAsync(ct);
 
         var query = db.Reproduccion
             .AsNoTracking()
-            .Where(r => r.EliminadoEn == null);
+            .Where(r => r.EliminadoEn == null &&
+                        db.Animales.Any(an => an.IdAnimal == r.IdAnimal && ranchosAutorizadosIds.Contains(an.IdRancho)));
 
-        // Restringir a los animales que pertenecen a los ranchos autorizados del usuario
-        query = query.Where(r => db.Animales.Any(an => an.IdAnimal == r.IdAnimal && ranchosAutorizadosIds.Contains(an.IdRancho)));
-
-        // Si el usuario especifica un idRancho por query, filtramos adicionalmente (validando acceso)
         if (idRancho.HasValue && idRancho.Value != Guid.Empty)
         {
             if (!ranchosAutorizadosIds.Contains(idRancho.Value))
-            {
-                return Forbid(); // No tiene acceso a este rancho
-            }
+                return Forbid();
+
             query = query.Where(r => db.Animales.Any(an => an.IdAnimal == r.IdAnimal && an.IdRancho == idRancho.Value));
         }
 
@@ -65,62 +61,55 @@ public sealed class ReproduccionController(FarmDbContext db) : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
-    public async Task<ActionResult<Reproduccion>> Get(Guid id, CancellationToken ct)
+    public async Task<IActionResult> Get(Guid id, CancellationToken ct)
     {
-        var userId = GetCurrentUserId();
-        if (userId == null) return Unauthorized();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
-        var item = await db.Reproduccion.AsNoTracking().FirstOrDefaultAsync(r => r.IdReproduccion == id && r.EliminadoEn == null, ct);
+        var item = await db.Reproduccion.AsNoTracking()
+            .FirstOrDefaultAsync(r => r.IdReproduccion == id && r.EliminadoEn == null, ct);
         if (item is null) return NotFound();
 
-        // Verificar que el animal del evento reproductivo pertenezca a un rancho autorizado
-        var animal = await db.Animales.AsNoTracking().FirstOrDefaultAsync(an => an.IdAnimal == item.IdAnimal, ct);
-        if (animal == null || !await UserHasAccessToRanchoAsync(userId.Value, animal.IdRancho, ct))
-        {
-            return Forbid();
-        }
+        var (_, error) = await ResolveAnimalRanchAsync(userId.Value, item.IdAnimal, ct);
+        if (error is not null) return error;
 
         return Ok(item);
     }
 
     [HttpPost]
-    public async Task<ActionResult<Reproduccion>> Create(Reproduccion item, CancellationToken ct)
+    public async Task<IActionResult> Create(Reproduccion item, CancellationToken ct)
     {
-        var userId = GetCurrentUserId();
-        if (userId == null) return Unauthorized();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
-        // Validar que el animal exista y pertenezca a un rancho autorizado del usuario
-        var animal = await db.Animales.AsNoTracking().FirstOrDefaultAsync(an => an.IdAnimal == item.IdAnimal, ct);
-        if (animal == null)
-        {
-            return BadRequest("El animal especificado no existe.");
-        }
-
-        if (!await UserHasAccessToRanchoAsync(userId.Value, animal.IdRancho, ct))
-        {
-            return Forbid(); // Intento de registrar en un rancho ajeno
-        }
+        var (_, ranchError) = await ResolveAnimalRanchAsync(userId.Value, item.IdAnimal, ct);
+        if (ranchError is not null) return ranchError;
 
         if (item.IdReproduccion == Guid.Empty)
             item.IdReproduccion = Guid.NewGuid();
 
+        var existing = await db.Reproduccion.AsNoTracking()
+            .FirstOrDefaultAsync(r => r.IdReproduccion == item.IdReproduccion, ct);
+        if (existing is not null)
+            return Ok(existing);
+
         if (item.FechaCreacion == default)
             item.FechaCreacion = DateTime.UtcNow;
 
-        if (item.IdAutor == 0)
-        {
-            item.IdAutor = userId.Value;
-        }
+        if (item.VersionRegistro <= 0)
+            item.VersionRegistro = 1;
+
+        item.IdAutor = userId.Value;
 
         db.Reproduccion.Add(item);
 
-        try 
-        { 
-            await db.SaveChangesAsync(ct); 
-        } 
-        catch (DbUpdateException) 
-        { 
-            return Conflict("No se pudo registrar el evento reproductivo, verifique las referencias del animal."); 
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            return Conflict("No se pudo registrar el evento reproductivo, verifique las referencias del animal.");
         }
 
         return CreatedAtAction(nameof(Get), new { id = item.IdReproduccion }, item);
@@ -129,43 +118,35 @@ public sealed class ReproduccionController(FarmDbContext db) : ControllerBase
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(Guid id, Reproduccion input, CancellationToken ct)
     {
-        var userId = GetCurrentUserId();
-        if (userId == null) return Unauthorized();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
         var item = await db.Reproduccion.FirstOrDefaultAsync(r => r.IdReproduccion == id, ct);
         if (item is null) return NotFound();
 
-        // Validar acceso al rancho del registro actual
-        var animalActual = await db.Animales.AsNoTracking().FirstOrDefaultAsync(an => an.IdAnimal == item.IdAnimal, ct);
-        if (animalActual == null || !await UserHasAccessToRanchoAsync(userId.Value, animalActual.IdRancho, ct))
-        {
-            return Forbid();
-        }
+        var (currentRanchId, currentError) = await ResolveAnimalRanchAsync(userId.Value, item.IdAnimal, ct);
+        if (currentError is not null) return currentError;
 
-        // Si cambia de animal, validar acceso al nuevo rancho destino
-        if (input.IdAnimal != item.IdAnimal)
-        {
-            var animalNuevo = await db.Animales.AsNoTracking().FirstOrDefaultAsync(an => an.IdAnimal == input.IdAnimal, ct);
-            if (animalNuevo == null || !await UserHasAccessToRanchoAsync(userId.Value, animalNuevo.IdRancho, ct))
-            {
-                return Forbid();
-            }
-        }
+        var (newRanchId, newError) = await ResolveAnimalRanchAsync(userId.Value, input.IdAnimal, ct);
+        if (newError is not null) return newError;
+
+        if (currentRanchId != newRanchId)
+            return BadRequest("No se puede reasignar el registro reproductivo a un animal de otro rancho.");
 
         item.IdAnimal = input.IdAnimal;
         item.TipoEvento = input.TipoEvento;
         item.Fecha = input.Fecha;
         item.Observaciones = input.Observaciones;
-        item.IdAutor = input.IdAutor;
+        item.IdAutor = userId.Value;
         item.VersionRegistro++;
 
-        try 
-        { 
-            await db.SaveChangesAsync(ct); 
-        } 
-        catch (DbUpdateException) 
-        { 
-            return Conflict("No se pudo actualizar el registro reproductivo."); 
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            return Conflict("No se pudo actualizar el registro reproductivo.");
         }
 
         return NoContent();
@@ -174,18 +155,14 @@ public sealed class ReproduccionController(FarmDbContext db) : ControllerBase
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
-        var userId = GetCurrentUserId();
-        if (userId == null) return Unauthorized();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
         var item = await db.Reproduccion.FirstOrDefaultAsync(r => r.IdReproduccion == id, ct);
         if (item is null) return NotFound();
 
-        // Validar acceso al rancho del animal asociado
-        var animal = await db.Animales.AsNoTracking().FirstOrDefaultAsync(an => an.IdAnimal == item.IdAnimal, ct);
-        if (animal == null || !await UserHasAccessToRanchoAsync(userId.Value, animal.IdRancho, ct))
-        {
-            return Forbid();
-        }
+        var (_, error) = await ResolveAnimalRanchAsync(userId.Value, item.IdAnimal, ct);
+        if (error is not null) return error;
 
         if (item.EliminadoEn is null)
         {

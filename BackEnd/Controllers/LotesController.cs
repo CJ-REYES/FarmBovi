@@ -1,60 +1,39 @@
 using FarmBovi.Api.Data;
 using FarmBovi.Api.Models;
+using FarmBovi.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using System.Security.Claims;
-using System.IdentityModel.Tokens.Jwt;
 
 namespace FarmBovi.Api.Controllers;
 
 [Authorize]
 [ApiController]
 [Route("api/lotes")]
-public sealed class LotesController(FarmDbContext db) : ControllerBase
+public sealed class LotesController(FarmDbContext db, RanchAccessService access) : ControllerBase
 {
-    private int? GetCurrentUserId()
-    {
-        var rawClaim = User.FindFirstValue(ClaimTypes.NameIdentifier)
-            ?? User.FindFirstValue(JwtRegisteredClaimNames.Sub)
-            ?? User.FindFirstValue("sub")
-            ?? User.FindFirstValue("idUsuario");
-
-        if (!string.IsNullOrWhiteSpace(rawClaim) && int.TryParse(rawClaim, out var userId) && userId > 0)
-            return userId;
-
-        return null;
-    }
-
-    private async Task<bool> UserHasAccessToRanchoAsync(int userId, Guid idRancho, CancellationToken ct)
-    {
-        return await db.UsuarioRanchos
-            .AnyAsync(ur => ur.IdUsuario == userId && ur.IdRancho == idRancho, ct);
-    }
-
     [HttpGet]
-    public async Task<ActionResult<List<Lote>>> GetAll([FromQuery] Guid? idRancho, [FromQuery] bool incluirEliminados = false, CancellationToken ct = default)
+    public async Task<ActionResult<List<Lote>>> GetAll(
+        [FromQuery] Guid? idRancho,
+        [FromQuery] bool incluirEliminados = false,
+        CancellationToken ct = default)
     {
-        var userId = GetCurrentUserId();
-        if (userId == null) return Unauthorized();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
-        var ranchosAutorizadosIds = await db.UsuarioRanchos
-            .Where(ur => ur.IdUsuario == userId.Value)
-            .Select(ur => ur.IdRancho)
-            .ToListAsync(ct);
+        var ranchosAutorizadosIds = await access.ActiveRanchIds(userId.Value).Distinct().ToListAsync(ct);
 
-        var query = db.Lotes.AsNoTracking();
+        var query = db.Lotes.AsNoTracking()
+            .Where(l => ranchosAutorizadosIds.Contains(l.IdRancho));
+
         if (!incluirEliminados)
             query = query.Where(l => l.EliminadoEn == null);
-
-        query = query.Where(l => ranchosAutorizadosIds.Contains(l.IdRancho));
 
         if (idRancho.HasValue && idRancho.Value != Guid.Empty)
         {
             if (!ranchosAutorizadosIds.Contains(idRancho.Value))
-            {
                 return Forbid();
-            }
+
             query = query.Where(l => l.IdRancho == idRancho.Value);
         }
 
@@ -65,16 +44,14 @@ public sealed class LotesController(FarmDbContext db) : ControllerBase
     [HttpGet("{id:guid}")]
     public async Task<ActionResult<Lote>> Get(Guid id, CancellationToken ct)
     {
-        var userId = GetCurrentUserId();
-        if (userId == null) return Unauthorized();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
         var item = await db.Lotes.AsNoTracking().FirstOrDefaultAsync(l => l.IdLote == id, ct);
         if (item is null) return NotFound();
 
-        if (!await UserHasAccessToRanchoAsync(userId.Value, item.IdRancho, ct))
-        {
+        if (!await access.CanAccessAsync(userId.Value, item.IdRancho, ct))
             return Forbid();
-        }
 
         return Ok(item);
     }
@@ -82,16 +59,14 @@ public sealed class LotesController(FarmDbContext db) : ControllerBase
     [HttpPost]
     public async Task<ActionResult<Lote>> Create(Lote item, CancellationToken ct)
     {
-        var userId = GetCurrentUserId();
-        if (userId == null) return Unauthorized();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
         if (item.IdRancho == Guid.Empty || string.IsNullOrWhiteSpace(item.Nombre) || string.IsNullOrWhiteSpace(item.Estado))
             return BadRequest("IdRancho, nombre y estado del lote son obligatorios.");
 
-        if (!await UserHasAccessToRanchoAsync(userId.Value, item.IdRancho, ct))
-        {
+        if (!await access.CanAccessAsync(userId.Value, item.IdRancho, ct))
             return Forbid();
-        }
 
         if (item.IdLote == Guid.Empty)
             item.IdLote = Guid.NewGuid();
@@ -100,11 +75,12 @@ public sealed class LotesController(FarmDbContext db) : ControllerBase
         if (existing is not null)
             return Ok(existing);
 
+        var ranchoExists = await db.Ranchos.AsNoTracking()
+            .AnyAsync(r => r.IdRancho == item.IdRancho && r.EliminadoEn == null, ct);
+        if (!ranchoExists)
+            return BadRequest("El rancho especificado no existe o está eliminado.");
+
         int authorId = userId.Value;
-
-        var ranchoExists = await db.Ranchos.AsNoTracking().AnyAsync(r => r.IdRancho == item.IdRancho && r.EliminadoEn == null, ct);
-        if (!ranchoExists) return BadRequest("El rancho especificado no existe o está eliminado.");
-
         item.IdAutor = authorId;
         item.Nombre = item.Nombre.Trim();
         item.Estado = item.Estado.Trim();
@@ -127,24 +103,31 @@ public sealed class LotesController(FarmDbContext db) : ControllerBase
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(Guid id, Lote input, CancellationToken ct)
     {
-        var userId = GetCurrentUserId();
-        if (userId == null) return Unauthorized();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
         var item = await db.Lotes.FindAsync([id], ct);
         if (item is null) return NotFound();
 
-        if (!await UserHasAccessToRanchoAsync(userId.Value, item.IdRancho, ct))
-        {
+        if (!await access.CanAccessAsync(userId.Value, item.IdRancho, ct))
             return Forbid();
-        }
 
         if (input.IdRancho != item.IdRancho)
         {
-            if (!await UserHasAccessToRanchoAsync(userId.Value, input.IdRancho, ct))
-            {
+            if (input.IdRancho == Guid.Empty)
+                return BadRequest("IdRancho es obligatorio.");
+
+            if (!await access.CanAccessAsync(userId.Value, input.IdRancho, ct))
                 return Forbid();
-            }
+
+            var ranchoDestinoExiste = await db.Ranchos.AsNoTracking()
+                .AnyAsync(r => r.IdRancho == input.IdRancho && r.EliminadoEn == null, ct);
+            if (!ranchoDestinoExiste)
+                return BadRequest("El rancho destino no existe o está eliminado.");
         }
+
+        if (string.IsNullOrWhiteSpace(input.Nombre) || string.IsNullOrWhiteSpace(input.Estado))
+            return BadRequest("Nombre y estado del lote son obligatorios.");
 
         int authorId = userId.Value;
 
@@ -171,16 +154,14 @@ public sealed class LotesController(FarmDbContext db) : ControllerBase
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
-        var userId = GetCurrentUserId();
-        if (userId == null) return Unauthorized();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
         var item = await db.Lotes.FindAsync([id], ct);
         if (item is null) return NotFound();
 
-        if (!await UserHasAccessToRanchoAsync(userId.Value, item.IdRancho, ct))
-        {
+        if (!await access.CanAccessAsync(userId.Value, item.IdRancho, ct))
             return Forbid();
-        }
 
         var hasActiveAnimals = await db.Animales.AsNoTracking()
             .AnyAsync(a => a.IdLote == id && a.EliminadoEn == null, ct);

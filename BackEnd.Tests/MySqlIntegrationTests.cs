@@ -5,6 +5,7 @@ using FarmBovi.Api.Controllers;
 using FarmBovi.Api.Data;
 using FarmBovi.Api.DTOs;
 using FarmBovi.Api.Models;
+using FarmBovi.Api.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -114,12 +115,15 @@ public sealed class MySqlIntegrationCollectionDefinition { }
 [Collection("MySqlIntegration")]
 public sealed class MySqlIntegrationTests
 {
-    private static void AttachJwtUser(ControllerBase controller, Guid userId)
+    private static SincronizacionController CreateSyncController(FarmDbContext db) =>
+        new(db, new RanchAccessService(db));
+
+    private static void AttachJwtUser(ControllerBase controller, int userId)
     {
         var identity = new ClaimsIdentity(
         [
-            new Claim(JwtRegisteredClaimNames.Sub, userId.ToString("D")),
-            new Claim(ClaimTypes.NameIdentifier, userId.ToString("D"))
+            new Claim(JwtRegisteredClaimNames.Sub, userId.ToString()),
+            new Claim(ClaimTypes.NameIdentifier, userId.ToString())
         ], "Bearer");
         controller.ControllerContext = new ControllerContext
         {
@@ -140,7 +144,7 @@ public sealed class MySqlIntegrationTests
                 Assert.False(db.Database.HasPendingModelChanges());
             }
 
-            var userId = Guid.NewGuid();
+            const int userId = 1;
             var ranchoId = Guid.NewGuid();
             var loteId = Guid.NewGuid();
 
@@ -148,7 +152,7 @@ public sealed class MySqlIntegrationTests
             {
                 seedDb.Usuarios.Add(new Usuario
                 {
-                    IdUsuario = userId,
+                    Id = userId,
                     Nombre = "Roberto",
                     Correo = "roberto.mysql@farmbovi.local",
                     Contrasena = "hash",
@@ -193,7 +197,7 @@ public sealed class MySqlIntegrationTests
                 Task.Run(async () =>
                 {
                     await using var db1 = MySqlTestHelper.CreateContext(connStr);
-                    var c1 = new SincronizacionController(db1);
+                    var c1 = CreateSyncController(db1);
                     AttachJwtUser(c1, userId);
                     return await c1.RecibirOperacion(new OperacionSyncRequest
                     {
@@ -209,7 +213,7 @@ public sealed class MySqlIntegrationTests
                 Task.Run(async () =>
                 {
                     await using var db2 = MySqlTestHelper.CreateContext(connStr);
-                    var c2 = new SincronizacionController(db2);
+                    var c2 = CreateSyncController(db2);
                     AttachJwtUser(c2, userId);
                     return await c2.RecibirOperacion(new OperacionSyncRequest
                     {
@@ -231,7 +235,7 @@ public sealed class MySqlIntegrationTests
                 Task.Run(async () =>
                 {
                     await using var db1 = MySqlTestHelper.CreateContext(connStr);
-                    var c1 = new SincronizacionController(db1);
+                    var c1 = CreateSyncController(db1);
                     AttachJwtUser(c1, userId);
                     return await c1.RecibirOperacion(new OperacionSyncRequest
                     {
@@ -248,7 +252,7 @@ public sealed class MySqlIntegrationTests
                 Task.Run(async () =>
                 {
                     await using var db2 = MySqlTestHelper.CreateContext(connStr);
-                    var c2 = new SincronizacionController(db2);
+                    var c2 = CreateSyncController(db2);
                     AttachJwtUser(c2, userId);
                     return await c2.RecibirOperacion(new OperacionSyncRequest
                     {
@@ -313,13 +317,13 @@ public sealed class MySqlIntegrationTests
                 await cmd.ExecuteNonQueryAsync();
             }
 
-            // 3. Aplicar la migración incremental hacia el esquema actual (char(36) + Sync)
+            // 3. Aplicar la migración incremental hacia el esquema actual
             await using (var db = MySqlTestHelper.CreateContext(connStr))
             {
                 await db.Database.MigrateAsync();
             }
 
-            // 4. Verificar que todos los registros y relaciones sobrevivieron con UUID válidos
+            // 4. Verificar que todos los registros y relaciones sobrevivieron
             await using (var verifyDb = MySqlTestHelper.CreateContext(connStr))
             {
                 var user = await verifyDb.Usuarios.SingleAsync(u => u.Correo == "legacy@farmbovi.local");
@@ -328,14 +332,14 @@ public sealed class MySqlIntegrationTests
                 var lote = await verifyDb.Lotes.SingleAsync(l => l.Nombre == "Lote Legacy");
                 var animal = await verifyDb.Animales.SingleAsync(a => a.Arete == "LEG-001");
 
-                Assert.NotEqual(Guid.Empty, user.IdUsuario);
-                Assert.Equal(user.IdUsuario, rancho.IdAutor);
-                Assert.Equal(user.IdUsuario, ur.IdUsuario);
+                Assert.True(user.Id > 0);
+                Assert.Equal(user.Id, rancho.IdAutor);
+                Assert.Equal(user.Id, ur.IdUsuario);
                 Assert.Equal(rancho.IdRancho, ur.IdRancho);
                 Assert.Equal(rancho.IdRancho, lote.IdRancho);
                 Assert.Equal(rancho.IdRancho, animal.IdRancho);
                 Assert.Equal(lote.IdLote, animal.IdLote);
-                Assert.Equal(user.IdUsuario, animal.IdAutor);
+                Assert.Equal(user.Id, animal.IdAutor);
             }
         }
         finally
@@ -354,11 +358,11 @@ public sealed class MySqlIntegrationTests
                 await db.Database.MigrateAsync();
 
             // Crear usuarios requiere un administrador de rancho autenticado.
-            var adminId = Guid.NewGuid();
+            const int adminId = 1;
             var ranchId = Guid.NewGuid();
             await using (var seedDb = MySqlTestHelper.CreateContext(connStr))
             {
-                seedDb.Usuarios.Add(new Usuario { IdUsuario = adminId, Nombre = "Admin", Correo = $"admin-{adminId:N}@farmbovi.local", Contrasena = "hash", Estado = "Activo" });
+                seedDb.Usuarios.Add(new Usuario { Id = adminId, Nombre = "Admin", Correo = $"admin-{adminId}@farmbovi.local", Contrasena = "hash", Estado = "Activo" });
                 seedDb.Ranchos.Add(new Rancho { IdRancho = ranchId, Nombre = "Rancho", UbicacionGeneral = "Norte", Estado = "Activo", IdAutor = adminId });
                 seedDb.UsuarioRanchos.Add(new UsuarioRancho { IdUsuario = adminId, IdRancho = ranchId, Rol = "Admin", Estado = "Activo" });
                 await seedDb.SaveChangesAsync();
@@ -368,7 +372,7 @@ public sealed class MySqlIntegrationTests
             async Task<int> CreateAsync(string nombre)
             {
                 await using var db = MySqlTestHelper.CreateContext(connStr);
-                var controller = new UsuarioController(db, new FarmBovi.Api.Services.RanchAccessService(db));
+                var controller = new UsuarioController(db, new RanchAccessService(db));
                 AttachJwtUser(controller, adminId);
                 var result = await controller.Create(
                     new UsuarioRequest(nombre, correo.ToUpperInvariant(), "ClaveSegura123", "Activo"),

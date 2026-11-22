@@ -9,6 +9,7 @@ using System.Text.RegularExpressions;
 using FarmBovi.Api.Data;
 using FarmBovi.Api.DTOs;
 using FarmBovi.Api.Models;
+using FarmBovi.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -18,7 +19,7 @@ namespace FarmBovi.Api.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/sync")]
-public sealed partial class SincronizacionController(FarmDbContext db) : ControllerBase
+public sealed partial class SincronizacionController(FarmDbContext db, RanchAccessService access) : ControllerBase
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -1045,7 +1046,7 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
         };
     }
 
-   private static void PrepareEntityForCreate(
+    private static void PrepareEntityForCreate(
         object entity,
         OperacionSyncRequest request,
         int idUsuarioJwt,
@@ -1060,7 +1061,7 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
             case Animal a:
                 a.IdAnimal = targetId;
                 a.IdRancho = request.IdRancho;
-                a.IdAutor = idUsuarioJwt; // Si marca error aquí, cambia la propiedad en el modelo Animal a int o haz un casting si es Guid.
+                a.IdAutor = idUsuarioJwt;
                 if (a.FechaIngreso == default) a.FechaIngreso = ahora.Date;
                 if (string.IsNullOrWhiteSpace(a.Procedencia)) a.Procedencia = "Propio";
                 if (string.IsNullOrWhiteSpace(a.Estado)) a.Estado = "Activo";
@@ -1306,5 +1307,14 @@ public sealed partial class SincronizacionController(FarmDbContext db) : Control
         }
     }
 
-    private Task<IActionResult?> ValidateRanchMembershipAsync(int idUsuario, Guid idRancho, CancellationToken ct) => Task.FromResult<IActionResult?>(null);
+    private async Task<IActionResult?> ValidateRanchMembershipAsync(int idUsuario, Guid idRancho, CancellationToken ct)
+    {
+        if (idRancho == Guid.Empty)
+            return BadRequest("El campo idRancho es obligatorio.");
+
+        if (!await access.CanAccessAsync(idUsuario, idRancho, ct))
+            return Forbid();
+
+        return null;
+    }
 }
