@@ -15,7 +15,6 @@ import {
   CloudUpload,
   AlertCircle,
   AlertOctagon,
-  WifiOff,
   CheckCircle2,
   Loader2,
   X,
@@ -392,18 +391,6 @@ export default function TraceabilityPage() {
           </button>
         </div>
       </header>
-
-      {!isOnline && (
-        <div
-          role="status"
-          className="p-3 rounded-xl bg-status-warning/15 border border-status-warning/35 text-brand-dark text-[12px] flex items-center gap-2"
-        >
-          <WifiOff size={16} className="text-status-warning shrink-0" />
-          <span>
-            Trabajando sin conexión. Los movimientos se guardan localmente en IndexedDB y se sincronizarán al recuperar red.
-          </span>
-        </div>
-      )}
 
       {apiWarning && isOnline && (
         <div

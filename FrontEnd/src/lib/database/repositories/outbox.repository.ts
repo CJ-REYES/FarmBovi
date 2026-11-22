@@ -422,8 +422,28 @@ export const OutboxRepository = {
 
     await db.outbox.update(idOperacion, {
       estado: 'pendiente',
+      intentos: 0,
+      ultimoError: null,
       proximoIntento: null
     });
+  },
+
+  async resetAllFailedForRetry(): Promise<number> {
+    const failedOps = await db.outbox.where('estado').equals('fallido').toArray();
+    if (failedOps.length === 0) return 0;
+
+    await db.transaction('rw', [db.outbox], async () => {
+      for (const op of failedOps) {
+        await db.outbox.update(op.idOperacion, {
+          estado: 'pendiente',
+          intentos: 0,
+          ultimoError: null,
+          proximoIntento: null
+        });
+      }
+    });
+
+    return failedOps.length;
   },
 
   async scheduleManualRetry(idOperacion: string): Promise<void> {

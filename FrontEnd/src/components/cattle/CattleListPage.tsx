@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
 import {
   Search,
@@ -11,7 +11,6 @@ import {
   Cloud,
   CloudUpload,
   AlertOctagon,
-  WifiOff,
   CheckCircle2,
   RefreshCw,
   Loader2,
@@ -19,8 +18,11 @@ import {
 } from 'lucide-react';
 import { useSharedCattle } from '../../hooks/useCattle';
 import { useSyncStatus } from '../../hooks/useSyncStatus';
+import { MediaRepository } from '../../lib/database/repositories/media.repository';
+import type { LocalMedia } from '../../lib/database/schema';
 import type { Cattle } from '../../types/cattle';
 import { calculateAnimalAge, getTodayDateString } from '../../services/cattle.validation';
+import BlobImage from '../shared/BlobImage';
 import EmptyState from '../ui/EmptyState';
 import ResponsiveDataView, { type ResponsiveColumn } from '../shared/ResponsiveDataView';
 
@@ -135,6 +137,32 @@ export default function CattleListPage() {
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(
     () => locationState?.feedback ?? null
   );
+  const [profilePhotoByCattleId, setProfilePhotoByCattleId] = useState<Map<string, LocalMedia>>(
+    () => new Map()
+  );
+
+  useEffect(() => {
+    let active = true;
+    void MediaRepository.getAllActive()
+      .then((mediaList) => {
+        if (!active) return;
+        const map = new Map<string, LocalMedia>();
+        for (const item of mediaList) {
+          const cid = item.cattleId || item.idEntidadRelacionada;
+          if (!cid) continue;
+          if (item.tipo === 'FotoPerfil' && !map.has(cid)) {
+            map.set(cid, item);
+          }
+        }
+        setProfilePhotoByCattleId(map);
+      })
+      .catch(() => {
+        // Ignorar errores de lectura de miniaturas en caché local
+      });
+    return () => {
+      active = false;
+    };
+  }, [cattle.length]);
 
   const ranchNameById = useMemo(
     () => new Map(ranches.map((r) => [r.id, r.nombre])),
@@ -236,14 +264,30 @@ export default function CattleListPage() {
       key: 'arete',
       header: 'Arete / Identificación',
       hideOnCard: true,
-      renderCell: (animal) => (
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="font-semibold bg-brand-yellow/20 text-brand-dark px-2 py-0.5 rounded border border-brand-yellow/35 text-[13px]">
-            {animal.arete || 'Sin arete'}
-          </span>
-          {renderSyncBadge(animal.syncStatus)}
-        </div>
-      )
+      renderCell: (animal) => {
+        const profilePhoto = profilePhotoByCattleId.get(animal.id);
+        return (
+          <div className="flex items-center gap-2.5 flex-wrap">
+            {profilePhoto?.blobData && (
+              <Link
+                to={`/cattle/${animal.id}`}
+                aria-label={`Ver foto de perfil de ${animal.arete}`}
+                className="w-8 h-8 rounded-full overflow-hidden border border-border-light shrink-0 bg-black/5 block"
+              >
+                <BlobImage
+                  blob={profilePhoto.blobData}
+                  alt={`Foto de ${animal.arete}`}
+                  className="w-full h-full object-cover"
+                />
+              </Link>
+            )}
+            <span className="font-semibold bg-brand-yellow/20 text-brand-dark px-2 py-0.5 rounded border border-brand-yellow/35 text-[13px]">
+              {animal.arete || 'Sin arete'}
+            </span>
+            {renderSyncBadge(animal.syncStatus)}
+          </div>
+        );
+      }
     },
     {
       key: 'raza',
@@ -326,18 +370,6 @@ export default function CattleListPage() {
           </button>
         </div>
       </header>
-
-      {!isOnline && (
-        <div
-          role="status"
-          className="p-3 rounded-xl bg-status-warning/15 border border-status-warning/35 text-brand-dark text-[12px] flex items-center gap-2"
-        >
-          <WifiOff size={16} className="text-status-warning shrink-0" />
-          <span>
-            Trabajando sin conexión. Los registros mostrados provienen de IndexedDB y cualquier alta o cambio se sincronizará al reconectar.
-          </span>
-        </div>
-      )}
 
       {apiWarning && isOnline && (
         <div
@@ -492,14 +524,26 @@ export default function CattleListPage() {
           items={filteredCattle}
           getKey={(animal) => animal.id}
           columns={columns}
-          renderCardHeader={(animal) => (
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="bg-brand-yellow/20 text-brand-dark px-2 py-0.5 rounded border border-brand-yellow/35 text-[13px]">
-                {animal.arete}
-              </span>
-              {renderSyncBadge(animal.syncStatus)}
-            </div>
-          )}
+          renderCardHeader={(animal) => {
+            const profilePhoto = profilePhotoByCattleId.get(animal.id);
+            return (
+              <div className="flex flex-wrap items-center gap-2">
+                {profilePhoto?.blobData && (
+                  <div className="w-8 h-8 rounded-full overflow-hidden border border-border-light shrink-0 bg-black/5">
+                    <BlobImage
+                      blob={profilePhoto.blobData}
+                      alt={`Foto de ${animal.arete}`}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                )}
+                <span className="bg-brand-yellow/20 text-brand-dark px-2 py-0.5 rounded border border-brand-yellow/35 text-[13px]">
+                  {animal.arete}
+                </span>
+                {renderSyncBadge(animal.syncStatus)}
+              </div>
+            );
+          }}
           renderCardActions={(animal) => (
             <div className="inline-flex items-center justify-end gap-1">
               <Link

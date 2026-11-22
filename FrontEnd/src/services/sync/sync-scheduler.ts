@@ -23,6 +23,7 @@ export type SyncTriggerReason =
 
 export interface SyncQueueCounts {
   pendingOperationsCount: number;
+  confirmedOperationsCount: number;
   failedOperationsCount: number;
   pendingFilesCount: number;
   failedFilesCount: number;
@@ -75,6 +76,7 @@ function createInitialSnapshot(): SyncSchedulerSnapshot {
     isSyncing: false,
     counts: {
       pendingOperationsCount: 0,
+      confirmedOperationsCount: 0,
       failedOperationsCount: 0,
       pendingFilesCount: 0,
       failedFilesCount: 0,
@@ -214,10 +216,13 @@ async function readCountsFromIndexedDb(): Promise<{
   ]);
 
   let pendingOperationsCount = 0;
+  let confirmedOperationsCount = 0;
   let failedOperationsCount = 0;
   for (const op of allOutbox) {
     if (op.estado === 'pendiente' || op.estado === 'en_proceso') {
       pendingOperationsCount++;
+    } else if (op.estado === 'confirmado') {
+      confirmedOperationsCount++;
     } else if (op.estado === 'fallido') {
       failedOperationsCount++;
     }
@@ -246,6 +251,7 @@ async function readCountsFromIndexedDb(): Promise<{
   return {
     counts: {
       pendingOperationsCount,
+      confirmedOperationsCount,
       failedOperationsCount,
       pendingFilesCount,
       failedFilesCount,
@@ -518,6 +524,16 @@ export const SyncScheduler = {
    * Inicia una sincronización manual explícita desde la interfaz de usuario.
    */
   async triggerManualSync(): Promise<FullSyncCycleResult | null> {
+    return await this.triggerSync('manual');
+  },
+
+  /**
+   * Restablece todas las operaciones fallidas conservando su `idOperacion` original
+   * y dispara un ciclo inmediato de sincronización Push + Pull.
+   */
+  async retryFailedOperations(): Promise<FullSyncCycleResult | null> {
+    await OutboxRepository.resetAllFailedForRetry();
+    await this.refreshState();
     return await this.triggerSync('manual');
   },
 

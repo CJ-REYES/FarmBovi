@@ -30,6 +30,7 @@ public sealed class FarmDbContext(
     private bool _preparingServerChanges;
 
     public DbSet<Animal> Animales => Set<Animal>();
+    public DbSet<GenealogiaAnimal> GenealogiasAnimales => Set<GenealogiaAnimal>();
     public DbSet<Lote> Lotes => Set<Lote>();
     public DbSet<Rancho> Ranchos => Set<Rancho>();
     public DbSet<Usuario> Usuarios => Set<Usuario>();
@@ -177,7 +178,7 @@ public sealed class FarmDbContext(
 
     private static bool IsSynchronizableEntity(object entity) =>
         entity is Animal or Lote or Rancho or Alimentacion or MovimientoAnimal
-            or EventoSanitario or Tratamiento or Recordatorio;
+            or EventoSanitario or Tratamiento or Recordatorio or GenealogiaAnimal;
 
     private CambioServidor? BuildApiChangeRecord(EntityEntry entry, Guid idRancho, DateTime ahora)
     {
@@ -608,6 +609,26 @@ public sealed class FarmDbContext(
             e.HasOne<Rancho>().WithMany().HasForeignKey(x => x.IdRancho).OnDelete(DeleteBehavior.Restrict);
             e.HasOne<Usuario>().WithMany().HasForeignKey(x => x.IdUsuario).OnDelete(DeleteBehavior.Restrict);
             e.HasOne<RegistroSyncServidor>().WithMany().HasForeignKey(x => x.IdOperacion).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<GenealogiaAnimal>(e =>
+        {
+            e.ToTable("GenealogiaAnimal");
+            e.HasKey(x => x.IdGenealogia);
+            e.Property(x => x.IdGenealogia).HasColumnType("char(36)").ValueGeneratedNever();
+            e.Property(x => x.IdAnimal).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.IdPadre).HasColumnType("char(36)");
+            e.Property(x => x.IdMadre).HasColumnType("char(36)");
+            e.Property(x => x.Observaciones).HasMaxLength(500);
+            e.Property(x => x.IdAutor).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.VersionRegistro).IsConcurrencyToken();
+            e.HasIndex(x => x.IdAnimal).IsUnique();
+            e.HasIndex(x => x.IdPadre);
+            e.HasIndex(x => x.IdMadre);
+            e.HasOne<Animal>().WithMany().HasForeignKey(x => x.IdAnimal).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Animal>().WithMany().HasForeignKey(x => x.IdPadre).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Animal>().WithMany().HasForeignKey(x => x.IdMadre).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Usuario>().WithMany().HasForeignKey(x => x.IdAutor).OnDelete(DeleteBehavior.Restrict);
         });
     }
 }
