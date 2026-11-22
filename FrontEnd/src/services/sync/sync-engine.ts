@@ -1,6 +1,19 @@
+import { db } from '../../lib/database/db';
+import { isValidGuid } from '../cattle.validation';
 import { PushSyncEngine } from './push-sync.engine';
-import { SyncPullEngine, type PullEntitySummary } from './sync-pull.engine';
+import { SyncPullEngine, type PullEntitySummary, type PullOptions } from './sync-pull.engine';
 import { BoviScaleAnalysisService } from '../boviscale-analysis.service';
+
+async function resolveActiveRanchId(explicitRanchId?: string): Promise<string | undefined> {
+  if (explicitRanchId && isValidGuid(explicitRanchId)) {
+    return explicitRanchId;
+  }
+  const activeRanch = await db.ranches.filter((r) => !r.deletedAt).first();
+  if (activeRanch && isValidGuid(activeRanch.id)) {
+    return activeRanch.id;
+  }
+  return undefined;
+}
 
 export type PushEngineResult = Awaited<
   ReturnType<typeof PushSyncEngine.pushPendingOperations>
@@ -22,7 +35,7 @@ export const SyncEngine = {
     return activeEngineCycle !== null;
   },
 
-  async sync(): Promise<FullSyncCycleResult | null> {
+  async sync(pullOptions?: PullOptions): Promise<FullSyncCycleResult | null> {
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       return null;
     }
@@ -35,7 +48,7 @@ export const SyncEngine = {
     activeEngineCycle = (async () => {
       try {
         const push = await this.pushChanges();
-        const pull = await this.pullChanges();
+        const pull = await this.pullChanges(pullOptions);
         await BoviScaleAnalysisService.processPendingQueue();
 
         const pushCompleted =
@@ -70,7 +83,11 @@ export const SyncEngine = {
     return await PushSyncEngine.pushPendingOperations();
   },
 
-  async pullChanges(): Promise<PullEntitySummary[]> {
-    return await SyncPullEngine.pullAllEntities();
+  async pullChanges(options?: PullOptions): Promise<PullEntitySummary[]> {
+    const ranchId = await resolveActiveRanchId(options?.ranchId);
+    return await SyncPullEngine.pullAllEntities({
+      ...options,
+      ranchId
+    });
   }
 };

@@ -55,7 +55,9 @@ export default function SyncStatusPanel() {
     isSyncing,
     counts,
     lastCompletedSyncAt,
+    lastCycleResult,
     triggerManualSync,
+    retryFailedOperations,
     refreshStatus
   } = useSyncStatus();
 
@@ -65,6 +67,7 @@ export default function SyncStatusPanel() {
   const [checkpoints, setCheckpoints] = useState<LocalSyncCheckpoint[]>([]);
   const [inventory, setInventory] = useState<OfflineInventorySnapshot | null>(null);
   const [retryingOpId, setRetryingOpId] = useState<string | null>(null);
+  const [isRetryingAll, setIsRetryingAll] = useState<boolean>(false);
 
   const availability = SyncHttpClient.getEndpointAvailability();
 
@@ -121,6 +124,16 @@ export default function SyncStatusPanel() {
     await reloadPending();
   };
 
+  const handleRetryAllFailed = async () => {
+    setIsRetryingAll(true);
+    try {
+      await retryFailedOperations();
+      await reloadPending();
+    } finally {
+      setIsRetryingAll(false);
+    }
+  };
+
   const handleManualRetryOp = async (idOperacion: string) => {
     setRetryingOpId(idOperacion);
     try {
@@ -149,8 +162,15 @@ export default function SyncStatusPanel() {
   };
 
   const formattedLastSync = lastCompletedSyncAt
-    ? new Date(lastCompletedSyncAt).toLocaleTimeString()
+    ? new Date(lastCompletedSyncAt).toLocaleString()
     : 'Aún sin ciclo completo confirmado';
+
+  const pullAppliedTotal = lastCycleResult
+    ? lastCycleResult.pull.reduce((acc, item) => acc + item.appliedCount, 0)
+    : 0;
+  const pullDeletedTotal = lastCycleResult
+    ? lastCycleResult.pull.reduce((acc, item) => acc + item.deletedCount, 0)
+    : 0;
 
   return (
     <div className="bg-surface-white border border-border-light rounded-xl p-5 shadow-sm space-y-4">
@@ -188,21 +208,57 @@ export default function SyncStatusPanel() {
           <p className="text-[11px] text-brand-slate/55">
             Última sincronización completa (Push + Pull): {formattedLastSync}
           </p>
+          {lastCycleResult && (
+            <p className="text-[11px] text-brand-slate/65">
+              Último ciclo · Push: {lastCycleResult.push.confirmedCount} confirmada(s)
+              {lastCycleResult.push.alreadyProcessedCount > 0
+                ? ` (${lastCycleResult.push.alreadyProcessedCount} duplicada(s))`
+                : ''}{' '}
+              · Pull: {pullAppliedTotal} actualizada(s), {pullDeletedTotal} eliminada(s)
+            </p>
+          )}
         </div>
 
-        <button
-          type="button"
-          onClick={() => void handleManualSync()}
-          disabled={isSyncing || !isOnline}
-          className="inline-flex items-center justify-center gap-1.5 bg-brand-primary hover:bg-brand-dark text-white px-3.5 py-2 rounded-lg text-[12px] font-semibold transition-colors disabled:opacity-50 shrink-0"
-        >
-          <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
-          {isSyncing ? 'Sincronizando...' : 'Sincronizar Ahora'}
-        </button>
+        <div className="flex items-center gap-2 shrink-0 flex-wrap">
+          {counts.failedOperationsCount > 0 && (
+            <button
+              type="button"
+              onClick={() => void handleRetryAllFailed()}
+              disabled={isSyncing || isRetryingAll || !isOnline}
+              className="inline-flex items-center justify-center gap-1.5 bg-surface-white border border-status-error/40 text-status-error hover:bg-status-error/10 px-3 py-2 rounded-lg text-[12px] font-semibold transition-colors disabled:opacity-50 cursor-pointer"
+            >
+              <RotateCcw size={14} className={isRetryingAll ? 'animate-spin' : ''} />
+              Reintentar fallidas ({counts.failedOperationsCount})
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => void handleManualSync()}
+            disabled={isSyncing || !isOnline}
+            className="inline-flex items-center justify-center gap-1.5 bg-brand-primary hover:bg-brand-dark text-white px-3.5 py-2 rounded-lg text-[12px] font-semibold transition-colors disabled:opacity-50 cursor-pointer"
+          >
+            <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
+            {isSyncing ? 'Sincronizando...' : 'Sincronizar Ahora'}
+          </button>
+        </div>
       </div>
 
-      {/* Métricas de operaciones pendientes y archivos pendientes */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+      {/* Indicador explícito de sincronización activa */}
+      {isSyncing && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="p-3 rounded-lg bg-brand-primary/10 border border-brand-primary/30 text-brand-forest text-[12px] font-semibold flex items-center gap-2"
+        >
+          <RefreshCw size={15} className="animate-spin text-brand-primary shrink-0" />
+          <span>
+            Sincronización activa en curso: enviando operaciones Push y descargando cambios Pull…
+          </span>
+        </div>
+      )}
+
+      {/* Métricas completas de sincronización (FE-05) */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
         <div className="p-3 rounded-lg bg-surface-secondary/50 border border-border-light">
           <p className="text-[11px] text-brand-slate/65 font-medium">Operaciones pendientes</p>
           <p className="text-[18px] font-bold text-brand-slate mt-0.5">
@@ -212,10 +268,17 @@ export default function SyncStatusPanel() {
 
         <div className="p-3 rounded-lg bg-surface-secondary/50 border border-border-light">
           <p className="text-[11px] text-brand-slate/65 font-medium flex items-center gap-1">
-            <FileImage size={12} /> Archivos pendientes
+            <CheckCircle2 size={12} className="text-status-success" /> Operaciones exitosas
           </p>
-          <p className="text-[18px] font-bold text-brand-slate mt-0.5">
-            {counts.pendingFilesCount}
+          <p className="text-[18px] font-bold text-status-success mt-0.5">
+            {counts.confirmedOperationsCount}
+          </p>
+        </div>
+
+        <div className="p-3 rounded-lg bg-surface-secondary/50 border border-border-light">
+          <p className="text-[11px] text-brand-slate/65 font-medium">Operaciones fallidas</p>
+          <p className="text-[18px] font-bold text-status-error mt-0.5">
+            {counts.failedOperationsCount + counts.failedFilesCount}
           </p>
         </div>
 
@@ -227,9 +290,11 @@ export default function SyncStatusPanel() {
         </div>
 
         <div className="p-3 rounded-lg bg-surface-secondary/50 border border-border-light">
-          <p className="text-[11px] text-brand-slate/65 font-medium">Con error / detenidos</p>
-          <p className="text-[18px] font-bold text-status-error mt-0.5">
-            {counts.failedOperationsCount + counts.failedFilesCount}
+          <p className="text-[11px] text-brand-slate/65 font-medium flex items-center gap-1">
+            <FileImage size={12} /> Archivos pendientes
+          </p>
+          <p className="text-[18px] font-bold text-brand-slate mt-0.5">
+            {counts.pendingFilesCount}
           </p>
         </div>
       </div>
@@ -356,7 +421,7 @@ export default function SyncStatusPanel() {
         ) : (
           <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
             {pendingOps.map((op) => {
-              const isValidationOrStopped = op.estado === 'fallido' && op.proximoIntento === null;
+              const isRetryableFailed = op.estado === 'fallido';
               return (
                 <div
                   key={op.idOperacion}
@@ -387,12 +452,12 @@ export default function SyncStatusPanel() {
                   </div>
 
                   <div className="flex items-center gap-2 shrink-0">
-                    {isValidationOrStopped && (
+                    {isRetryableFailed && (
                       <button
                         type="button"
                         onClick={() => void handleManualRetryOp(op.idOperacion)}
-                        disabled={retryingOpId === op.idOperacion}
-                        className="inline-flex items-center gap-1 px-2 py-1 rounded border border-border-light bg-surface-white hover:bg-surface-secondary text-[11px] font-semibold text-brand-slate disabled:opacity-50"
+                        disabled={retryingOpId === op.idOperacion || !isOnline}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded border border-border-light bg-surface-white hover:bg-surface-secondary text-[11px] font-semibold text-brand-slate disabled:opacity-50 cursor-pointer"
                         title="Reintentar operación con el mismo idOperacion"
                       >
                         <RotateCcw

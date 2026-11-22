@@ -10,6 +10,7 @@ import {
   MAX_PUSH_RETRY_ATTEMPTS,
   OutboxRepository
 } from '../../lib/database/repositories/outbox.repository';
+import { isValidGuid } from '../cattle.validation';
 import { SyncHttpClient } from './sync-http.client';
 import type {
   SyncOperationRequestDto,
@@ -104,6 +105,92 @@ function getEntityTable(entidad: SyncEntityName): Table<BaseLocalEntity, string>
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readGuidField(record: Record<string, unknown> | undefined, keys: readonly string[]): string | null {
+  if (!record) return null;
+  for (const key of keys) {
+    const val = record[key];
+    if (typeof val === 'string' && isValidGuid(val.trim())) {
+      return val.trim();
+    }
+  }
+  return null;
+}
+
+/**
+ * Resuelve el `idRancho` requerido por `POST /api/sync/operaciones` para cualquier entidad
+ * (incluyendo entidades hijas como movimientos, tratamientos, salud o bajas lógicas).
+ */
+async function resolveOperationRanchId(
+  op: LocalOutboxQueue,
+  latestEntity: BaseLocalEntity | undefined
+): Promise<string | null> {
+  if (op.idRancho && isValidGuid(op.idRancho)) {
+    return op.idRancho;
+  }
+  if (latestEntity?.ranchId && isValidGuid(latestEntity.ranchId)) {
+    return latestEntity.ranchId;
+  }
+
+  const payloadRec = isPlainRecord(op.payload) ? op.payload : undefined;
+  const entityRec = latestEntity as unknown as Record<string, unknown> | undefined;
+
+  const direct =
+    readGuidField(payloadRec, ['idRancho', 'ranchId']) ??
+    readGuidField(entityRec, ['ranchId', 'idRancho']);
+  if (direct) return direct;
+
+  if (op.entidad === 'ranches' && isValidGuid(op.idEntidad)) {
+    return op.idEntidad;
+  }
+
+  // Resolver desde animal padre si existe
+  const cattleId =
+    readGuidField(payloadRec, ['idAnimal', 'cattleId']) ??
+    readGuidField(entityRec, ['cattleId', 'idAnimal']);
+  if (cattleId) {
+    const animal = await db.cattle.get(cattleId);
+    if (animal?.ranchId && isValidGuid(animal.ranchId)) {
+      return animal.ranchId;
+    }
+  }
+
+  // Resolver desde lote padre si existe
+  const lotId =
+    readGuidField(payloadRec, ['idLote', 'lotId', 'loteId', 'idLoteDestino', 'idLoteOrigen']) ??
+    readGuidField(entityRec, ['lotId', 'loteId', 'destinoLotId', 'origenLotId']);
+  if (lotId) {
+    const lot = await db.lots.get(lotId);
+    if (lot?.ranchId && isValidGuid(lot.ranchId)) {
+      return lot.ranchId;
+    }
+  }
+
+  // Resolver desde evento sanitario padre (para tratamientos)
+  const eventId =
+    readGuidField(payloadRec, ['idEventoSanitario', 'eventoSanitarioId']) ??
+    readGuidField(entityRec, ['eventoSanitarioId']);
+  if (eventId) {
+    const event = await db.healthRecords.get(eventId);
+    if (event?.ranchId && isValidGuid(event.ranchId)) {
+      return event.ranchId;
+    }
+    if (event?.cattleId) {
+      const animal = await db.cattle.get(event.cattleId);
+      if (animal?.ranchId && isValidGuid(animal.ranchId)) {
+        return animal.ranchId;
+      }
+    }
+  }
+
+  // Último respaldo: primer rancho activo en caché local
+  const fallbackRanch = await db.ranches.filter((r) => !r.deletedAt).first();
+  if (fallbackRanch && isValidGuid(fallbackRanch.id)) {
+    return fallbackRanch.id;
+  }
+
+  return null;
 }
 
 function formatValidationErrorMessage(result: SyncOperationResultDto): string {
@@ -303,13 +390,18 @@ export const PushSyncEngine = {
           ? op.versionBase
           : (latestEntity?.serverVersion ?? null);
 
+      const resolvedRanchId = await resolveOperationRanchId(op, latestEntity);
+
+      const effectiveOp: LocalOutboxQueue = {
+        ...op,
+        versionBase: effectiveVersionBase,
+        idRancho: resolvedRanchId ?? op.idRancho ?? null
+      };
+
       const dto: SyncOperationRequestDto = SyncHttpClient.serializeOperationDto(
-        {
-          ...op,
-          versionBase: effectiveVersionBase
-        },
+        effectiveOp,
         latestEntity?.remoteId ?? null,
-        latestEntity?.ranchId ?? null
+        resolvedRanchId
       );
 
       const result = await SyncHttpClient.sendOperation(dto);
@@ -317,20 +409,20 @@ export const PushSyncEngine = {
       switch (result.resultado) {
         case 'ACCEPTED':
         case 'ALREADY_PROCESSED': {
-          await this.applyConfirmedOutcome(op, result);
+          await this.applyConfirmedOutcome(effectiveOp, result);
           return result.resultado;
         }
         case 'CONFLICT': {
-          await this.applyConflictOutcome(op, result);
+          await this.applyConflictOutcome(effectiveOp, result);
           return 'CONFLICT';
         }
         case 'VALIDATION_ERROR': {
-          await this.applyValidationErrorOutcome(op, result);
+          await this.applyValidationErrorOutcome(effectiveOp, result);
           return 'VALIDATION_ERROR';
         }
         case 'TRANSIENT_ERROR':
         default: {
-          await this.applyTransientErrorOutcome(op, result);
+          await this.applyTransientErrorOutcome(effectiveOp, result);
           return 'TRANSIENT_ERROR';
         }
       }
@@ -450,7 +542,9 @@ export const PushSyncEngine = {
         versionBase: op.versionBase,
         estadoServidor: result.estadoServidor ?? null,
         versionServidor: result.versionServidor ?? null,
-        tipoConflicto: op.tipoOperacion === 'DELETE' ? 'DELETED_ON_SERVER' : 'VERSION_MISMATCH',
+        tipoConflicto:
+          result.tipoConflicto ??
+          (op.tipoOperacion === 'DELETE' ? 'DELETED_ON_SERVER' : 'VERSION_MISMATCH'),
         estadoResolucion: 'pendiente',
         fechaDeteccion: existingConflict?.fechaDeteccion ?? now,
         fechaResolucion: null,

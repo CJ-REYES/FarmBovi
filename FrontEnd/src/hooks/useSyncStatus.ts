@@ -6,6 +6,7 @@ import {
 
 export function useSyncStatus(): SyncSchedulerSnapshot & {
   triggerManualSync: () => ReturnType<typeof SyncScheduler.triggerManualSync>;
+  retryFailedOperations: () => ReturnType<typeof SyncScheduler.retryFailedOperations>;
   refreshStatus: () => ReturnType<typeof SyncScheduler.refreshState>;
 } {
   const snapshot = useSyncExternalStore(
@@ -17,6 +18,7 @@ export function useSyncStatus(): SyncSchedulerSnapshot & {
   return {
     ...snapshot,
     triggerManualSync: () => SyncScheduler.triggerManualSync(),
+    retryFailedOperations: () => SyncScheduler.retryFailedOperations(),
     refreshStatus: () => SyncScheduler.refreshState()
   };
 }

@@ -1,4 +1,5 @@
 import type { Table, UpdateSpec } from 'dexie';
+import { ApiError } from '../../lib/api';
 import { db } from '../../lib/database/db';
 import { CheckpointRepository } from '../../lib/database/repositories/checkpoint.repository';
 import type {
@@ -29,6 +30,7 @@ export interface PullEntitySummary {
   deletedCount: number;
   conflictCount: number;
   skippedPendingCount: number;
+  retriesPerformed?: number;
   previousCursor: string | null;
   currentCursor: string | null;
   errorMessage?: string;
@@ -38,6 +40,8 @@ export interface PullOptions {
   pageSize?: number;
   ranchId?: string;
   maxPagesPerPass?: number;
+  maxRetriesPerPage?: number;
+  retryDelayMs?: number;
 }
 
 /**
@@ -60,6 +64,20 @@ function toRecordObject(value: unknown): Record<string, unknown> {
     return value as Record<string, unknown>;
   }
   return { valor: value };
+}
+
+function isTransientPullError(err: unknown): boolean {
+  if (err instanceof ApiError) {
+    return err.status === 0 || err.status === 408 || err.status === 429 || err.status >= 500;
+  }
+  return err instanceof Error && /network|fetch|timeout|conexión/i.test(err.message);
+}
+
+function waitMs(ms: number): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 interface BatchApplyMetrics {
@@ -207,6 +225,13 @@ export const SyncPullEngine = {
       if (byClientUuid) return byClientUuid;
     }
 
+    // El Backend (`SyncController`) entrega `idRegistro` (UUID) en `remoteId` y `clientUuid: null`.
+    // Buscar también por llave primaria local evita duplicar o sobrescribir silenciosamente registros pendientes.
+    if (typeof change.remoteId === 'string' && change.remoteId.trim().length > 0) {
+      const byPrimaryId = await entityTable.get(change.remoteId.trim());
+      if (byPrimaryId) return byPrimaryId;
+    }
+
     return undefined;
   },
 
@@ -266,10 +291,16 @@ export const SyncPullEngine = {
     }
 
     const baseVersion = existing.serverVersion ?? headOp?.versionBase ?? null;
+    const numericBase = baseVersion !== null ? Number(baseVersion) : Number.NaN;
+    const numericRemote = Number(change.versionServidor);
+    const hasNumericComparison = Number.isFinite(numericBase) && Number.isFinite(numericRemote);
+
     const hasVersionDivergence =
       isRemoteDelete ||
       baseVersion === null ||
-      String(baseVersion) !== String(change.versionServidor);
+      (hasNumericComparison
+        ? numericRemote > numericBase
+        : String(baseVersion) !== String(change.versionServidor));
 
     if (!hasVersionDivergence) {
       // Misma versión servidor conocida: conservar el cambio local pendiente intacto sin sobrescribir
@@ -373,6 +404,7 @@ export const SyncPullEngine = {
       deletedCount: 0,
       conflictCount: 0,
       skippedPendingCount: 0,
+      retriesPerformed: 0,
       previousCursor,
       currentCursor: previousCursor
     };
@@ -395,6 +427,8 @@ export const SyncPullEngine = {
 
     const pageSize = Math.min(500, Math.max(1, options.pageSize ?? 100));
     const maxPagesPerPass = Math.max(1, options.maxPagesPerPass ?? 50);
+    const maxRetriesPerPage = Math.max(0, options.maxRetriesPerPage ?? 2);
+    const baseRetryDelayMs = Math.max(0, options.retryDelayMs ?? 400);
 
     inFlightPullEntities.add(entidad);
 
@@ -404,13 +438,42 @@ export const SyncPullEngine = {
       let hasMorePages = true;
 
       while (hasMorePages && summary.pagesProcessed < maxPagesPerPass) {
-        // 1. Solicitar lote posterior al último cursor opaco confirmado
-        const response = await SyncHttpClient.fetchChanges<Record<string, unknown>>({
-          entidad,
-          cursorOpaco: requestCursor,
-          limite: pageSize,
-          ranchId: options.ranchId
-        });
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          summary.status = 'offline';
+          return summary;
+        }
+
+        // 1. Solicitar lote posterior al último cursor opaco confirmado (con reintentos transitorios acotados)
+        let response: SyncPullResponseDto<Record<string, unknown>> | null = null;
+        let attempt = 0;
+
+        while (response === null) {
+          try {
+            response = await SyncHttpClient.fetchChanges<Record<string, unknown>>({
+              entidad,
+              cursorOpaco: requestCursor,
+              limite: pageSize,
+              ranchId: options.ranchId
+            });
+          } catch (fetchErr) {
+            const canRetry =
+              attempt < maxRetriesPerPage &&
+              isTransientPullError(fetchErr) &&
+              (typeof navigator === 'undefined' || navigator.onLine);
+
+            if (!canRetry) {
+              throw fetchErr;
+            }
+
+            attempt++;
+            summary.retriesPerformed = (summary.retriesPerformed ?? 0) + 1;
+            const retryAfter =
+              fetchErr instanceof ApiError && fetchErr.retryAfterMs && fetchErr.retryAfterMs > 0
+                ? Math.min(fetchErr.retryAfterMs, 5000)
+                : baseRetryDelayMs * Math.pow(2, attempt - 1);
+            await waitMs(retryAfter);
+          }
+        }
 
         // 2. Aplicar cambios y actualizar checkpoint en la misma transacción Dexie
         const batchMetrics = await this.applyBatchAtomically({

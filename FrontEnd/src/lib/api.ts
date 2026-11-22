@@ -23,6 +23,14 @@ import type {
   BackendRecordatorioDto,
   BackendRecordatorioPayload
 } from '../types/alert';
+import type {
+  BackendRanchoPayload,
+  CreateUsuarioRanchoPayload,
+  CreateUsuarioRequestDto,
+  LoginRequestDto,
+  LoginResponseDto,
+  UsuarioResponseDto
+} from '../types/auth';
 
 export const API_BASE_URL = (
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ||
@@ -44,6 +52,7 @@ export const BACKEND_ROUTES = {
   TRATAMIENTOS: '/tratamientos',
   RECORDATORIOS: '/recordatorios',
   USUARIOS: '/usuarios',
+  USUARIO_RANCHOS: '/usuario-ranchos',
   SYNC_PUSH: '/sync/operaciones',
   SYNC_PULL: '/sync/cambios',
   SYNC_AUDIT: '/sync/auditoria'
@@ -80,6 +89,17 @@ function parseRetryAfterHeader(headerValue: string | null): number | null {
     return Math.max(0, parsedDate - Date.now());
   }
   return null;
+}
+
+type UnauthorizedHandler = () => void;
+let unauthorizedHandler: UnauthorizedHandler | null = null;
+
+/**
+ * Registra un manejador invocado cuando una petición autenticada recibe HTTP 401
+ * desde el Backend (token expirado o revocado).
+ */
+export function registerUnauthorizedHandler(handler: UnauthorizedHandler | null): void {
+  unauthorizedHandler = handler;
 }
 
 /**
@@ -247,6 +267,13 @@ export async function apiRequest<T>(
   }
 
   if (!response.ok) {
+    if (
+      response.status === 401 &&
+      Boolean(headers.Authorization) &&
+      path !== BACKEND_ROUTES.AUTH_LOGIN
+    ) {
+      unauthorizedHandler?.();
+    }
     const safeMessage = extractErrorMessage(parsedBody, rawText, response.status);
     throw new ApiError(safeMessage, response.status, parsedBody, retryAfterMs);
   }
@@ -347,6 +374,52 @@ export const lotsApi = {
   }
 };
 
+export const authApi = {
+  async login(input: LoginRequestDto): Promise<LoginResponseDto> {
+    const res = await apiRequest<LoginResponseDto>(BACKEND_ROUTES.AUTH_LOGIN, {
+      method: 'POST',
+      body: {
+        correo: input.correo.trim().toLowerCase(),
+        contrasena: input.contrasena
+      }
+    });
+    return res.data;
+  }
+};
+
+export const usuariosApi = {
+  async create(input: CreateUsuarioRequestDto): Promise<UsuarioResponseDto> {
+    const res = await apiRequest<UsuarioResponseDto>(BACKEND_ROUTES.USUARIOS, {
+      method: 'POST',
+      body: {
+        idUsuario: input.idUsuario,
+        nombre: input.nombre.trim(),
+        correo: input.correo.trim().toLowerCase(),
+        contrasena: input.contrasena,
+        estado: input.estado.trim() || 'Activo'
+      }
+    });
+    return res.data;
+  },
+
+  async getById(id: string): Promise<UsuarioResponseDto> {
+    const res = await apiRequest<UsuarioResponseDto>(`${BACKEND_ROUTES.USUARIOS}/${id}`, {
+      method: 'GET'
+    });
+    return res.data;
+  }
+};
+
+export const usuarioRanchosApi = {
+  async create(input: CreateUsuarioRanchoPayload): Promise<unknown> {
+    const res = await apiRequest<unknown>(BACKEND_ROUTES.USUARIO_RANCHOS, {
+      method: 'POST',
+      body: input
+    });
+    return res.data;
+  }
+};
+
 export const ranchesApi = {
   async list(incluirEliminados = false): Promise<BackendRanchoDto[]> {
     const query = incluirEliminados ? '?incluirEliminados=true' : '';
@@ -354,6 +427,32 @@ export const ranchesApi = {
       method: 'GET'
     });
     return Array.isArray(res.data) ? res.data : [];
+  },
+
+  async create(input: BackendRanchoPayload): Promise<BackendRanchoDto> {
+    const res = await apiRequest<BackendRanchoDto>(BACKEND_ROUTES.RANCHOS, {
+      method: 'POST',
+      body: {
+        idRancho: input.idRancho,
+        nombre: input.nombre.trim(),
+        ubicacionGeneral: input.ubicacionGeneral.trim(),
+        estado: input.estado.trim() || 'Activo'
+      }
+    });
+    return res.data;
+  },
+
+  async update(id: string, input: BackendRanchoPayload): Promise<void> {
+    await apiRequest<unknown>(`${BACKEND_ROUTES.RANCHOS}/${id}`, {
+      method: 'PUT',
+      body: {
+        idRancho: id,
+        nombre: input.nombre.trim(),
+        ubicacionGeneral: input.ubicacionGeneral.trim(),
+        estado: input.estado.trim() || 'Activo'
+      },
+      allowEmptyResponse: true
+    });
   }
 };
 

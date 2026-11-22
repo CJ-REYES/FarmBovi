@@ -10,6 +10,7 @@ import type {
   BackendEndpointAvailability,
   SyncBatchPushRequestDto,
   SyncBatchPushResponseDto,
+  SyncConflictFieldDiffDto,
   SyncEndpointsConfig,
   SyncOperationRequestDto,
   SyncOperationResultDto,
@@ -781,11 +782,50 @@ function normalizeAlertPayloadForBackend(
   return backendPayload;
 }
 
+function normalizeRanchPayloadForBackend(
+  rawPayload: unknown,
+  idRegistro: string,
+  tipoOperacion: OutboxOperationType
+): Record<string, unknown> {
+  if (tipoOperacion === 'DELETE') {
+    return { idRancho: idRegistro };
+  }
+  if (!isPlainRecord(rawPayload)) {
+    return {};
+  }
+
+  const backendPayload: Record<string, unknown> = {};
+  if (tipoOperacion === 'CREATE') {
+    backendPayload.idRancho = idRegistro;
+  }
+
+  if (typeof rawPayload.nombre === 'string') {
+    backendPayload.nombre = rawPayload.nombre.trim();
+  }
+  if (rawPayload.ubicacionGeneral !== undefined) {
+    backendPayload.ubicacionGeneral =
+      typeof rawPayload.ubicacionGeneral === 'string' && rawPayload.ubicacionGeneral.trim().length > 0
+        ? rawPayload.ubicacionGeneral.trim()
+        : null;
+  }
+  if (typeof rawPayload.estado === 'string' && rawPayload.estado.trim().length > 0) {
+    backendPayload.estado = rawPayload.estado.trim();
+  } else if (tipoOperacion === 'CREATE') {
+    backendPayload.estado = 'Activo';
+  }
+
+  return backendPayload;
+}
+
 function buildBackendPushBody(dto: SyncOperationRequestDto): {
   body: Record<string, unknown>;
   deviceId: string;
 } {
-  const deviceId = getOrCreateDeviceId();
+  const candidateDevice = typeof dto.idDispositivo === 'string' ? dto.idDispositivo.trim() : '';
+  const deviceId =
+    candidateDevice && /^[A-Za-z0-9._:@-]{3,120}$/.test(candidateDevice)
+      ? candidateDevice
+      : getOrCreateDeviceId();
   const idRancho = resolvePayloadRanchId(dto);
   const idRegistro = resolveBackendRecordId(dto);
   const entidadBackend = CLIENT_ENTITY_TO_BACKEND[dto.entidad] ?? dto.entidad;
@@ -795,9 +835,11 @@ function buildBackendPushBody(dto: SyncOperationRequestDto): {
       : Number(dto.versionBase);
 
   const normalizedPayload =
-    dto.entidad === 'cattle'
-      ? normalizeCattlePayloadForBackend(dto.payload, idRegistro, idRancho, dto.tipoOperacion)
-      : dto.entidad === 'lots'
+    dto.entidad === 'ranches'
+      ? normalizeRanchPayloadForBackend(dto.payload, idRegistro, dto.tipoOperacion)
+      : dto.entidad === 'cattle'
+        ? normalizeCattlePayloadForBackend(dto.payload, idRegistro, idRancho, dto.tipoOperacion)
+        : dto.entidad === 'lots'
         ? normalizeLotPayloadForBackend(dto.payload, idRegistro, idRancho, dto.tipoOperacion)
         : dto.entidad === 'movements'
           ? normalizeMovementPayloadForBackend(dto.payload, idRegistro, dto.tipoOperacion)
@@ -868,19 +910,25 @@ function mapHttpErrorToOperationResult(
         ? (err.data as Record<string, unknown>)
         : null;
 
-    // 409 Conflict: versión base desactualizada o restricción de integridad
+    // 409 Conflict: versión base desactualizada, eliminación concurrente o restricción de integridad
     if (err.status === 409) {
       const conflictType = typeof body?.tipoConflicto === 'string' ? body.tipoConflicto : '';
+      const rawServerState = body?.estadoServidor ?? body?.datosServidor;
       const serverState =
-        body?.estadoServidor &&
-        typeof body.estadoServidor === 'object' &&
-        !Array.isArray(body.estadoServidor)
-          ? (body.estadoServidor as Record<string, unknown>)
+        rawServerState && typeof rawServerState === 'object' && !Array.isArray(rawServerState)
+          ? (rawServerState as Record<string, unknown>)
           : null;
       const serverVersion =
         typeof body?.versionServidor === 'number' || typeof body?.versionServidor === 'string'
           ? body.versionServidor
           : null;
+      const remoteRecordId =
+        typeof body?.idRegistro === 'string' && body.idRegistro.trim().length > 0
+          ? body.idRegistro
+          : null;
+      const camposModificados = Array.isArray(body?.camposModificados)
+        ? (body.camposModificados as SyncConflictFieldDiffDto[])
+        : undefined;
 
       if (
         conflictType === 'DUPLICATE_OR_INVALID_REFERENCE' ||
@@ -897,11 +945,17 @@ function mapHttpErrorToOperationResult(
         };
       }
 
+      const normalizedConflictType: 'VERSION_MISMATCH' | 'DELETED_ON_SERVER' =
+        conflictType === 'DELETED_ON_SERVER' ? 'DELETED_ON_SERVER' : 'VERSION_MISMATCH';
+
       return {
         idOperacion: dto.idOperacion,
         entidad: dto.entidad,
         idEntidad: dto.idEntidad,
+        remoteId: remoteRecordId,
         resultado: 'CONFLICT',
+        tipoConflicto: normalizedConflictType,
+        camposModificados,
         versionServidor: serverVersion,
         estadoServidor: serverState,
         mensaje: err.message,
@@ -1021,7 +1075,8 @@ export const SyncHttpClient = {
       entidad: op.entidad,
       idEntidad: op.idEntidad,
       remoteId: remoteId ?? null,
-      ranchId: ranchId ?? null,
+      ranchId: ranchId ?? op.idRancho ?? null,
+      idDispositivo: op.idDispositivo ?? null,
       tipoOperacion: op.tipoOperacion,
       versionBase: op.versionBase,
       payload: op.payload,

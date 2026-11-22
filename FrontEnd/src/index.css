@@ -70,3 +70,98 @@ textarea:focus {
     scroll-behavior: auto !important;
   }
 }
+
+/* Frame animations para Landing Page y flujo de Autenticación (GPU-accelerated) */
+@keyframes fb-fade-up {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 22px, 0) scale(0.985);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes fb-slide-frame-in {
+  0% {
+    opacity: 0;
+    transform: translate3d(18px, 0, 0) scale(0.99);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes fb-slide-frame-left {
+  0% {
+    opacity: 0;
+    transform: translate3d(-18px, 0, 0) scale(0.99);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes fb-float-slow {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(0, -10px, 0);
+  }
+}
+
+@keyframes fb-pulse-ring {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.7;
+  }
+  70% {
+    transform: scale(1.12);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.12);
+    opacity: 0;
+  }
+}
+
+.fb-anim-fade-up {
+  animation: fb-fade-up 0.62s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.fb-anim-delay-1 {
+  animation-delay: 90ms;
+}
+
+.fb-anim-delay-2 {
+  animation-delay: 180ms;
+}
+
+.fb-anim-delay-3 {
+  animation-delay: 270ms;
+}
+
+.fb-anim-delay-4 {
+  animation-delay: 360ms;
+}
+
+.fb-anim-frame-right {
+  animation: fb-slide-frame-in 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.fb-anim-frame-left {
+  animation: fb-slide-frame-left 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.fb-anim-float {
+  animation: fb-float-slow 5.5s ease-in-out infinite;
+}
+
+.fb-anim-pulse-ring {
+  animation: fb-pulse-ring 2.4s cubic-bezier(0.24, 0, 0.38, 1) infinite;
+}
