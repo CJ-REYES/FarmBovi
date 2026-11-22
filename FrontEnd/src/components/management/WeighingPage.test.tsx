@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { db } from '../../lib/database/db';
 import { RanchRepository } from '../../lib/database/repositories/ranch.repository';
 import { CattleRepository } from '../../lib/database/repositories/cattle.repository';
@@ -74,6 +74,8 @@ describe('WeighingPage — Registro de pesajes, gráfica real, último peso, rec
       db.ranches.clear(),
       db.cattle.clear(),
       db.weighings.clear(),
+      db.weighingAnalysisJobs.clear(),
+      db.media.clear(),
       db.outbox.clear(),
       db.syncConflicts.clear(),
       db.syncCheckpoints.clear()
@@ -210,5 +212,79 @@ describe('WeighingPage — Registro de pesajes, gráfica real, último peso, rec
     // Mostrar pesajes desactivados recupera la fila desactivada en el historial
     await user.click(screen.getByLabelText(/Mostrar pesajes desactivados/i));
     expect(await screen.findByText('Desactivado')).toBeInTheDocument();
+  });
+
+  it('toma automáticamente el dato de BoviScale si el animal ya tiene pesaje registrado, o muestra botón para ir a BoviScale si no tiene', async () => {
+    const user = userEvent.setup();
+
+    function BoviScaleTargetProbe() {
+      const loc = useLocation();
+      return <div data-testid="boviscale-route">{`${loc.pathname}${loc.search}`}</div>;
+    }
+
+    // 1. Sin pesaje BoviScale -> aparece botón "Pesar en BoviScale" que redirige con el animal preseleccionado
+    const { unmount } = render(
+      <MemoryRouter initialEntries={['/weighing']}>
+        <Routes>
+          <Route path="/weighing" element={<WeighingPage />} />
+          <Route path="/boviscale" element={<BoviScaleTargetProbe />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await screen.findByText(/Datos insuficientes para graficar/i);
+    await user.click(screen.getAllByRole('button', { name: /Registrar Pesaje Oficial/i })[0]);
+    const dialogNoBovi = await screen.findByRole('dialog');
+
+    await user.click(within(dialogNoBovi).getByRole('combobox', { name: /^Animal/i }));
+    await user.click(within(dialogNoBovi).getByRole('option', { name: /MX-850/i }));
+
+    expect(
+      await within(dialogNoBovi).findByText(/Sin pesaje registrado en BoviScale/i)
+    ).toBeInTheDocument();
+
+    await user.click(within(dialogNoBovi).getByRole('button', { name: /Pesar en BoviScale/i }));
+    expect(await screen.findByTestId('boviscale-route')).toHaveTextContent(
+      `/boviscale?animal=${ANIMAL_1}&tipo=BoviScaleVision`
+    );
+    unmount();
+
+    // 2. Con pesaje BoviScale registrado -> precarga automáticamente el peso y muestra comparativa BoviScale vs Báscula
+    const now = new Date().toISOString();
+    await db.weighingAnalysisJobs.put({
+      idTrabajo: 'job-bs-1',
+      idMedia: 'media-bs-1',
+      idBovino: ANIMAL_1,
+      ranchId: RANCH_A,
+      idOperacion: null,
+      estado: 'pendiente_de_revision',
+      pesoEstimadoKg: 432.5,
+      pesoConfirmadoKg: null,
+      idPesajeConfirmado: null,
+      confianzaModelo: 0.92,
+      versionModelo: 'boviscale-v1',
+      observacionesModelo: null,
+      intentos: 1,
+      ultimoError: null,
+      codigoErrorHttp: null,
+      proximoIntento: null,
+      fechaCreacion: now,
+      actualizadoEn: now,
+      analizadoEn: now,
+      completadoEn: null
+    });
+
+    renderWeighingPage();
+    await screen.findByText(/Datos insuficientes para graficar/i);
+    await user.click(screen.getAllByRole('button', { name: /Registrar Pesaje Oficial/i })[0]);
+    const dialogWithBovi = await screen.findByRole('dialog');
+
+    await user.click(within(dialogWithBovi).getByRole('combobox', { name: /^Animal/i }));
+    await user.click(within(dialogWithBovi).getByRole('option', { name: /MX-850/i }));
+
+    expect(
+      await within(dialogWithBovi).findByText(/BoviScale vs Báscula: 432\.5 kg/i)
+    ).toBeInTheDocument();
+    expect(within(dialogWithBovi).getByLabelText(/Peso Real de Báscula/i)).toHaveValue(432.5);
   });
 });

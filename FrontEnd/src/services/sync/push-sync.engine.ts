@@ -184,7 +184,31 @@ async function resolveOperationRanchId(
     }
   }
 
-  // Último respaldo: primer rancho activo en caché local
+  // Último respaldo: primer rancho autorizado de la sesión activa o caché local
+  if (typeof window !== 'undefined') {
+    const rawCandidates = [
+      window.sessionStorage?.getItem('farmbovi_session_user'),
+      window.localStorage?.getItem('farmbovi_session_meta')
+    ];
+    for (const raw of rawCandidates) {
+      if (!raw) continue;
+      try {
+        const parsed = JSON.parse(raw) as {
+          idUsuario?: unknown;
+          ranchos?: Array<{ idRancho?: string }>;
+        };
+        if (typeof parsed.idUsuario === 'string') {
+          const firstAuthRanch = parsed.ranchos?.find(
+            (r) => typeof r?.idRancho === 'string' && isValidGuid(r.idRancho)
+          )?.idRancho;
+          return firstAuthRanch ?? null;
+        }
+      } catch {
+        // Ignorar si no es JSON válido
+      }
+    }
+  }
+
   const fallbackRanch = await db.ranches.filter((r) => !r.deletedAt).first();
   if (fallbackRanch && isValidGuid(fallbackRanch.id)) {
     return fallbackRanch.id;
@@ -390,7 +414,42 @@ export const PushSyncEngine = {
           ? op.versionBase
           : (latestEntity?.serverVersion ?? null);
 
+      // Protección contra operaciones huérfanas sin versionBase (p. ej. DELETE/UPDATE heredados
+      // cuyo CREATE nunca se confirmó en el servidor o fue descartado): evita HTTP 400 repetidos.
+      if (op.tipoOperacion === 'DELETE' && effectiveVersionBase === null && !latestEntity?.remoteId) {
+        await OutboxRepository.discardOperation(op.idOperacion, { allowInProgress: true });
+        return 'ALREADY_PROCESSED';
+      }
+
+      if (op.tipoOperacion === 'UPDATE' && effectiveVersionBase === null && !latestEntity?.remoteId) {
+        await this.applyValidationErrorOutcome(op, {
+          idOperacion: op.idOperacion,
+          entidad: op.entidad,
+          idEntidad: op.idEntidad,
+          resultado: 'VALIDATION_ERROR',
+          mensaje:
+            'Esta actualización pertenece a un registro local que nunca se creó en el servidor. Puedes descartarla desde el Centro de Sincronización.'
+        });
+        return 'VALIDATION_ERROR';
+      }
+
       const resolvedRanchId = await resolveOperationRanchId(op, latestEntity);
+
+      if (op.entidad !== 'ranches' && !resolvedRanchId) {
+        await this.applyTransientErrorOutcome(op, {
+          idOperacion: op.idOperacion,
+          entidad: op.entidad,
+          idEntidad: op.idEntidad,
+          resultado: 'TRANSIENT_ERROR',
+          mensaje:
+            'Registra o sincroniza un rancho en la sección Ranchos para poder subir esta operación.'
+        });
+        return 'TRANSIENT_ERROR';
+      }
+
+      if (resolvedRanchId && op.idRancho !== resolvedRanchId) {
+        await db.outbox.update(op.idOperacion, { idRancho: resolvedRanchId });
+      }
 
       const effectiveOp: LocalOutboxQueue = {
         ...op,

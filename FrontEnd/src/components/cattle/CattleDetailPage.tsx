@@ -20,6 +20,7 @@ import {
   CheckCircle2,
   Clock,
   Eye,
+  FileText,
   Image as ImageIcon,
   Loader2,
   X
@@ -44,6 +45,8 @@ import {
 } from '../../lib/database/repositories';
 import { calculateAnimalAge } from '../../services/cattle.validation';
 import { formatBytesHuman } from '../../services/photo-capture.service';
+import { ReportsPdfService } from '../../services/reports.pdf';
+import { ReportsService } from '../../services/reports.service';
 import BlobImage from '../shared/BlobImage';
 import EmptyState from '../ui/EmptyState';
 
@@ -94,6 +97,25 @@ export default function CattleDetailPage() {
   );
   const [confirmDeactivate, setConfirmDeactivate] = useState<boolean>(false);
   const [isDeactivating, setIsDeactivating] = useState<boolean>(false);
+  const [exportingPdf, setExportingPdf] = useState<boolean>(false);
+
+  const handleDownloadAnimalPdf = async () => {
+    if (!animal) return;
+    setExportingPdf(true);
+    setErrorMsg(null);
+    try {
+      const dataset = await ReportsService.loadDataset({ includeDeleted: false });
+      const result = await ReportsPdfService.generateIndividualAnimalPdf(dataset, animal.id);
+      ReportsPdfService.downloadPdfResult(result);
+      setFeedbackMsg(`Expediente PDF descargado (${result.filename}).`);
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error ? err.message : 'No fue posible generar el reporte PDF del bovino.'
+      );
+    } finally {
+      setExportingPdf(false);
+    }
+  };
 
   useEffect(() => {
     if (!id) return;
@@ -279,7 +301,23 @@ export default function CattleDetailPage() {
         </div>
 
         {!animal.deletedAt && (
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void handleDownloadAnimalPdf()}
+              disabled={exportingPdf}
+              className="min-h-[42px] flex items-center gap-2 bg-brand-primary hover:bg-brand-dark text-white px-4 rounded-md font-semibold text-[13px] transition-colors shadow-sm disabled:opacity-50 cursor-pointer"
+            >
+              {exportingPdf ? (
+                <>
+                  <Loader2 size={15} className="animate-spin" /> Generando PDF...
+                </>
+              ) : (
+                <>
+                  <FileText size={15} /> Reporte PDF
+                </>
+              )}
+            </button>
             <button
               type="button"
               onClick={() => navigate(`/cattle/${animal.id}/edit`)}
@@ -390,6 +428,7 @@ export default function CattleDetailPage() {
                   >
                     <BlobImage
                       blob={profilePhoto.blobData}
+                      remoteUrl={profilePhoto.urlRemota}
                       alt={`Foto de perfil de ${animal.arete}`}
                       className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-200"
                     />
@@ -561,6 +600,7 @@ export default function CattleDetailPage() {
                       <div className="h-24 w-full overflow-hidden bg-black/5">
                         <BlobImage
                           blob={photo.blobData}
+                          remoteUrl={photo.urlRemota}
                           alt={`Foto BoviScale de ${animal.arete}`}
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
                         />
@@ -801,6 +841,7 @@ export default function CattleDetailPage() {
             <div className="p-4 bg-black/5 flex items-center justify-center max-h-[70vh]">
               <BlobImage
                 blob={inspectPhoto.blobData}
+                remoteUrl={inspectPhoto.urlRemota}
                 alt={inspectPhoto.nombreArchivo}
                 className="max-w-full max-h-[62vh] object-contain rounded-lg"
               />

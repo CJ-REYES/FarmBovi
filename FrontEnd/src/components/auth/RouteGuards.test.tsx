@@ -50,13 +50,13 @@ describe('Protección de Rutas del Frontend (ProtectedRoute y PublicOnlyRoute)',
 
   it.each([
     '/dashboard',
+    '/ranches',
     '/cattle',
     '/lots',
     '/boviscale',
     '/alerts',
     '/settings',
     '/profile',
-    '/ranch-setup',
     '/ruta-inexistente'
   ])('bloquea la ruta protegida %s sin sesión y redirige a /login', async (protectedPath) => {
     const { router } = renderRealRouter(protectedPath);
@@ -77,7 +77,7 @@ describe('Protección de Rutas del Frontend (ProtectedRoute y PublicOnlyRoute)',
     ).toBeInTheDocument();
   });
 
-  it('redirige a /login al intentar abrir /cattle sin sesión y devuelve a /cattle tras autenticar con rancho', async () => {
+  it('redirige a /login al intentar abrir /cattle sin sesión y devuelve a /cattle tras autenticar', async () => {
     const user = userEvent.setup();
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = typeof input === 'string' ? input : input.toString();
@@ -90,21 +90,6 @@ describe('Protección de Rutas del Frontend (ProtectedRoute y PublicOnlyRoute)',
             nombre: 'Carlos Reyes',
             ranchos: [{ idRancho: RANCH_ID, nombre: 'Rancho El Encino', rol: 'Admin' }]
           }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } }
-        );
-      }
-      if (url.includes('/ranchos')) {
-        return new Response(
-          JSON.stringify([
-            {
-              idRancho: RANCH_ID,
-              nombre: 'Rancho El Encino',
-              ubicacionGeneral: 'Veracruz, México',
-              estado: 'Activo',
-              creadoEn: new Date().toISOString(),
-              versionRegistro: 1
-            }
-          ]),
           { status: 200, headers: { 'Content-Type': 'application/json' } }
         );
       }
@@ -129,30 +114,25 @@ describe('Protección de Rutas del Frontend (ProtectedRoute y PublicOnlyRoute)',
     });
   });
 
-  it('redirige a /ranch-setup cuando un usuario autenticado SIN ranchos intenta abrir /dashboard', async () => {
+  it('permite entrar directo a /dashboard y /ranches aunque el usuario aún tenga 0 ranchos registrados', async () => {
     seedSession({ ranchos: [] });
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-      const url = typeof input === 'string' ? input : input.toString();
-      if (url.includes('/ranchos')) {
-        return new Response(JSON.stringify([]), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-      return new Response(JSON.stringify([]), { status: 200 });
-    });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      })
+    );
 
-    const { router } = renderRealRouter('/dashboard');
+    const { router } = renderRealRouter('/ranches');
 
     await waitFor(() => {
-      expect(router.state.location.pathname).toBe('/ranch-setup');
+      expect(router.state.location.pathname).toBe('/ranches');
     });
-    expect(
-      await screen.findByRole('heading', { name: /Registra tu Rancho/i, level: 2 })
-    ).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^Ranchos$/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /^Ranchos$/i })).toBeInTheDocument();
   });
 
-  it('redirige a /dashboard cuando un usuario ya autenticado con rancho intenta abrir /login o /register', async () => {
+  it('redirige a /dashboard cuando un usuario ya autenticado intenta abrir /login o /register', async () => {
     seedSession();
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify([]), {

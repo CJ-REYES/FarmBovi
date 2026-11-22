@@ -1,6 +1,6 @@
 import { Link, NavLink } from 'react-router-dom';
 import {
-  LayoutDashboard, Map, Activity,
+  LayoutDashboard, Building2, Map, Activity,
   Beef, Wheat, Scale, Syringe, HeartPulse, Dna, Camera,
   Bell, FileText, Settings, UserCircle, X, type LucideIcon
 } from 'lucide-react';
@@ -22,7 +22,10 @@ interface MenuGroup {
 const MENU_GROUPS: MenuGroup[] = [
   {
     category: "GENERAL",
-    items: [{ id: 'dashboard', path: '/dashboard', label: 'Panel Principal', icon: LayoutDashboard }]
+    items: [
+      { id: 'dashboard', path: '/dashboard', label: 'Panel Principal', icon: LayoutDashboard },
+      { id: 'ranchos', path: '/ranches', label: 'Ranchos', icon: Building2 }
+    ]
   },
   {
     category: "GANADO",

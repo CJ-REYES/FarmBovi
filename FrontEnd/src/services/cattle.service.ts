@@ -3,7 +3,7 @@ import {
   cattleApi,
   lotsApi,
   ranchesApi,
-  readSessionAuthToken
+  hasActiveAuthSession
 } from '../lib/api';
 import { computeStableNegativeId } from '../lib/database/migrations';
 import { CattleRepository } from '../lib/database/repositories/cattle.repository';
@@ -321,6 +321,11 @@ export const CattleService = {
   },
 
   async attemptPushForEntity(idEntidad: string): Promise<{ synced: boolean; syncMessage?: string }> {
+    const pendingForEntity = await OutboxRepository.getPendingByEntity('cattle', idEntidad);
+    if (pendingForEntity.length === 0) {
+      return { synced: true };
+    }
+
     if (typeof navigator === 'undefined' || !navigator.onLine) {
       return {
         synced: false,
@@ -329,7 +334,7 @@ export const CattleService = {
       };
     }
 
-    if (!readSessionAuthToken()) {
+    if (!hasActiveAuthSession()) {
       return {
         synced: false,
         syncMessage:

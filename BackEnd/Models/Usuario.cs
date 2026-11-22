@@ -7,5 +7,7 @@ public sealed class Usuario
     public string Correo { get; set; } = string.Empty;
     public string Contrasena { get; set; } = string.Empty;
     public string Estado { get; set; } = string.Empty;
+    public string? FotoPerfilRuta { get; set; }
+    public string? ConfiguracionJson { get; set; }
     public DateTime CreadoEn { get; set; } = DateTime.UtcNow;
 }

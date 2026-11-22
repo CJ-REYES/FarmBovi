@@ -1,7 +1,7 @@
 import {
   ApiError,
   healthEventsApi,
-  readSessionAuthToken,
+  hasActiveAuthSession,
   treatmentsApi
 } from '../lib/api';
 import { computeStableNegativeId } from '../lib/database/migrations';
@@ -380,7 +380,7 @@ export const HealthService = {
       };
     }
 
-    if (!readSessionAuthToken()) {
+    if (!hasActiveAuthSession()) {
       return {
         synced: false,
         syncMessage:

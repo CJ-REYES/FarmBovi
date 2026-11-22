@@ -231,4 +231,62 @@ describe('PhotoCaptureService — Validaciones, Blob en IndexedDB y cola pendien
     const afterDelete = await PhotoCaptureService.listPhotos({ cattleId: ANIMAL_ID });
     expect(afterDelete.photos).toHaveLength(0);
   });
+
+  it('sincroniza la imagen vía POST /api/media/archivos cuando hay red y sesión, guardando URL remota y confirmando el outbox', async () => {
+    window.sessionStorage.setItem('farmbovi_access_token', 'jwt-media-sync');
+    Object.defineProperty(window.navigator, 'onLine', { configurable: true, value: true });
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/media/archivos') && init?.method === 'POST') {
+        const body = init.body as FormData;
+        const idArchivo = String(body.get('idArchivo') || crypto.randomUUID());
+        return new Response(
+          JSON.stringify({
+            idArchivo,
+            idRancho: RANCH_ID,
+            idAnimal: ANIMAL_ID,
+            entidadRelacionada: 'cattle',
+            idEntidadRelacionada: ANIMAL_ID,
+            tipo: 'FotoPerfil',
+            nombreArchivo: 'perfil.jpg',
+            mimeType: 'image/jpeg',
+            tamanoBytes: 512,
+            checksumSha256: null,
+            rutaArchivo: `public/imagenes/perfil-ganado/${ANIMAL_ID}/perfil_1.jpg`,
+            urlPublica: `/api/media/public/imagenes/perfil-ganado/${ANIMAL_ID}/perfil_1.jpg`,
+            fechaCaptura: new Date().toISOString(),
+            creadoEn: new Date().toISOString(),
+            versionRegistro: 1,
+            eliminadoEn: null
+          }),
+          { status: 201, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    });
+
+    const blob = new Blob([new Uint8Array([0xff, 0xd8, 0xff, 0xe0])], { type: 'image/jpeg' });
+    const saved = await PhotoCaptureService.savePhoto({
+      blob,
+      cattleId: ANIMAL_ID,
+      tipo: 'FotoPerfil'
+    });
+
+    expect(saved.synced).toBe(true);
+    expect(saved.photo.estadoArchivo).toBe('subido');
+    expect(saved.photo.syncStatus).toBe('synced');
+    expect(saved.photo.urlRemota).toContain('/api/media/public/imagenes/perfil-ganado/');
+    expect(fetchSpy).toHaveBeenCalled();
+
+    const ops = await OutboxRepository.getByEntity('media', saved.photo.id);
+    expect(ops).toHaveLength(1);
+    expect(ops[0].estado).toBe('confirmado');
+
+    window.sessionStorage.clear();
+    vi.restoreAllMocks();
+  });
 });

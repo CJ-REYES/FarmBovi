@@ -268,7 +268,7 @@ export default function CattleListPage() {
         const profilePhoto = profilePhotoByCattleId.get(animal.id);
         return (
           <div className="flex items-center gap-2.5 flex-wrap">
-            {profilePhoto?.blobData && (
+            {(profilePhoto?.blobData || profilePhoto?.urlRemota) && (
               <Link
                 to={`/cattle/${animal.id}`}
                 aria-label={`Ver foto de perfil de ${animal.arete}`}
@@ -276,6 +276,7 @@ export default function CattleListPage() {
               >
                 <BlobImage
                   blob={profilePhoto.blobData}
+                  remoteUrl={profilePhoto.urlRemota}
                   alt={`Foto de ${animal.arete}`}
                   className="w-full h-full object-cover"
                 />
@@ -528,10 +529,11 @@ export default function CattleListPage() {
             const profilePhoto = profilePhotoByCattleId.get(animal.id);
             return (
               <div className="flex flex-wrap items-center gap-2">
-                {profilePhoto?.blobData && (
+                {(profilePhoto?.blobData || profilePhoto?.urlRemota) && (
                   <div className="w-8 h-8 rounded-full overflow-hidden border border-border-light shrink-0 bg-black/5">
                     <BlobImage
                       blob={profilePhoto.blobData}
+                      remoteUrl={profilePhoto.urlRemota}
                       alt={`Foto de ${animal.arete}`}
                       className="w-full h-full object-cover"
                     />

@@ -1,3 +1,4 @@
+import { hasActiveAuthSession } from '../lib/api';
 import { StorageManager } from '../lib/database/db';
 import { CattleRepository } from '../lib/database/repositories/cattle.repository';
 import { MediaRepository } from '../lib/database/repositories/media.repository';
@@ -12,6 +13,7 @@ import {
 } from '../types/media';
 import { CattleService } from './cattle.service';
 import { isValidGuid } from './cattle.validation';
+import { MediaSyncEngine } from './sync/media-sync.engine';
 
 export interface PhotoValidationResult {
   valid: boolean;
@@ -27,7 +29,7 @@ export interface SaveAnimalPhotoInput {
 
 export interface SaveAnimalPhotoResult {
   photo: StoredAnimalPhoto;
-  synced: false;
+  synced: boolean;
   syncMessage: string;
 }
 
@@ -300,6 +302,10 @@ export const PhotoCaptureService = {
   },
 
   async listPhotos(options?: { cattleId?: string }): Promise<LoadPhotosResult> {
+    if (typeof navigator !== 'undefined' && navigator.onLine && hasActiveAuthSession()) {
+      await MediaSyncEngine.pullRemoteMedia({ cattleId: options?.cattleId });
+    }
+
     const [allActive, filteredActive, animals] = await Promise.all([
       MediaRepository.getAllActive(),
       options?.cattleId
@@ -351,17 +357,46 @@ export const PhotoCaptureService = {
     });
 
     const isOnline = typeof navigator !== 'undefined' && navigator.onLine;
+    if (isOnline && hasActiveAuthSession()) {
+      const syncResult = await MediaSyncEngine.syncSingleMedia(media.id);
+      const refreshed = (await MediaRepository.getById(media.id)) ?? media;
+      if (syncResult.synced) {
+        return {
+          photo: this.toStoredPhoto(refreshed),
+          synced: true,
+          syncMessage: `Fotografía sincronizada correctamente para ${animal.arete} (${formatBytesHuman(refreshed.tamanoBytes)}). Guardada en servidor y vinculada por ruta.`
+        };
+      }
+      return {
+        photo: this.toStoredPhoto(refreshed),
+        synced: false,
+        syncMessage: syncResult.error
+          ? `Guardada localmente en IndexedDB, pero la subida falló: ${syncResult.error}`
+          : `Fotografía guardada localmente (${formatBytesHuman(refreshed.tamanoBytes)}) para ${animal.arete}. Pendiente de sincronización.`
+      };
+    }
+
     return {
       photo: this.toStoredPhoto(media),
       synced: false,
       syncMessage: isOnline
-        ? `Fotografía guardada localmente como Blob (${formatBytesHuman(media.tamanoBytes)}) asociada a ${animal.arete}. Quedó registrada como pendiente de sincronización cuando el Backend habilite el endpoint multimedia.`
+        ? `Fotografía guardada localmente (${formatBytesHuman(media.tamanoBytes)}) asociada a ${animal.arete}. Inicia sesión para sincronizarla con el servidor.`
         : `Sin conexión: fotografía guardada en IndexedDB (${formatBytesHuman(media.tamanoBytes)}) asociada a ${animal.arete} y encolada para sincronización posterior.`
     };
   },
 
-  async deletePhoto(mediaId: string): Promise<{ synced: false; syncMessage: string }> {
+  async deletePhoto(mediaId: string): Promise<{ synced: boolean; syncMessage: string }> {
     await MediaRepository.softDeleteMedia(mediaId);
+    const isOnline = typeof navigator !== 'undefined' && navigator.onLine;
+    if (isOnline && hasActiveAuthSession()) {
+      const summary = await MediaSyncEngine.syncPendingMedia();
+      if (summary.errorCount === 0) {
+        return {
+          synced: true,
+          syncMessage: 'Fotografía eliminada del dispositivo y sincronizada con el servidor.'
+        };
+      }
+    }
     return {
       synced: false,
       syncMessage: 'Fotografía eliminada del historial local y marcada para sincronización.'

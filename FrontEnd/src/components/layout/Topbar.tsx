@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   Search,
@@ -14,6 +15,7 @@ import {
 import { useSharedCattle } from '../../hooks/useCattle';
 import { useSyncStatus } from '../../hooks/useSyncStatus';
 import { useAuth } from '../../hooks/useAuth';
+import { resolveMediaUrl } from '../../lib/api';
 import { getUserInitials } from '../../services/auth.service';
 
 export interface TopbarProps {
@@ -32,9 +34,18 @@ export default function Topbar({ onMenuClick, onOpenSyncPanel }: TopbarProps) {
     triggerManualSync
   } = useSyncStatus();
   const { session, isAuthenticated } = useAuth();
+  const [failedPhotoUrl, setFailedPhotoUrl] = useState<string | null>(null);
+  const resolvedAvatarUrl = resolveMediaUrl(session?.fotoPerfilUrl);
+  const showAvatarImage = Boolean(resolvedAvatarUrl && failedPhotoUrl !== resolvedAvatarUrl);
 
+  const preferredRanch = session?.configuracion?.ranchoPredeterminadoId
+    ? ranches.find((r) => r.id === session.configuracion?.ranchoPredeterminadoId)
+    : undefined;
   const activeRanchName =
-    ranches[0]?.nombre || session?.ranchos[0]?.nombre || 'Sin rancho asignado';
+    preferredRanch?.nombre ||
+    ranches[0]?.nombre ||
+    session?.ranchos[0]?.nombre ||
+    'Sin rancho asignado';
   const hasAttentionSync =
     counts.failedOperationsCount > 0 ||
     counts.failedFilesCount > 0 ||
@@ -69,8 +80,8 @@ export default function Topbar({ onMenuClick, onOpenSyncPanel }: TopbarProps) {
 
         {/* Contexto de Rancho */}
         <Link
-          to="/settings"
-          title="Administrar o registrar rancho"
+          to="/ranches"
+          title="Administrar o registrar ranchos"
           className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-surface-secondary hover:bg-brand-primary/10 rounded-md border border-border-light/50 transition-colors"
         >
           <MapPin size={16} className="text-brand-primary shrink-0" />
@@ -212,9 +223,18 @@ export default function Topbar({ onMenuClick, onOpenSyncPanel }: TopbarProps) {
             onClick={() => navigate('/profile')}
             aria-label={`Perfil de ${session.nombre}`}
             title={`${session.nombre} (${session.correo})`}
-            className="w-8 h-8 rounded-full bg-brand-forest text-white flex items-center justify-center font-bold text-[13px] uppercase cursor-pointer"
+            className="w-9 h-9 rounded-full bg-brand-forest text-white flex items-center justify-center font-bold text-[13px] uppercase overflow-hidden border border-border-light cursor-pointer"
           >
-            {getUserInitials(session.nombre)}
+            {showAvatarImage && resolvedAvatarUrl ? (
+              <img
+                src={resolvedAvatarUrl}
+                alt={`Foto de perfil de ${session.nombre}`}
+                onError={() => setFailedPhotoUrl(resolvedAvatarUrl)}
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              getUserInitials(session.nombre)
+            )}
           </button>
         ) : (
           <button

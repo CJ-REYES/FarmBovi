@@ -32,6 +32,15 @@ export function registerFarmBoviServiceWorker(): void {
   if (registeredOnce || typeof window === 'undefined' || !('serviceWorker' in navigator)) {
     return;
   }
+
+  // En desarrollo (`npm run dev`), VitePWA tiene `devOptions.enabled = false` y `/sw.js`
+  // no existe (el servidor devuelve index.html con MIME text/html). Registrar solo en build/producción.
+  const isDev = Boolean(import.meta.env.DEV);
+  const forceDevSw = import.meta.env.VITE_ENABLE_DEV_SW === 'true';
+  if (isDev && !forceDevSw) {
+    return;
+  }
+
   registeredOnce = true;
 
   // Escuchar mensajes enviados desde src/pwa/sw.ts (ej. solicitud de Background Sync)

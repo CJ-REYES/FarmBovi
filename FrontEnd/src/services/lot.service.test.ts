@@ -306,14 +306,36 @@ describe('LotService — CRUD offline-first, reglas de rancho y sincronización 
     // Al trasladar/quitar el animal, el borrado lógico procede correctamente
     await db.cattle.update(animalId, { loteId: undefined });
 
+    // Caso A: Lote puramente local (nunca confirmado en servidor) -> cancela su CREATE/UPDATE local sin encolar DELETE huérfano
     const deactivated = await LotService.deactivate(created.lot.id);
     expect(deactivated.synced).toBe(false);
 
     const stored = await LotRepository.getByIdIncludingDeleted(created.lot.id);
     expect(stored?.deletedAt).toBeTruthy();
 
-    const ops = await OutboxRepository.getByEntity('lots', created.lot.id);
-    expect(ops.some((op) => op.tipoOperacion === 'DELETE')).toBe(true);
+    const localOps = await OutboxRepository.getByEntity('lots', created.lot.id);
+    expect(localOps).toHaveLength(0);
+
+    // Caso B: Lote ya confirmado en servidor -> encola DELETE con versionBase
+    const syncedLotId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    await LotRepository.upsertFromServer([
+      {
+        id: syncedLotId,
+        remoteId: syncedLotId,
+        ranchId: RANCH_A,
+        nombre: 'Potrero Remoto',
+        capacidad: 10,
+        estado: 'Activo',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        syncStatus: 'synced',
+        serverVersion: 3,
+        deletedAt: null
+      }
+    ]);
+    await LotService.deactivate(syncedLotId);
+    const syncedOps = await OutboxRepository.getByEntity('lots', syncedLotId);
+    expect(syncedOps.some((op) => op.tipoOperacion === 'DELETE' && op.versionBase === 3)).toBe(true);
   });
 
   it('hidrata potreros desde GET /api/lotes y realiza fallback a IndexedDB ante error 401 sin perder pendientes', async () => {

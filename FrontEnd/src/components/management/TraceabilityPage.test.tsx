@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
@@ -269,5 +269,129 @@ describe('TraceabilityPage — Historial cronológico, validaciones, CRUD y pers
     await user.click(screen.getByLabelText(/Mostrar movimientos desactivados/i));
     expect(await screen.findByText(/Traslado marzo actualizado/i)).toBeInTheDocument();
     expect(screen.getByText('Desactivado')).toBeInTheDocument();
+  });
+
+  it('permite trasladar un bovino a otro rancho desde el modal Trasladar entre Ranchos y actualiza IndexedDB y la línea de tiempo', async () => {
+    const user = userEvent.setup();
+    const RANCH_B = '11111111-1111-4111-8111-111111111122';
+    const LOT_B1 = '22222222-2222-4222-8222-222222222299';
+    const now = new Date().toISOString();
+
+    await RanchRepository.upsertFromServer([
+      {
+        id: RANCH_B,
+        remoteId: RANCH_B,
+        ranchId: RANCH_B,
+        nombre: 'Rancho San Miguel',
+        ubicacionGeneral: 'Sur',
+        estado: 'Activo',
+        createdAt: now,
+        updatedAt: now,
+        syncStatus: 'synced',
+        serverVersion: 1,
+        deletedAt: null
+      }
+    ]);
+    await LotRepository.upsertFromServer([
+      {
+        id: LOT_B1,
+        remoteId: LOT_B1,
+        ranchId: RANCH_B,
+        nombre: 'Potrero Destino B',
+        capacidad: 20,
+        ubicacion: 'Sector Sur',
+        estado: 'Activo',
+        createdAt: now,
+        updatedAt: now,
+        syncStatus: 'synced',
+        serverVersion: 1,
+        deletedAt: null
+      }
+    ]);
+
+    setOnlineStatus(true);
+    window.sessionStorage.setItem('farmbovi_access_token', 'jwt-transfer-test');
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/movimientos-animales/traslado-rancho/animal')) {
+        return new Response(
+          JSON.stringify({
+            modo: 'Animal',
+            ranchoOrigenId: RANCH_A,
+            ranchoOrigenNombre: 'Rancho La Esperanza',
+            ranchoDestinoId: RANCH_B,
+            ranchoDestinoNombre: 'Rancho San Miguel',
+            animalesTrasladados: 1,
+            loteTrasladado: null,
+            animales: [
+              {
+                idAnimal: ANIMAL_1,
+                idRancho: RANCH_B,
+                idLote: LOT_B1,
+                arete: 'MX-550',
+                raza: 'Brahman',
+                sexo: 'Hembra',
+                fechaIngreso: '2025-05-01',
+                procedencia: 'Propio',
+                estado: 'Activo',
+                versionRegistro: 2
+              }
+            ],
+            movimientos: [
+              {
+                idMovimiento: '77777777-7777-4777-8777-777777777701',
+                idAnimal: ANIMAL_1,
+                idLoteOrigen: LOT_NORTE,
+                idLoteDestino: LOT_B1,
+                tipo: 'Traslado',
+                fecha: '2026-11-22T15:00:00',
+                origenExterno: 'Rancho: Rancho La Esperanza',
+                destinoExterno: 'Rancho: Rancho San Miguel',
+                motivo: 'Cambio de rancho por pastura',
+                versionRegistro: 1
+              }
+            ],
+            mensaje: "Bovino 'MX-550' trasladado de 'Rancho La Esperanza' a 'Rancho San Miguel'."
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    });
+
+    renderTraceabilityPage();
+    await screen.findByText(/Sin movimientos registrados/i);
+
+    await user.click(screen.getByRole('button', { name: /Trasladar entre Ranchos/i }));
+    const dialog = await screen.findByRole('dialog');
+
+    await user.click(within(dialog).getByRole('combobox', { name: /Bovino a trasladar/i }));
+    await user.click(within(dialog).getByRole('option', { name: /MX-550/i }));
+    await user.selectOptions(within(dialog).getByLabelText(/Rancho de Destino/i), RANCH_B);
+    await user.selectOptions(within(dialog).getByLabelText(/Potrero en Rancho Destino/i), LOT_B1);
+    await user.type(
+      within(dialog).getByLabelText(/Motivo/i),
+      'Cambio de rancho por pastura'
+    );
+    await user.click(within(dialog).getByRole('button', { name: /Confirmar Traslado/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    expect(
+      await screen.findByText(/Bovino 'MX-550' trasladado de 'Rancho La Esperanza' a 'Rancho San Miguel'/i)
+    ).toBeInTheDocument();
+
+    const updatedAnimal = await db.cattle.get(ANIMAL_1);
+    expect(updatedAnimal?.ranchId).toBe(RANCH_B);
+    expect(updatedAnimal?.loteId).toBe(LOT_B1);
+
+    window.sessionStorage.clear();
+    vi.restoreAllMocks();
   });
 });

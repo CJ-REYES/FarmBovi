@@ -83,7 +83,7 @@ export class BaseTransactionalRepository<T extends BaseLocalEntity> {
     inFlightOperationKeys.add(lockKey);
 
     try {
-      return await db.transaction('rw', [this.table, db.outbox], async () => {
+      return await db.transaction('rw', [this.table, db.outbox, db.syncConflicts], async () => {
         let recordId = data.id;
 
         if (operation === 'CREATE') {
@@ -175,6 +175,48 @@ export class BaseTransactionalRepository<T extends BaseLocalEntity> {
           } as UpdateSpec<T>;
           await this.table.update(recordId, updateChanges);
         } else if (operation === 'DELETE') {
+          // Si el registro es puramente local (nunca confirmado en el servidor),
+          // cancelar sus operaciones pendientes/fallidas en lugar de encolar un DELETE
+          // huérfano que provocaría errores 409/400 al sincronizar.
+          const entityOutboxOps = await db.outbox
+            .where('[entidad+idEntidad]')
+            .equals([this.entityName, recordId])
+            .toArray();
+          const hasConfirmedServerSync =
+            Boolean(current.remoteId) ||
+            (current.serverVersion !== null && current.serverVersion !== undefined) ||
+            entityOutboxOps.some((op) => op.estado === 'confirmado');
+
+          if (!hasConfirmedServerSync) {
+            const unconfirmedIds = entityOutboxOps
+              .filter((op) => op.estado !== 'confirmado')
+              .map((op) => op.idOperacion);
+            if (unconfirmedIds.length > 0) {
+              await db.outbox.bulkDelete(unconfirmedIds);
+            }
+            const relatedConflicts = await db.syncConflicts
+              .where('idEntidad')
+              .equals(recordId)
+              .filter((c) => c.entidad === this.entityName)
+              .toArray();
+            if (relatedConflicts.length > 0) {
+              await db.syncConflicts.bulkDelete(relatedConflicts.map((c) => c.idConflicto));
+            }
+
+            const localOnlyTombstone: Partial<BaseLocalEntity> = {
+              deletedAt: now,
+              updatedAt: now,
+              syncStatus: 'synced'
+            };
+            await this.table.update(recordId, localOnlyTombstone as unknown as UpdateSpec<T>);
+
+            const cancelledRecord = await this.table.get(recordId);
+            if (!cancelledRecord) {
+              throw new Error(`Fallo al verificar consistencia tras DELETE local en ${this.entityName}.`);
+            }
+            return cancelledRecord;
+          }
+
           const tombstoneChanges: Partial<BaseLocalEntity> = {
             deletedAt: now,
             updatedAt: now,

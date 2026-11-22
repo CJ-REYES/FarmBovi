@@ -4,10 +4,12 @@ export interface RedirectLocationState {
     search?: string;
     hash?: string;
   };
-  reason?: 'auth-required' | 'expired' | 'ranch-required';
+  reason?: 'auth-required' | 'expired';
+  registeredEmail?: string;
+  infoMsg?: string;
 }
 
-const AUTH_PUBLIC_PATHS = new Set(['/', '/login', '/register', '/ranch-setup']);
+const AUTH_PUBLIC_PATHS = new Set(['/', '/login', '/register']);
 
 /**
  * Valida que el destino de redirección post-login sea una ruta interna segura

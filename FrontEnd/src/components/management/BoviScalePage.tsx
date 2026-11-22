@@ -902,6 +902,7 @@ export default function BoviScalePage() {
                     >
                       <BlobImage
                         blob={photo.blobData}
+                        remoteUrl={photo.urlRemota}
                         alt={`Fotografía de ${animal?.arete || photo.cattleId}`}
                         className="w-full h-full object-cover"
                       />
@@ -995,6 +996,7 @@ export default function BoviScalePage() {
             <div className="p-4 bg-black/5 flex items-center justify-center max-h-[70vh]">
               <BlobImage
                 blob={inspectPhoto.blobData}
+                remoteUrl={inspectPhoto.urlRemota}
                 alt={inspectPhoto.nombreArchivo}
                 className="max-w-full max-h-[62vh] object-contain rounded-lg"
               />

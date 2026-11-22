@@ -390,6 +390,30 @@ export const MediaRepository = {
       if (!existing || existing.deletedAt) return;
 
       const now = new Date().toISOString();
+      const existingOps = await db.outbox
+        .where('[entidad+idEntidad]')
+        .equals(['media', mediaId])
+        .toArray();
+      const hasUploadedToServer =
+        Boolean(existing.remoteId) ||
+        existing.estadoArchivo === 'subido' ||
+        existingOps.some((op) => op.estado === 'confirmado');
+
+      if (!hasUploadedToServer) {
+        const unconfirmedIds = existingOps
+          .filter((op) => op.estado !== 'confirmado')
+          .map((op) => op.idOperacion);
+        if (unconfirmedIds.length > 0) {
+          await db.outbox.bulkDelete(unconfirmedIds);
+        }
+        await db.media.update(mediaId, {
+          deletedAt: now,
+          updatedAt: now,
+          syncStatus: 'synced'
+        });
+        return;
+      }
+
       await db.media.update(mediaId, {
         deletedAt: now,
         updatedAt: now,
@@ -401,6 +425,7 @@ export const MediaRepository = {
         idEntidad: mediaId,
         tipoOperacion: 'DELETE',
         versionBase: existing.serverVersion ?? null,
+        idRancho: existing.ranchId ?? null,
         payload: { id: existing.remoteId ?? existing.id }
       });
 

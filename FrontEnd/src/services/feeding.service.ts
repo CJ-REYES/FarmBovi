@@ -1,7 +1,7 @@
 import {
   ApiError,
   feedingApi,
-  readSessionAuthToken
+  hasActiveAuthSession
 } from '../lib/api';
 import { computeStableNegativeId } from '../lib/database/migrations';
 import { CattleRepository } from '../lib/database/repositories/cattle.repository';
@@ -272,7 +272,7 @@ export const FeedingService = {
       };
     }
 
-    if (!readSessionAuthToken()) {
+    if (!hasActiveAuthSession()) {
       return {
         synced: false,
         syncMessage:

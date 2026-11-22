@@ -11,6 +11,7 @@ import CattleForm from './components/cattle/CattleForm';
 import CattleDetailPage from './components/cattle/CattleDetailPage';
 
 // Módulos de Manejo Ganadero
+import RanchesPage from './components/management/RanchesPage';
 import LotsPage from './components/management/LotsPage';
 import TraceabilityPage from './components/management/TraceabilityPage';
 import FeedingPage from './components/management/FeedingPage';
@@ -39,21 +40,16 @@ export const APP_ROUTES: RouteObject[] = [
     ]
   },
 
-  // Ruta privada de onboarding: exige sesión JWT pero permite completar registro de rancho
+  // Rutas privadas de operación: exigen sesión JWT válida
   {
-    element: <ProtectedRoute requireRanch={false} />,
-    children: [{ path: '/ranch-setup', element: <AuthPage key="ranch" initialMode="ranch" /> }]
-  },
-
-  // Rutas privadas de operación: exigen sesión JWT válida y al menos un rancho activo
-  {
-    element: <ProtectedRoute requireRanch />,
+    element: <ProtectedRoute />,
     children: [
       {
         path: '/',
         element: <AppShell />,
         children: [
           { path: 'dashboard', element: <DashboardPage /> },
+          { path: 'ranches', element: <RanchesPage /> },
 
           { path: 'cattle', element: <CattleListPage /> },
           { path: 'cattle/new', element: <CattleForm /> },

@@ -9,16 +9,37 @@ export const PHOTO_CAPTURE_LIMITS = {
 } as const;
 
 /**
- * Dependencia explícita con el Backend (ver `docs/08-contrato-sincronizacion.md` §Alcance real de Pull).
- * Aún no existe endpoint de almacenamiento binario/multimedia (`ArchivoMultimedia`) en el servidor.
+ * Contrato real de sincronización multimedia con el Backend (`POST/GET/DELETE /api/media/archivos`).
+ * En la base de datos únicamente se persiste la ruta relativa (`public/imagenes/perfil-ganado/...`,
+ * `public/imagenes/pesaje-ganado/...`, `public/imagenes/perfil-usuario/...`) y las imágenes se
+ * almacenan en disco servidas vía `/api/media/...`.
  */
 export const MEDIA_BACKEND_DEPENDENCY = {
   entityName: 'ArchivoMultimedia',
-  syncPushEnabled: false,
-  syncPullEnabled: false,
+  syncPushEnabled: true,
+  syncPullEnabled: true,
   summaryMessage:
-    'Almacenamiento local offline-first activo: las fotografías se guardan como Blob con sus metadatos en IndexedDB y quedan en cola pendiente de subida hasta que el Backend habilite el endpoint multimedia (ArchivoMultimedia). Esta versión cubre captura, almacenamiento y cola de sincronización sin estimación automática de peso por IA.'
+    'Sincronización multimedia activa: las imágenes se guardan en disco en public/imagenes/ (perfil-ganado, pesaje-ganado, perfil-usuario) y en la base de datos solo se registra su ruta relativa transformada a URL para el Frontend. Sin conexión permanecen seguras en IndexedDB hasta reconectar.'
 } as const;
+
+export interface BackendArchivoMultimediaDto {
+  idArchivo: string;
+  idRancho: string;
+  idAnimal: string | null;
+  entidadRelacionada: string;
+  idEntidadRelacionada: string | null;
+  tipo: string;
+  nombreArchivo: string;
+  mimeType: string;
+  tamanoBytes: number;
+  checksumSha256: string | null;
+  rutaArchivo: string;
+  urlPublica: string;
+  fechaCaptura: string;
+  creadoEn: string;
+  versionRegistro: number;
+  eliminadoEn: string | null;
+}
 
 export interface StoredAnimalPhoto {
   id: string;

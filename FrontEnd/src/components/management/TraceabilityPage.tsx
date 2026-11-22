@@ -6,6 +6,7 @@ import {
   Search,
   RefreshCw,
   ArrowRight,
+  ArrowLeftRight,
   ArrowUpDown,
   Calendar,
   Edit,
@@ -20,13 +21,16 @@ import {
   X,
   Filter
 } from 'lucide-react';
-import type { Cattle, LotOption } from '../../types/cattle';
+import type { Cattle, LotOption, RanchOption } from '../../types/cattle';
 import {
   MOVEMENT_TYPES,
   MOVEMENT_TYPE_LABELS,
   type Movement,
   type MovementInput,
-  type MovementType
+  type MovementType,
+  type TrasladoAnimalRanchoPayload,
+  type TrasladoLoteRanchoPayload,
+  type TrasladoRanchoResultDto
 } from '../../types/movement';
 import {
   MovementService,
@@ -37,6 +41,7 @@ import { useSyncStatus } from '../../hooks/useSyncStatus';
 import { useSharedCattle } from '../../hooks/useCattle';
 import EmptyState from '../ui/EmptyState';
 import MovementFormModal from './MovementFormModal';
+import RanchTransferModal from './RanchTransferModal';
 
 function formatDateTimeDisplay(raw: string): string {
   const parsed = new Date(raw);
@@ -133,6 +138,7 @@ export default function TraceabilityPage() {
   const [movements, setMovements] = useState<Movement[]>([]);
   const [animals, setAnimals] = useState<Cattle[]>([]);
   const [lots, setLots] = useState<LotOption[]>([]);
+  const [ranches, setRanches] = useState<RanchOption[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [apiWarning, setApiWarning] = useState<string | null>(null);
@@ -151,6 +157,7 @@ export default function TraceabilityPage() {
     | { open: true; mode: 'create' }
     | { open: true; mode: 'edit'; movement: Movement }
   >({ open: false });
+  const [isRanchTransferOpen, setIsRanchTransferOpen] = useState<boolean>(false);
 
   const [selectedMovement, setSelectedMovement] = useState<Movement | null>(null);
   const [deactivateTarget, setDeactivateTarget] = useState<Movement | null>(null);
@@ -168,6 +175,7 @@ export default function TraceabilityPage() {
       setMovements(result.data);
       setAnimals(result.animals);
       setLots(result.lots);
+      setRanches(result.ranches);
       setApiWarning(result.warning);
     } catch (err) {
       setError(
@@ -192,6 +200,7 @@ export default function TraceabilityPage() {
         setMovements(result.data);
         setAnimals(result.animals);
         setLots(result.lots);
+        setRanches(result.ranches);
         setApiWarning(result.warning);
         setError(null);
       } catch (err) {
@@ -235,8 +244,14 @@ export default function TraceabilityPage() {
 
   const describeOrigin = useCallback(
     (mov: Movement): string => {
-      if (mov.idLoteOrigen) {
-        return lotNameById.get(mov.idLoteOrigen) || `Potrero (${mov.idLoteOrigen.slice(0, 8)}…)`;
+      const lotLabel = mov.idLoteOrigen
+        ? lotNameById.get(mov.idLoteOrigen) || `Potrero (${mov.idLoteOrigen.slice(0, 8)}…)`
+        : null;
+      if (mov.origenExterno?.startsWith('Rancho:')) {
+        return lotLabel ? `${mov.origenExterno} · ${lotLabel}` : mov.origenExterno;
+      }
+      if (lotLabel) {
+        return lotLabel;
       }
       if (mov.origenExterno) {
         return `Externo: ${mov.origenExterno}`;
@@ -248,8 +263,14 @@ export default function TraceabilityPage() {
 
   const describeDestination = useCallback(
     (mov: Movement): string => {
-      if (mov.idLoteDestino) {
-        return lotNameById.get(mov.idLoteDestino) || `Potrero (${mov.idLoteDestino.slice(0, 8)}…)`;
+      const lotLabel = mov.idLoteDestino
+        ? lotNameById.get(mov.idLoteDestino) || `Potrero (${mov.idLoteDestino.slice(0, 8)}…)`
+        : null;
+      if (mov.destinoExterno?.startsWith('Rancho:')) {
+        return lotLabel ? `${mov.destinoExterno} · ${lotLabel}` : mov.destinoExterno;
+      }
+      if (lotLabel) {
+        return lotLabel;
       }
       if (mov.destinoExterno) {
         return `Externo: ${mov.destinoExterno}`;
@@ -331,6 +352,26 @@ export default function TraceabilityPage() {
     return result;
   };
 
+  const handleTransferAnimalBetweenRanches = async (
+    payload: TrasladoAnimalRanchoPayload
+  ): Promise<TrasladoRanchoResultDto> => {
+    const result = await MovementService.transferAnimalBetweenRanches(payload);
+    setFeedbackMsg(result.mensaje);
+    await loadData(includeDeleted, sortOrder);
+    await refreshCattleContext();
+    return result;
+  };
+
+  const handleTransferLotBetweenRanches = async (
+    payload: TrasladoLoteRanchoPayload
+  ): Promise<TrasladoRanchoResultDto> => {
+    const result = await MovementService.transferLotBetweenRanches(payload);
+    setFeedbackMsg(result.mensaje);
+    await loadData(includeDeleted, sortOrder);
+    await refreshCattleContext();
+    return result;
+  };
+
   const handleConfirmDeactivate = async () => {
     if (!deactivateTarget || isDeactivating) return;
     setIsDeactivating(true);
@@ -371,7 +412,7 @@ export default function TraceabilityPage() {
             Trazabilidad y Movimientos
           </h1>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => void loadData(includeDeleted, sortOrder)}
@@ -381,6 +422,13 @@ export default function TraceabilityPage() {
           >
             <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
             <span className="hidden sm:inline">Actualizar</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsRanchTransferOpen(true)}
+            className="min-h-[42px] flex items-center gap-2 bg-surface-white border border-brand-primary/40 hover:bg-brand-primary/10 text-brand-forest px-3.5 rounded-md font-semibold text-[13px] transition-colors shadow-sm cursor-pointer"
+          >
+            <ArrowLeftRight size={15} className="text-brand-primary" /> Trasladar entre Ranchos
           </button>
           <button
             type="button"
@@ -816,6 +864,19 @@ export default function TraceabilityPage() {
           isOnline={isOnline}
           onClose={() => setFormModalState({ open: false })}
           onSubmit={handleSaveMovement}
+        />
+      )}
+
+      {/* Modal Traslado entre Ranchos (Animal o Lote) */}
+      {isRanchTransferOpen && (
+        <RanchTransferModal
+          animals={animals}
+          lots={lots}
+          ranches={ranches}
+          isOnline={isOnline}
+          onClose={() => setIsRanchTransferOpen(false)}
+          onTransferAnimal={handleTransferAnimalBetweenRanches}
+          onTransferLot={handleTransferLotBetweenRanches}
         />
       )}
 

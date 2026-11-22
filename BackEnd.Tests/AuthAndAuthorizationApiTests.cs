@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using FarmBovi.Api.Data;
 using FarmBovi.Api.Models;
+using FarmBovi.Api.Services;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -30,6 +31,9 @@ public sealed class FarmBoviApiFactory : WebApplicationFactory<Program>
     public const string Issuer = "FarmBovi.Api";
     public const string Audience = "FarmBovi.Clients";
     private readonly string _databaseName = "api-" + Guid.NewGuid().ToString("N");
+    private readonly string _tempStorageRoot = Path.Combine(
+        Path.GetTempPath(),
+        "farmbovi-test-media-" + Guid.NewGuid().ToString("N"));
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -44,6 +48,7 @@ public sealed class FarmBoviApiFactory : WebApplicationFactory<Program>
                 d.ServiceType == typeof(DbContextOptions<FarmDbContext>) ||
                 d.ServiceType == typeof(DbContextOptions) ||
                 d.ServiceType == typeof(FarmDbContext) ||
+                d.ServiceType == typeof(ProfilePhotoStorageService) ||
                 (d.ServiceType.IsGenericType &&
                  d.ServiceType.GetGenericTypeDefinition().Name.StartsWith("IDbContextOptionsConfiguration"))).ToList();
             foreach (var descriptor in toRemove)
@@ -52,7 +57,26 @@ public sealed class FarmBoviApiFactory : WebApplicationFactory<Program>
             services.AddDbContext<FarmDbContext>(options => options
                 .UseInMemoryDatabase(_databaseName)
                 .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning)));
+
+            // Aisla los archivos de prueba en un directorio temporal para no ensuciar BackEnd/public/imagenes
+            services.AddSingleton(new ProfilePhotoStorageService(_tempStorageRoot));
         });
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        base.Dispose(disposing);
+        if (disposing && Directory.Exists(_tempStorageRoot))
+        {
+            try
+            {
+                Directory.Delete(_tempStorageRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+                // Ignorar si el sistema operativo aún retiene un descriptor
+            }
+        }
     }
 
     public async Task SeedAsync(Func<FarmDbContext, Task> seed)

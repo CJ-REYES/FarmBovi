@@ -143,9 +143,9 @@ const ROADMAP = [
 ] as const;
 
 export default function LandingPage() {
-  const { isAuthenticated, hasRanch, session } = useAuth();
+  const { isAuthenticated, session } = useAuth();
   const [selectedModuleId, setSelectedModuleId] = useState<string>(MODULES[0].id);
-  const authenticatedEntryPath = hasRanch ? '/dashboard' : '/ranch-setup';
+  const authenticatedEntryPath = '/dashboard';
 
   const activeModule = MODULES.find((m) => m.id === selectedModuleId) ?? MODULES[0];
   const ActiveIcon = activeModule.icon;

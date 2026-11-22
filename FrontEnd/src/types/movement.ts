@@ -1,4 +1,5 @@
 import type { SyncStatus } from '../lib/database/schema';
+import type { BackendAnimalDto, BackendLoteDto } from './cattle';
 
 export type MovementType = 'Alta' | 'CambioInterno' | 'Traslado' | 'Venta' | 'Baja';
 
@@ -84,4 +85,36 @@ export interface MovementInput {
   origenExterno: string | null;
   destinoExterno: string | null;
   motivo: string | null;
+}
+
+export type LotTransferMode = 'MoverLoteCompleto' | 'ReubicarAnimalesEnLoteDestino';
+
+export interface TrasladoAnimalRanchoPayload {
+  idAnimal: string;
+  idRanchoDestino: string;
+  idLoteDestino?: string | null;
+  fecha?: string;
+  motivo?: string | null;
+}
+
+export interface TrasladoLoteRanchoPayload {
+  idLote: string;
+  idRanchoDestino: string;
+  modoLote: LotTransferMode;
+  idLoteDestino?: string | null;
+  fecha?: string;
+  motivo?: string | null;
+}
+
+export interface TrasladoRanchoResultDto {
+  modo: string;
+  ranchoOrigenId: string;
+  ranchoOrigenNombre: string;
+  ranchoDestinoId: string;
+  ranchoDestinoNombre: string;
+  animalesTrasladados: number;
+  loteTrasladado: BackendLoteDto | null;
+  animales: BackendAnimalDto[];
+  movimientos: BackendMovimientoAnimalDto[];
+  mensaje: string;
 }

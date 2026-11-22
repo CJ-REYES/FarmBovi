@@ -1,5 +1,6 @@
-import { useState, useRef, useMemo, type FormEvent } from 'react';
-import { AlertCircle, Info, Loader2, Save, WifiOff, X } from 'lucide-react';
+import { useState, useEffect, useRef, useMemo, type FormEvent } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { AlertCircle, Camera, Info, Loader2, Save, Scale, WifiOff, X } from 'lucide-react';
 import type { Cattle } from '../../types/cattle';
 import type { Weighing, WeighingInput } from '../../types/weighing';
 import {
@@ -8,7 +9,9 @@ import {
   type WeighingValidationErrors
 } from '../../services/weighing.validation';
 import {
+  WeighingService,
   WeighingValidationError,
+  type BoviScaleReference,
   type WeighingMutationResult
 } from '../../services/weighing.service';
 import AnimalSelectField from '../shared/AnimalSelectField';
@@ -44,7 +47,9 @@ export default function WeighingFormModal({
   onSubmit
 }: WeighingFormModalProps) {
   const isEditMode = mode === 'edit' && Boolean(initialWeighing);
+  const navigate = useNavigate();
   const submitLockRef = useRef<boolean>(false);
+  const userEditedWeightRef = useRef<boolean>(isEditMode);
 
   const [formData, setFormData] = useState<WeighingInput>(() => {
     if (initialWeighing) {
@@ -75,6 +80,69 @@ export default function WeighingFormModal({
   const [fieldErrors, setFieldErrors] = useState<WeighingValidationErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [boviScaleState, setBoviScaleState] = useState<{
+    animalId: string;
+    ref: BoviScaleReference;
+  } | null>(null);
+
+  useEffect(() => {
+    const animalId = formData.idAnimal;
+    if (!animalId) return;
+
+    let cancelled = false;
+    void WeighingService.getLatestBoviScaleReference(animalId)
+      .then((ref) => {
+        if (cancelled) return;
+        setBoviScaleState({ animalId, ref });
+        // En creación, si BoviScale ya tiene pesaje registrado y el usuario aún no capturó un peso manual,
+        // precargar automáticamente el dato de BoviScale para agilizar la captura / comparación.
+        if (!isEditMode && ref.hasWeight && ref.pesoKg !== null && !userEditedWeightRef.current) {
+          setFormData((prev) => ({
+            ...prev,
+            pesoRealKg: String(ref.pesoKg)
+          }));
+        }
+      })
+      .catch(() => {
+        // Ignorar errores de lectura de referencia BoviScale
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [formData.idAnimal, isEditMode]);
+
+  const boviScaleRef =
+    formData.idAnimal && boviScaleState?.animalId === formData.idAnimal
+      ? boviScaleState.ref
+      : null;
+
+  const handleGoToBoviScale = () => {
+    const query = formData.idAnimal
+      ? `?animal=${encodeURIComponent(formData.idAnimal)}&tipo=BoviScaleVision`
+      : '?tipo=BoviScaleVision';
+    onClose();
+    navigate(`/boviscale${query}`);
+  };
+
+  const handleApplyBoviScaleWeight = () => {
+    if (!boviScaleRef?.hasWeight || boviScaleRef.pesoKg === null) return;
+    userEditedWeightRef.current = true;
+    setFormData((prev) => ({
+      ...prev,
+      pesoRealKg: String(boviScaleRef.pesoKg)
+    }));
+    clearFieldError('pesoRealKg');
+  };
+
+  const boviScaleDiff = useMemo(() => {
+    if (!boviScaleRef?.hasWeight || boviScaleRef.pesoKg === null) return null;
+    const currentKg = Number(formData.pesoRealKg);
+    if (!Number.isFinite(currentKg) || currentKg <= 0) return null;
+    const diffKg = Math.round((currentKg - boviScaleRef.pesoKg) * 10) / 10;
+    const diffPct = Math.round((diffKg / boviScaleRef.pesoKg) * 1000) / 10;
+    return { diffKg, diffPct };
+  }, [boviScaleRef, formData.pesoRealKg]);
 
   const animalOptions = useMemo(
     () =>
@@ -205,10 +273,86 @@ export default function WeighingFormModal({
             }
             error={fieldErrors.idAnimal}
             onChange={(animalId) => {
+              userEditedWeightRef.current = false;
               setFormData((prev) => ({ ...prev, idAnimal: animalId }));
               clearFieldError('idAnimal');
             }}
           />
+
+          {/* Comparativa BoviScale vs Báscula o acceso directo a BoviScale */}
+          {formData.idAnimal && boviScaleRef && (
+            boviScaleRef.hasWeight && boviScaleRef.pesoKg !== null ? (
+              <div
+                role="status"
+                className="p-3.5 rounded-lg bg-brand-primary/8 border border-brand-primary/25 space-y-2"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-[13px] font-bold text-brand-forest">
+                    <Scale size={16} className="text-brand-primary shrink-0" />
+                    <span>
+                      BoviScale vs Báscula: {boviScaleRef.pesoKg.toFixed(1)} kg
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleApplyBoviScaleWeight}
+                      className="px-2.5 py-1 rounded-md bg-brand-primary hover:bg-brand-dark text-white text-[11px] font-semibold transition-colors cursor-pointer"
+                    >
+                      Usar peso BoviScale
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleGoToBoviScale}
+                      className="px-2.5 py-1 rounded-md border border-brand-primary/35 bg-surface-white hover:bg-brand-primary/10 text-brand-forest text-[11px] font-semibold inline-flex items-center gap-1 transition-colors cursor-pointer"
+                    >
+                      <Camera size={12} /> Ir a BoviScale
+                    </button>
+                  </div>
+                </div>
+                <p className="text-[11px] text-brand-slate/75">
+                  {boviScaleRef.sourceLabel}
+                  {boviScaleRef.fecha
+                    ? ` · ${new Date(boviScaleRef.fecha).toLocaleDateString('es-MX')}`
+                    : ''}
+                  {boviScaleRef.confianzaModelo !== null
+                    ? ` · Confianza: ${Math.round(boviScaleRef.confianzaModelo * 100)}%`
+                    : ''}
+                  {boviScaleDiff && (
+                    <span className="ml-1.5 font-semibold text-brand-forest">
+                      · Diferencia báscula vs BoviScale:{' '}
+                      {boviScaleDiff.diffKg > 0 ? `+${boviScaleDiff.diffKg}` : boviScaleDiff.diffKg} kg (
+                      {boviScaleDiff.diffPct > 0 ? `+${boviScaleDiff.diffPct}` : boviScaleDiff.diffPct}%)
+                    </span>
+                  )}
+                </p>
+              </div>
+            ) : (
+              <div
+                role="status"
+                className="p-3.5 rounded-lg bg-surface-secondary/70 border border-border-light flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+              >
+                <div className="space-y-0.5 text-[12px] text-brand-slate">
+                  <p className="font-semibold text-brand-forest flex items-center gap-1.5">
+                    <Camera size={14} className="text-brand-primary shrink-0" />
+                    Sin pesaje registrado en BoviScale
+                  </p>
+                  <p className="text-[11px] text-brand-slate/70">
+                    {boviScaleRef.hasPhotoWithoutWeight
+                      ? `Este bovino tiene ${boviScaleRef.photoCount} foto(s) en BoviScale, pero aún sin estimación de peso registrada.`
+                      : 'Este bovino aún no cuenta con un pesaje registrado en BoviScale.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleGoToBoviScale}
+                  className="shrink-0 min-h-[38px] px-3.5 rounded-md bg-brand-primary hover:bg-brand-dark text-white text-[12px] font-semibold inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <Camera size={14} /> Pesar en BoviScale
+                </button>
+              </div>
+            )
+          )}
 
           {/* Peso + Fecha */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -229,6 +373,7 @@ export default function WeighingFormModal({
                 step="0.1"
                 value={formData.pesoRealKg}
                 onChange={(e) => {
+                  userEditedWeightRef.current = true;
                   setFormData((prev) => ({ ...prev, pesoRealKg: e.target.value }));
                   clearFieldError('pesoRealKg');
                 }}

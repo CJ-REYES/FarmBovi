@@ -1,4 +1,4 @@
-import { readSessionAuthToken, remindersApi } from '../lib/api';
+import { hasActiveAuthSession, remindersApi } from '../lib/api';
 import { AlertRepository } from '../lib/database/repositories/alert.repository';
 import { OutboxRepository } from '../lib/database/repositories/outbox.repository';
 import { RanchRepository } from '../lib/database/repositories/ranch.repository';
@@ -181,7 +181,7 @@ export const AlertService = {
     const includeDeleted = Boolean(options?.includeDeleted);
     const order = options?.order ?? 'asc';
     const isOnline = typeof navigator !== 'undefined' && navigator.onLine;
-    const hasToken = Boolean(readSessionAuthToken());
+    const hasToken = Boolean(hasActiveAuthSession());
 
     let source: 'api' | 'cache' = 'cache';
     let warning: string | null = null;
@@ -229,7 +229,7 @@ export const AlertService = {
       };
     }
 
-    if (!readSessionAuthToken()) {
+    if (!hasActiveAuthSession()) {
       return {
         synced: false,
         syncMessage:

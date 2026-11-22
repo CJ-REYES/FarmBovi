@@ -7,7 +7,10 @@ import type {
 import type { BackendLotePayload } from '../types/lot';
 import type {
   BackendMovimientoAnimalDto,
-  BackendMovimientoAnimalPayload
+  BackendMovimientoAnimalPayload,
+  TrasladoAnimalRanchoPayload,
+  TrasladoLoteRanchoPayload,
+  TrasladoRanchoResultDto
 } from '../types/movement';
 import type {
   BackendAlimentacionDto,
@@ -23,12 +26,18 @@ import type {
   BackendRecordatorioDto,
   BackendRecordatorioPayload
 } from '../types/alert';
+import type { BackendArchivoMultimediaDto } from '../types/media';
 import type {
   BackendRanchoPayload,
+  ChangePasswordRequestDto,
   CreateUsuarioRanchoPayload,
   CreateUsuarioRequestDto,
   LoginRequestDto,
   LoginResponseDto,
+  RegisterRequestDto,
+  SessionInfoResponseDto,
+  UpdateProfileRequestDto,
+  UserConfig,
   UsuarioResponseDto
 } from '../types/auth';
 
@@ -43,6 +52,10 @@ export const API_BASE_URL = (
  */
 export const BACKEND_ROUTES = {
   AUTH_LOGIN: '/auth/login',
+  AUTH_REGISTER: '/auth/register',
+  AUTH_SESSION: '/auth/session',
+  AUTH_LOGOUT: '/auth/logout',
+  MEDIA: '/media',
   ANIMALES: '/animales',
   LOTES: '/lotes',
   RANCHOS: '/ranchos',
@@ -103,8 +116,13 @@ export function registerUnauthorizedHandler(handler: UnauthorizedHandler | null)
 }
 
 /**
- * Obtiene el token de sesión únicamente desde sessionStorage sin almacenarlo
- * en IndexedDB ni registrarlo en consola.
+ * Clave de metadatos NO sensibles de sesión en localStorage (sin token JWT) para
+ * mantener continuidad PWA offline/entre reinicios junto con la cookie HttpOnly del backend.
+ */
+export const PERSISTED_SESSION_META_KEY = 'farmbovi_session_meta';
+
+/**
+ * Obtiene el token JWT en memoria/sessionStorage (nunca en localStorage ni IndexedDB).
  */
 export function readSessionAuthToken(): string | null {
   if (typeof window === 'undefined') return null;
@@ -118,6 +136,31 @@ export function readSessionAuthToken(): string | null {
   }
 }
 
+/**
+ * Indica si existe una sesión autenticada vigente, ya sea mediante token Bearer en la
+ * pestaña activa o mediante cookie HttpOnly persistente + metadatos vigentes en la PWA.
+ */
+export function hasActiveAuthSession(): boolean {
+  if (readSessionAuthToken()) return true;
+  if (typeof window === 'undefined' || !window.localStorage) return false;
+  try {
+    const rawMeta = window.localStorage.getItem(PERSISTED_SESSION_META_KEY);
+    if (!rawMeta) return false;
+    const parsed = JSON.parse(rawMeta) as { idUsuario?: unknown; expiraEn?: unknown };
+    if (typeof parsed.idUsuario !== 'string' || typeof parsed.expiraEn !== 'string') {
+      return false;
+    }
+    const expiresMs = Date.parse(parsed.expiraEn);
+    if (!Number.isNaN(expiresMs) && expiresMs <= Date.now()) {
+      window.localStorage.removeItem(PERSISTED_SESSION_META_KEY);
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function buildApiUrl(path: string): string {
   if (/^https?:\/\//i.test(path)) {
     return path;
@@ -127,6 +170,30 @@ export function buildApiUrl(path: string): string {
     return normalizedPath;
   }
   return `${API_BASE_URL}${normalizedPath}`;
+}
+
+/**
+ * Resuelve la URL pública de una imagen devuelta por el Backend (ej. `/api/media/uploads/...`)
+ * para renderizarla directamente en etiquetas `<img src="..." />` tanto con proxy local como con
+ * un `VITE_API_BASE_URL` en otro origen.
+ */
+export function resolveMediaUrl(urlOrPath?: string | null): string | null {
+  if (!urlOrPath || !urlOrPath.trim()) return null;
+  const trimmed = urlOrPath.trim();
+  if (/^(https?:|blob:|data:)/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  const normalized = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  if (/^https?:\/\//i.test(API_BASE_URL)) {
+    const apiOrigin = new URL(API_BASE_URL).origin;
+    if (normalized.startsWith('/api/')) {
+      return `${apiOrigin}${normalized}`;
+    }
+    return `${API_BASE_URL}${normalized}`;
+  }
+
+  return normalized;
 }
 
 export function buildSafeHeaders(extraHeaders?: Record<string, string>): Record<string, string> {
@@ -206,6 +273,7 @@ export async function apiRequest<T>(
     response = await fetch(url, {
       method,
       headers,
+      credentials: 'include',
       cache: 'no-store',
       body:
         options.body === undefined
@@ -269,8 +337,10 @@ export async function apiRequest<T>(
   if (!response.ok) {
     if (
       response.status === 401 &&
-      Boolean(headers.Authorization) &&
-      path !== BACKEND_ROUTES.AUTH_LOGIN
+      (Boolean(headers.Authorization) || hasActiveAuthSession()) &&
+      path !== BACKEND_ROUTES.AUTH_LOGIN &&
+      path !== BACKEND_ROUTES.AUTH_REGISTER &&
+      path !== BACKEND_ROUTES.AUTH_LOGOUT
     ) {
       unauthorizedHandler?.();
     }
@@ -384,10 +454,96 @@ export const authApi = {
       }
     });
     return res.data;
+  },
+
+  async register(input: RegisterRequestDto): Promise<LoginResponseDto> {
+    const res = await apiRequest<LoginResponseDto>(BACKEND_ROUTES.AUTH_REGISTER, {
+      method: 'POST',
+      body: {
+        nombre: input.nombre.trim(),
+        correo: input.correo.trim().toLowerCase(),
+        contrasena: input.contrasena
+      }
+    });
+    return res.data;
+  },
+
+  async getSession(): Promise<SessionInfoResponseDto> {
+    const res = await apiRequest<SessionInfoResponseDto>(BACKEND_ROUTES.AUTH_SESSION, {
+      method: 'GET'
+    });
+    return res.data;
+  },
+
+  async logout(): Promise<void> {
+    await apiRequest<unknown>(BACKEND_ROUTES.AUTH_LOGOUT, {
+      method: 'POST',
+      allowEmptyResponse: true
+    });
   }
 };
 
 export const usuariosApi = {
+  async getMe(): Promise<UsuarioResponseDto> {
+    const res = await apiRequest<UsuarioResponseDto>(`${BACKEND_ROUTES.USUARIOS}/me`, {
+      method: 'GET'
+    });
+    return res.data;
+  },
+
+  async updateMe(input: UpdateProfileRequestDto): Promise<UsuarioResponseDto> {
+    const res = await apiRequest<UsuarioResponseDto>(`${BACKEND_ROUTES.USUARIOS}/me`, {
+      method: 'PUT',
+      body: {
+        nombre: input.nombre.trim(),
+        correo: input.correo.trim().toLowerCase()
+      }
+    });
+    return res.data;
+  },
+
+  async changeMyPassword(input: ChangePasswordRequestDto): Promise<{ mensaje?: string }> {
+    const res = await apiRequest<{ mensaje?: string }>(
+      `${BACKEND_ROUTES.USUARIOS}/me/contrasena`,
+      {
+        method: 'PUT',
+        body: {
+          contrasenaActual: input.contrasenaActual,
+          nuevaContrasena: input.nuevaContrasena
+        }
+      }
+    );
+    return res.data;
+  },
+
+  async updateMyConfig(input: UserConfig): Promise<UsuarioResponseDto> {
+    const res = await apiRequest<UsuarioResponseDto>(
+      `${BACKEND_ROUTES.USUARIOS}/me/configuracion`,
+      {
+        method: 'PUT',
+        body: input
+      }
+    );
+    return res.data;
+  },
+
+  async uploadMyPhoto(file: File): Promise<UsuarioResponseDto> {
+    const formData = new FormData();
+    formData.append('archivo', file);
+    const res = await apiRequest<UsuarioResponseDto>(`${BACKEND_ROUTES.USUARIOS}/me/foto`, {
+      method: 'POST',
+      body: formData
+    });
+    return res.data;
+  },
+
+  async deleteMyPhoto(): Promise<UsuarioResponseDto> {
+    const res = await apiRequest<UsuarioResponseDto>(`${BACKEND_ROUTES.USUARIOS}/me/foto`, {
+      method: 'DELETE'
+    });
+    return res.data;
+  },
+
   async create(input: CreateUsuarioRequestDto): Promise<UsuarioResponseDto> {
     const res = await apiRequest<UsuarioResponseDto>(BACKEND_ROUTES.USUARIOS, {
       method: 'POST',
@@ -495,6 +651,32 @@ export const movementsApi = {
       method: 'DELETE',
       allowEmptyResponse: true
     });
+  },
+
+  async transferAnimalBetweenRanches(
+    input: TrasladoAnimalRanchoPayload
+  ): Promise<TrasladoRanchoResultDto> {
+    const res = await apiRequest<TrasladoRanchoResultDto>(
+      `${BACKEND_ROUTES.MOVIMIENTOS}/traslado-rancho/animal`,
+      {
+        method: 'POST',
+        body: input
+      }
+    );
+    return res.data;
+  },
+
+  async transferLotBetweenRanches(
+    input: TrasladoLoteRanchoPayload
+  ): Promise<TrasladoRanchoResultDto> {
+    const res = await apiRequest<TrasladoRanchoResultDto>(
+      `${BACKEND_ROUTES.MOVIMIENTOS}/traslado-rancho/lote`,
+      {
+        method: 'POST',
+        body: input
+      }
+    );
+    return res.data;
   }
 };
 
@@ -660,6 +842,39 @@ export const remindersApi = {
 
   async remove(id: string): Promise<void> {
     await apiRequest<unknown>(`${BACKEND_ROUTES.RECORDATORIOS}/${id}`, {
+      method: 'DELETE',
+      allowEmptyResponse: true
+    });
+  }
+};
+
+export const mediaApi = {
+  async list(options?: {
+    idAnimal?: string;
+    incluirEliminados?: boolean;
+  }): Promise<BackendArchivoMultimediaDto[]> {
+    const params = new URLSearchParams();
+    if (options?.idAnimal) params.set('idAnimal', options.idAnimal);
+    if (options?.incluirEliminados) params.set('incluirEliminados', 'true');
+    const qs = params.toString();
+    const res = await apiRequest<BackendArchivoMultimediaDto[]>(
+      `${BACKEND_ROUTES.MEDIA}/archivos${qs ? `?${qs}` : ''}`,
+      { method: 'GET' }
+    );
+    return Array.isArray(res.data) ? res.data : [];
+  },
+
+  async upload(formData: FormData): Promise<BackendArchivoMultimediaDto> {
+    const res = await apiRequest<BackendArchivoMultimediaDto>(`${BACKEND_ROUTES.MEDIA}/archivos`, {
+      method: 'POST',
+      body: formData,
+      timeoutMs: 30000
+    });
+    return res.data;
+  },
+
+  async remove(id: string): Promise<void> {
+    await apiRequest<unknown>(`${BACKEND_ROUTES.MEDIA}/archivos/${id}`, {
       method: 'DELETE',
       allowEmptyResponse: true
     });

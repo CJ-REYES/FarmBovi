@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { db } from '../lib/database/db';
+import { CattleRepository } from '../lib/database/repositories/cattle.repository';
 import { RanchRepository } from '../lib/database/repositories/ranch.repository';
 import { LotRepository } from '../lib/database/repositories/lot.repository';
 import { OutboxRepository } from '../lib/database/repositories/outbox.repository';
@@ -268,6 +269,7 @@ describe('CattleService — CRUD offline-first, validaciones y sincronización P
     expect(exitResult.animal.fechaSalida).toBe('2026-11-18');
     expect(exitResult.animal.deletedAt).toBeNull();
 
+    // Caso A: Registro puramente local (nunca confirmado en servidor) -> desactivar cancela su CREATE pendiente sin encolar DELETE huérfano (evita 409)
     const a2 = await CattleService.create(makeInput({ arete: 'DEL-02' }));
     await CattleService.deactivate(a2.animal.id);
 
@@ -278,8 +280,35 @@ describe('CattleService — CRUD offline-first, validaciones y sincronización P
     const deactivated = withDeleted.data.find((x) => x.id === a2.animal.id);
     expect(deactivated?.deletedAt).not.toBeNull();
 
-    const ops = await OutboxRepository.getByEntity('cattle', a2.animal.id);
-    expect(ops.some((op) => op.tipoOperacion === 'DELETE')).toBe(true);
+    const localOnlyOps = await OutboxRepository.getByEntity('cattle', a2.animal.id);
+    expect(localOnlyOps).toHaveLength(0);
+
+    // Caso B: Registro ya confirmado en servidor (con remoteId y serverVersion) -> encola DELETE con versionBase
+    const syncedId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    await CattleRepository.upsertFromServer([
+      {
+        id: syncedId,
+        remoteId: syncedId,
+        ranchId: RANCH_ID,
+        arete: 'SYNC-DEL-03',
+        areteSiniiga: 'SYNC-DEL-03',
+        raza: 'Brahman',
+        sexo: 'Hembra',
+        gender: 'Hembra',
+        fechaIngreso: '2026-11-18',
+        procedencia: 'Propio',
+        estado: 'Activo',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        syncStatus: 'synced',
+        serverVersion: 2,
+        deletedAt: null
+      }
+    ]);
+    await CattleService.deactivate(syncedId);
+
+    const syncedOps = await OutboxRepository.getByEntity('cattle', syncedId);
+    expect(syncedOps.some((op) => op.tipoOperacion === 'DELETE' && op.versionBase === 2)).toBe(true);
   });
 
   it('hidrata animales reales desde GET /api/animales y cae a caché local ante error 401 sin perder pendientes', async () => {
@@ -339,5 +368,70 @@ describe('CattleService — CRUD offline-first, validaciones y sincronización P
     expect(fallbackResult.source).toBe('cache');
     expect(fallbackResult.warning).toMatch(/401/i);
     expect(fallbackResult.data).toHaveLength(2);
+  });
+
+  it('descarta en cascada DELETE huérfanos al descartar un CREATE fallido y autocompacta DELETE sin versionBase sin enviar HTTP 400', async () => {
+    const orphanId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const now = new Date().toISOString();
+
+    await db.cattle.put({
+      id: orphanId,
+      ranchId: RANCH_ID,
+      arete: 'ORF-01',
+      areteSiniiga: 'ORF-01',
+      raza: 'Brahman',
+      sexo: 'Hembra',
+      gender: 'Hembra',
+      fechaIngreso: '2026-11-18',
+      procedencia: 'Propio',
+      estado: 'Activo',
+      createdAt: now,
+      updatedAt: now,
+      syncStatus: 'error',
+      serverVersion: null,
+      deletedAt: now
+    });
+
+    // 1. Escenario heredado: CREATE fallido + DELETE huérfano detrás -> descartar CREATE elimina ambos
+    const createOp = await OutboxRepository.enqueue({
+      entidad: 'cattle',
+      idEntidad: orphanId,
+      tipoOperacion: 'CREATE',
+      versionBase: null,
+      idRancho: RANCH_ID,
+      payload: { idAnimal: orphanId, arete: 'ORF-01' }
+    });
+    await db.outbox.update(createOp.idOperacion, { estado: 'fallido', ultimoError: 'Arete duplicado' });
+
+    await OutboxRepository.enqueue({
+      entidad: 'cattle',
+      idEntidad: orphanId,
+      tipoOperacion: 'DELETE',
+      versionBase: null,
+      idRancho: RANCH_ID,
+      payload: { idAnimal: orphanId }
+    });
+
+    await OutboxRepository.discardOperation(createOp.idOperacion);
+    const remainingAfterCascade = await OutboxRepository.getByEntity('cattle', orphanId);
+    expect(remainingAfterCascade).toHaveLength(0);
+
+    // 2. Escenario heredado: DELETE huérfano suelto con versionBase: null -> Push lo compacta sin llamar a fetch
+    await OutboxRepository.enqueue({
+      entidad: 'cattle',
+      idEntidad: orphanId,
+      tipoOperacion: 'DELETE',
+      versionBase: null,
+      idRancho: RANCH_ID,
+      payload: { idAnimal: orphanId }
+    });
+
+    setOnlineStatus(true);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const summary = await PushSyncEngine.pushPendingOperations();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(summary.validationErrorCount).toBe(0);
+    expect(await OutboxRepository.getByEntity('cattle', orphanId)).toHaveLength(0);
   });
 });

@@ -26,7 +26,8 @@ import {
   WifiOff,
   FileImage,
   HardDrive,
-  ShieldCheck
+  ShieldCheck,
+  Trash2
 } from 'lucide-react';
 import SyncConflictsPanel from './SyncConflictsPanel';
 
@@ -67,7 +68,9 @@ export default function SyncStatusPanel() {
   const [checkpoints, setCheckpoints] = useState<LocalSyncCheckpoint[]>([]);
   const [inventory, setInventory] = useState<OfflineInventorySnapshot | null>(null);
   const [retryingOpId, setRetryingOpId] = useState<string | null>(null);
+  const [discardingOpId, setDiscardingOpId] = useState<string | null>(null);
   const [isRetryingAll, setIsRetryingAll] = useState<boolean>(false);
+  const [isDiscardingAll, setIsDiscardingAll] = useState<boolean>(false);
 
   const availability = SyncHttpClient.getEndpointAvailability();
 
@@ -134,6 +137,16 @@ export default function SyncStatusPanel() {
     }
   };
 
+  const handleDiscardAllFailed = async () => {
+    setIsDiscardingAll(true);
+    try {
+      await OutboxRepository.discardAllFailedOperations();
+      await reloadPending();
+    } finally {
+      setIsDiscardingAll(false);
+    }
+  };
+
   const handleManualRetryOp = async (idOperacion: string) => {
     setRetryingOpId(idOperacion);
     try {
@@ -142,6 +155,16 @@ export default function SyncStatusPanel() {
       await reloadPending();
     } finally {
       setRetryingOpId(null);
+    }
+  };
+
+  const handleDiscardOp = async (idOperacion: string) => {
+    setDiscardingOpId(idOperacion);
+    try {
+      await OutboxRepository.discardOperation(idOperacion);
+      await reloadPending();
+    } finally {
+      setDiscardingOpId(null);
     }
   };
 
@@ -221,15 +244,27 @@ export default function SyncStatusPanel() {
 
         <div className="flex items-center gap-2 shrink-0 flex-wrap">
           {counts.failedOperationsCount > 0 && (
-            <button
-              type="button"
-              onClick={() => void handleRetryAllFailed()}
-              disabled={isSyncing || isRetryingAll || !isOnline}
-              className="inline-flex items-center justify-center gap-1.5 bg-surface-white border border-status-error/40 text-status-error hover:bg-status-error/10 px-3 py-2 rounded-lg text-[12px] font-semibold transition-colors disabled:opacity-50 cursor-pointer"
-            >
-              <RotateCcw size={14} className={isRetryingAll ? 'animate-spin' : ''} />
-              Reintentar fallidas ({counts.failedOperationsCount})
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => void handleRetryAllFailed()}
+                disabled={isSyncing || isRetryingAll || isDiscardingAll || !isOnline}
+                className="inline-flex items-center justify-center gap-1.5 bg-surface-white border border-status-error/40 text-status-error hover:bg-status-error/10 px-3 py-2 rounded-lg text-[12px] font-semibold transition-colors disabled:opacity-50 cursor-pointer"
+              >
+                <RotateCcw size={14} className={isRetryingAll ? 'animate-spin' : ''} />
+                Reintentar fallidas ({counts.failedOperationsCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleDiscardAllFailed()}
+                disabled={isSyncing || isDiscardingAll || isRetryingAll}
+                className="inline-flex items-center justify-center gap-1.5 bg-status-error/10 border border-status-error/30 text-status-error hover:bg-status-error/20 px-3 py-2 rounded-lg text-[12px] font-semibold transition-colors disabled:opacity-50 cursor-pointer"
+                title="Descartar todas las operaciones fallidas y sus operaciones huérfanas dependientes"
+              >
+                <Trash2 size={14} />
+                Descartar fallidas ({counts.failedOperationsCount})
+              </button>
+            </>
           )}
           <button
             type="button"
@@ -453,19 +488,31 @@ export default function SyncStatusPanel() {
 
                   <div className="flex items-center gap-2 shrink-0">
                     {isRetryableFailed && (
-                      <button
-                        type="button"
-                        onClick={() => void handleManualRetryOp(op.idOperacion)}
-                        disabled={retryingOpId === op.idOperacion || !isOnline}
-                        className="inline-flex items-center gap-1 px-2 py-1 rounded border border-border-light bg-surface-white hover:bg-surface-secondary text-[11px] font-semibold text-brand-slate disabled:opacity-50 cursor-pointer"
-                        title="Reintentar operación con el mismo idOperacion"
-                      >
-                        <RotateCcw
-                          size={12}
-                          className={retryingOpId === op.idOperacion ? 'animate-spin' : ''}
-                        />
-                        Reintentar
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => void handleManualRetryOp(op.idOperacion)}
+                          disabled={retryingOpId === op.idOperacion || discardingOpId === op.idOperacion || !isOnline}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded border border-border-light bg-surface-white hover:bg-surface-secondary text-[11px] font-semibold text-brand-slate disabled:opacity-50 cursor-pointer"
+                          title="Reintentar operación con el mismo idOperacion"
+                        >
+                          <RotateCcw
+                            size={12}
+                            className={retryingOpId === op.idOperacion ? 'animate-spin' : ''}
+                          />
+                          Reintentar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleDiscardOp(op.idOperacion)}
+                          disabled={discardingOpId === op.idOperacion || retryingOpId === op.idOperacion}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded border border-status-error/30 bg-status-error/5 hover:bg-status-error/15 text-[11px] font-semibold text-status-error disabled:opacity-50 cursor-pointer"
+                          title="Descartar operación fallida de la cola local"
+                        >
+                          <Trash2 size={12} />
+                          Descartar
+                        </button>
+                      </>
                     )}
                     <span
                       className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${STATE_BADGE_CLASSES[op.estado]}`}

@@ -15,8 +15,9 @@ export function useAuth(): {
     AuthService.getSnapshot
   );
 
-  const isExpired = Boolean(session?.token) && isSessionExpired(session);
-  const isAuthenticated = Boolean(session?.token) && !isExpired;
+  const hasSession = Boolean(session && (session.token || session.authMode === 'cookie'));
+  const isExpired = hasSession && isSessionExpired(session);
+  const isAuthenticated = hasSession && !isExpired;
   const hasRanch = isAuthenticated && Boolean(session && session.ranchos.length > 0);
 
   return {

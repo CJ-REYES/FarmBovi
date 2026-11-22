@@ -1,19 +1,27 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Image as ImageIcon } from 'lucide-react';
+import { resolveMediaUrl } from '../../lib/api';
 
 interface BlobImageProps {
   blob?: Blob;
+  remoteUrl?: string | null;
   alt: string;
   className?: string;
   fallback?: ReactNode;
 }
 
 /**
- * Renderiza un `Blob` binario mediante `URL.createObjectURL` y libera la referencia
- * automáticamente con `URL.revokeObjectURL` al cambiar o desmontar el componente.
- * Nunca convierte fotografías a Base64.
+ * Renderiza un `Blob` binario mediante `URL.createObjectURL` (liberando la referencia
+ * automáticamente con `URL.revokeObjectURL`) o, si el archivo ya fue sincronizado desde
+ * el servidor sin copia Blob local, muestra la URL pública resuelta (`/api/media/...`).
  */
-export default function BlobImage({ blob, alt, className, fallback }: BlobImageProps) {
+export default function BlobImage({
+  blob,
+  remoteUrl,
+  alt,
+  className,
+  fallback
+}: BlobImageProps) {
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
 
   useEffect(() => {
@@ -33,7 +41,9 @@ export default function BlobImage({ blob, alt, className, fallback }: BlobImageP
     };
   }, [blob]);
 
-  if (!objectUrl) {
+  const resolvedSrc = objectUrl || resolveMediaUrl(remoteUrl);
+
+  if (!resolvedSrc) {
     if (fallback !== undefined) {
       return <>{fallback}</>;
     }
@@ -44,5 +54,5 @@ export default function BlobImage({ blob, alt, className, fallback }: BlobImageP
     );
   }
 
-  return <img src={objectUrl} alt={alt} className={className} />;
+  return <img src={resolvedSrc} alt={alt} className={className} />;
 }
