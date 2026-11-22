@@ -36,10 +36,12 @@ public sealed class FarmDbContext(
     public DbSet<Usuario> Usuarios => Set<Usuario>();
     public DbSet<UsuarioRancho> UsuarioRanchos => Set<UsuarioRancho>();
     public DbSet<MovimientoAnimal> MovimientosAnimales => Set<MovimientoAnimal>();
+    public DbSet<Pesaje> Pesajes => Set<Pesaje>();
     public DbSet<Alimentacion> Alimentaciones => Set<Alimentacion>();
     public DbSet<EventoSanitario> EventosSanitarios => Set<EventoSanitario>();
     public DbSet<Tratamiento> Tratamientos => Set<Tratamiento>();
     public DbSet<Recordatorio> Recordatorios => Set<Recordatorio>();
+    public DbSet<ArchivoMultimedia> ArchivosMultimedia => Set<ArchivoMultimedia>();
     public DbSet<RegistroSyncServidor> RegistrosSyncServidor => Set<RegistroSyncServidor>();
     public DbSet<CambioServidor> CambiosServidor => Set<CambioServidor>();
 
@@ -178,7 +180,7 @@ public sealed class FarmDbContext(
 
     private static bool IsSynchronizableEntity(object entity) =>
         entity is Animal or Lote or Rancho or Alimentacion or MovimientoAnimal
-            or EventoSanitario or Tratamiento or Recordatorio or GenealogiaAnimal;
+            or Pesaje or EventoSanitario or Tratamiento or Recordatorio or GenealogiaAnimal;
 
     private CambioServidor? BuildApiChangeRecord(EntityEntry entry, Guid idRancho, DateTime ahora)
     {
@@ -388,6 +390,8 @@ public sealed class FarmDbContext(
             e.Property(x => x.Correo).HasMaxLength(254).IsRequired();
             e.Property(x => x.Contrasena).HasMaxLength(500).IsRequired();
             e.Property(x => x.Estado).HasMaxLength(20).IsRequired();
+            e.Property(x => x.FotoPerfilRuta).HasMaxLength(500);
+            e.Property(x => x.ConfiguracionJson).HasMaxLength(4000);
             e.Property(x => x.CreadoEn).IsRequired();
             e.HasIndex(x => x.Correo).IsUnique();
         });
@@ -628,6 +632,50 @@ public sealed class FarmDbContext(
             e.HasOne<Animal>().WithMany().HasForeignKey(x => x.IdAnimal).OnDelete(DeleteBehavior.Restrict);
             e.HasOne<Animal>().WithMany().HasForeignKey(x => x.IdPadre).OnDelete(DeleteBehavior.Restrict);
             e.HasOne<Animal>().WithMany().HasForeignKey(x => x.IdMadre).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Usuario>().WithMany().HasForeignKey(x => x.IdAutor).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<ArchivoMultimedia>(e =>
+        {
+            e.ToTable("ArchivoMultimedia");
+            e.HasKey(x => x.IdArchivo);
+            e.Property(x => x.IdArchivo).HasColumnType("char(36)").ValueGeneratedNever();
+            e.Property(x => x.IdRancho).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.IdAnimal).HasColumnType("char(36)");
+            e.Property(x => x.EntidadRelacionada).HasMaxLength(40).IsRequired();
+            e.Property(x => x.IdEntidadRelacionada).HasColumnType("char(36)");
+            e.Property(x => x.Tipo).HasMaxLength(30).IsRequired();
+            e.Property(x => x.NombreArchivo).HasMaxLength(255).IsRequired();
+            e.Property(x => x.MimeType).HasMaxLength(60).IsRequired();
+            e.Property(x => x.ChecksumSha256).HasMaxLength(64);
+            e.Property(x => x.RutaArchivo).HasMaxLength(500).IsRequired();
+            e.Property(x => x.IdAutor).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.VersionRegistro).IsConcurrencyToken();
+            e.HasIndex(x => x.IdRancho);
+            e.HasIndex(x => x.IdAnimal);
+            e.HasIndex(x => x.FechaCaptura);
+            e.HasOne<Rancho>().WithMany().HasForeignKey(x => x.IdRancho).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Animal>().WithMany().HasForeignKey(x => x.IdAnimal).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Usuario>().WithMany().HasForeignKey(x => x.IdAutor).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<Pesaje>(e =>
+        {
+            e.ToTable("Pesaje");
+            e.HasKey(x => x.IdPesaje);
+            e.Property(x => x.IdPesaje).HasColumnType("char(36)").ValueGeneratedNever();
+            e.Property(x => x.IdAnimal).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.PesoRealKg).HasPrecision(10, 3).IsRequired();
+            e.Property(x => x.Fecha).IsRequired();
+            e.Property(x => x.FuenteBascula).HasMaxLength(150).IsRequired();
+            e.Property(x => x.Responsable).HasMaxLength(180).IsRequired();
+            e.Property(x => x.Observaciones).HasMaxLength(500);
+            e.Property(x => x.OrigenPesaje).HasMaxLength(30).IsRequired();
+            e.Property(x => x.IdAutor).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.VersionRegistro).IsConcurrencyToken();
+            e.HasIndex(x => x.IdAnimal);
+            e.HasIndex(x => x.Fecha);
+            e.HasOne<Animal>().WithMany().HasForeignKey(x => x.IdAnimal).OnDelete(DeleteBehavior.Restrict);
             e.HasOne<Usuario>().WithMany().HasForeignKey(x => x.IdAutor).OnDelete(DeleteBehavior.Restrict);
         });
     }

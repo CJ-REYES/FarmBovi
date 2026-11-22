@@ -339,6 +339,7 @@ class BackendSyncServerSimulator {
     const serverEntitiesByClient: Record<string, string[]> = {
       cattle: ['Animal'],
       lots: ['Lote'],
+      weighings: ['Pesaje'],
       healthRecords: ['EventoSanitario', 'Tratamiento'],
       feedingRecords: ['Alimentacion'],
       movements: ['MovimientoAnimal'],
@@ -386,6 +387,19 @@ class BackendSyncServerSimulator {
           motivo: raw.motivo ?? '',
           origenLotId: raw.idLoteOrigen ?? null,
           destinoLotId: raw.idLoteDestino ?? null
+        };
+      }
+      if (clientEnt === 'weighings') {
+        return {
+          ranchId: raw.idRancho,
+          cattleId: raw.idAnimal,
+          pesoRealKg: raw.pesoRealKg,
+          peso: raw.pesoRealKg,
+          fecha: raw.fecha,
+          fuenteBascula: raw.fuenteBascula ?? 'Báscula registrada en campo',
+          responsable: raw.responsable ?? 'Operador de campo',
+          observaciones: raw.observaciones ?? null,
+          origenPesaje: raw.origenPesaje ?? 'manual'
         };
       }
       return raw;

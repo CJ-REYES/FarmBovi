@@ -49,6 +49,7 @@ public sealed class SyncController(FarmDbContext db) : ControllerBase
         {
             ["cattle"] = [nameof(Animal)],
             ["lots"] = [nameof(Lote)],
+            ["weighings"] = [nameof(Pesaje)],
             ["healthRecords"] = [nameof(EventoSanitario), nameof(Tratamiento)],
             ["feedingRecords"] = [nameof(Alimentacion)],
             ["movements"] = [nameof(MovimientoAnimal)],
@@ -84,11 +85,22 @@ public sealed class SyncController(FarmDbContext db) : ControllerBase
                 .Join(db.Ranchos.AsNoTracking().Where(r => r.EliminadoEn == null),
                     ur => ur.IdRancho, r => r.IdRancho, (ur, r) => ur.IdRancho)
                 .Distinct()
+                .OrderBy(id => id)
                 .Take(2)
                 .ToListAsync(ct);
 
-            if (activeRanchIds.Count != 1)
-                return BadRequest(new { mensaje = "Indica ranchId cuando el usuario tenga cero o varios ranchos activos." });
+            if (activeRanchIds.Count == 0)
+            {
+                return Ok(new CambiosPullResponse(
+                    entidad,
+                    Array.Empty<CambioPullResponse>(),
+                    null,
+                    false,
+                    DateTime.UtcNow));
+            }
+
+            if (activeRanchIds.Count > 1)
+                return BadRequest(new { mensaje = "Indica ranchId cuando el usuario tenga varios ranchos activos." });
             requestedRanchId = activeRanchIds[0];
         }
 
@@ -310,6 +322,16 @@ public sealed class SyncController(FarmDbContext db) : ControllerBase
                 Copy("nombre", "Nombre", "nombre", "name");
                 Copy("capacidad", "Capacidad", "capacidad", "capacity");
                 Copy("ubicacion", "Ubicacion", "ubicacion", "location");
+                break;
+            case "weighings":
+                Copy("cattleId", "IdAnimal", "cattleId", "animalId");
+                Copy("pesoRealKg", "PesoRealKg", "pesoRealKg", "peso");
+                Copy("peso", "PesoRealKg", "pesoRealKg", "peso");
+                Copy("fecha", "Fecha", "fecha", "date");
+                Copy("fuenteBascula", "FuenteBascula", "fuenteBascula");
+                Copy("responsable", "Responsable", "responsable");
+                Copy("observaciones", "Observaciones", "observaciones");
+                Copy("origenPesaje", "OrigenPesaje", "origenPesaje");
                 break;
             case "healthrecords":
                 Copy("cattleId", "IdAnimal", "cattleId", "animalId");

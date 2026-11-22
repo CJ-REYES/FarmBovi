@@ -462,6 +462,11 @@ function normalizeWeighingPayloadForBackend(
   const observaciones = readTextOrNull(['observaciones']);
   if (observaciones !== undefined) backendPayload.observaciones = observaciones;
 
+  const origenPesaje = readTextOrNull(['origenPesaje']);
+  if (typeof origenPesaje === 'string') {
+    backendPayload.origenPesaje = origenPesaje;
+  }
+
   return backendPayload;
 }
 

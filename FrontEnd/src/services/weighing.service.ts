@@ -1,4 +1,5 @@
-import { readSessionAuthToken } from '../lib/api';
+import { hasActiveAuthSession } from '../lib/api';
+import { db } from '../lib/database/db';
 import { CattleRepository } from '../lib/database/repositories/cattle.repository';
 import { OutboxRepository } from '../lib/database/repositories/outbox.repository';
 import { WeighingRepository } from '../lib/database/repositories/weighing.repository';
@@ -38,6 +39,16 @@ export interface WeighingLoadResult {
   animals: Cattle[];
   source: 'cache';
   backendNotice: string | null;
+}
+
+export interface BoviScaleReference {
+  hasWeight: boolean;
+  pesoKg: number | null;
+  fecha: string | null;
+  confianzaModelo: number | null;
+  sourceLabel: string | null;
+  hasPhotoWithoutWeight: boolean;
+  photoCount: number;
 }
 
 function normalizeDateTimeForBackend(raw: string): string {
@@ -99,9 +110,8 @@ export const WeighingService = {
 
   /**
    * Consulta el historial real de pesajes desde IndexedDB.
-   * Nota de contrato: el Backend actual aún no expone `/api/pesajes` ni la entidad `Pesaje`,
-   * por lo que no se invocan endpoints inexistentes; los pesajes se guardan localmente y
-   * quedan encolados en `db.outbox` con el contrato ER `Pesaje` para sincronización posterior.
+   * Los pesajes se sincronizan con el servidor mediante Push (`/api/sync/operaciones`)
+   * y Pull (`/api/sync/cambios?entidad=weighings`) usando la entidad `Pesaje`.
    */
   async getAll(options?: {
     cattleId?: string;
@@ -113,22 +123,108 @@ export const WeighingService = {
       this.loadAnimals()
     ]);
 
-    const isOnline = typeof navigator !== 'undefined' && navigator.onLine;
-    const backendNotice = isOnline
-      ? 'Almacenamiento offline-first activo: el Backend aún no publica el controlador de Pesajes; los registros se conservan en IndexedDB y en la cola de sincronización listos para enviarse cuando el servidor habilite la entidad Pesaje.'
-      : null;
-
     return {
       data: localWeighings.map((item) => this.toWeighing(item)),
       animals,
       source: 'cache',
-      backendNotice
+      backendNotice: null
     };
   },
 
   async getById(id: string): Promise<Weighing | undefined> {
     const local = await WeighingRepository.getByIdIncludingDeleted(id);
     return local ? this.toWeighing(local) : undefined;
+  },
+
+  /**
+   * Busca el último dato de pesaje registrado en BoviScale para un bovino
+   * (desde trabajos de análisis BoviScale o pesajes con origen `boviscale_ia`),
+   * o informa si solo tiene capturas fotográficas sin peso estimado todavía.
+   */
+  async getLatestBoviScaleReference(cattleId: string): Promise<BoviScaleReference> {
+    if (!cattleId) {
+      return {
+        hasWeight: false,
+        pesoKg: null,
+        fecha: null,
+        confianzaModelo: null,
+        sourceLabel: null,
+        hasPhotoWithoutWeight: false,
+        photoCount: 0
+      };
+    }
+
+    const [jobs, boviScaleWeighings, boviScalePhotos] = await Promise.all([
+      db.weighingAnalysisJobs
+        .where('idBovino')
+        .equals(cattleId)
+        .filter((j) => j.estado !== 'cancelado')
+        .toArray(),
+      db.weighings
+        .where('cattleId')
+        .equals(cattleId)
+        .filter((w) => !w.deletedAt && w.origenPesaje === 'boviscale_ia')
+        .toArray(),
+      db.media
+        .where('cattleId')
+        .equals(cattleId)
+        .filter((m) => !m.deletedAt && m.tipo === 'BoviScaleVision')
+        .toArray()
+    ]);
+
+    const jobsWithWeight = jobs
+      .map((j) => ({
+        pesoKg: j.pesoConfirmadoKg ?? j.pesoEstimadoKg ?? null,
+        fecha: j.completadoEn || j.analizadoEn || j.fechaCreacion,
+        confianzaModelo: j.confianzaModelo ?? null,
+        sourceLabel:
+          j.pesoConfirmadoKg != null ? 'Pesaje BoviScale confirmado' : 'Estimación BoviScale'
+      }))
+      .filter((j): j is { pesoKg: number; fecha: string; confianzaModelo: number | null; sourceLabel: string } =>
+        typeof j.pesoKg === 'number' && Number.isFinite(j.pesoKg) && j.pesoKg > 0
+      )
+      .sort((a, b) => b.fecha.localeCompare(a.fecha));
+
+    const weighingsSorted = boviScaleWeighings
+      .filter((w) => typeof w.peso === 'number' && Number.isFinite(w.peso) && w.peso > 0)
+      .sort((a, b) => b.fecha.localeCompare(a.fecha));
+
+    const latestJob = jobsWithWeight[0];
+    const latestWeighing = weighingsSorted[0];
+
+    if (latestJob && (!latestWeighing || latestJob.fecha >= latestWeighing.fecha)) {
+      return {
+        hasWeight: true,
+        pesoKg: latestJob.pesoKg,
+        fecha: latestJob.fecha,
+        confianzaModelo: latestJob.confianzaModelo,
+        sourceLabel: latestJob.sourceLabel,
+        hasPhotoWithoutWeight: false,
+        photoCount: boviScalePhotos.length
+      };
+    }
+
+    if (latestWeighing) {
+      return {
+        hasWeight: true,
+        pesoKg: latestWeighing.peso,
+        fecha: latestWeighing.fecha,
+        confianzaModelo: null,
+        sourceLabel: 'Pesaje registrado en BoviScale',
+        hasPhotoWithoutWeight: false,
+        photoCount: boviScalePhotos.length
+      };
+    }
+
+    return {
+      hasWeight: false,
+      pesoKg: null,
+      fecha: null,
+      confianzaModelo: null,
+      sourceLabel: null,
+      hasPhotoWithoutWeight: boviScalePhotos.length > 0,
+      photoCount: boviScalePhotos.length
+    };
   },
 
   async attemptPushForEntity(idEntidad: string): Promise<{ synced: boolean; syncMessage?: string }> {
@@ -140,7 +236,7 @@ export const WeighingService = {
       };
     }
 
-    if (!readSessionAuthToken()) {
+    if (!hasActiveAuthSession()) {
       return {
         synced: false,
         syncMessage:

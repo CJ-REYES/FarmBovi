@@ -51,6 +51,7 @@ export interface PullOptions {
 export const PULL_ENTITY_ORDER: readonly SyncEntityName[] = [
   'lots',
   'cattle',
+  'weighings',
   'healthRecords',
   'feedingRecords',
   'movements',
@@ -526,7 +527,13 @@ export const SyncPullEngine = {
     for (const entidad of PULL_ENTITY_ORDER) {
       const entityResult = await this.pullEntity(entidad, options);
       results.push(entityResult);
-      if (entityResult.status === 'offline' || entityResult.status === 'endpoint_not_configured') {
+      if (
+        entityResult.status === 'offline' ||
+        entityResult.status === 'endpoint_not_configured' ||
+        (entityResult.status === 'transaction_failed' &&
+          entityResult.errorMessage &&
+          /401|403|permiso|membresía|autoriz|sesión/i.test(entityResult.errorMessage))
+      ) {
         break;
       }
     }
