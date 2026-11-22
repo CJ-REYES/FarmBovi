@@ -1,4 +1,5 @@
 using FarmBovi.Api.Data;
+using FarmBovi.Api.DTOs;
 using FarmBovi.Api.Models;
 using FarmBovi.Api.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -12,52 +13,76 @@ namespace FarmBovi.Api.Controllers;
 public sealed class TratamientosController(FarmDbContext db, FarmDomainValidationService validator) : ControllerBase
 {
     [HttpGet]
-    public Task<List<Tratamiento>> GetAll([FromServices] RanchAccessService access, [FromQuery] bool incluirEliminados = false, CancellationToken ct = default)
+    [ProducesResponseType(typeof(List<TratamientoResponseDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    public async Task<ActionResult<List<TratamientoResponseDto>>> GetAll([FromServices] RanchAccessService access, [FromQuery] bool incluirEliminados = false, CancellationToken ct = default)
     {
         var query = db.Tratamientos.AsNoTracking();
         if (!incluirEliminados)
             query = query.Where(t => t.EliminadoEn == null);
 
-        // Solo registros de ranchos donde el usuario tiene membresía activa.
         var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
         query = query.Where(x => db.EventosSanitarios.Any(e => e.IdEventoSanitario == x.IdEventoSanitario && db.Animales.Any(a => a.IdAnimal == e.IdAnimal && ranchIds.Contains(a.IdRancho))));
 
-        return query.ToListAsync(ct);
+        var items = await query.Select(t => ToResponseDto(t)).ToListAsync(ct);
+        return Ok(items);
     }
 
     [HttpGet("{id:guid}")]
-    public async Task<ActionResult<Tratamiento>> Get(Guid id, CancellationToken ct) =>
+    [ProducesResponseType(typeof(TratamientoResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<TratamientoResponseDto>> Get(Guid id, CancellationToken ct) =>
         await db.Tratamientos.AsNoTracking().FirstOrDefaultAsync(t => t.IdTratamiento == id, ct) is { } item
-            ? Ok(item)
-            : NotFound();
+            ? Ok(ToResponseDto(item))
+            : this.NotFoundProblem("El tratamiento solicitado no existe.");
 
     [HttpPost]
-    public async Task<ActionResult<Tratamiento>> Create(Tratamiento item, CancellationToken ct)
+    [ProducesResponseType(typeof(TratamientoResponseDto), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(TratamientoResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<TratamientoResponseDto>> Create(
+        [FromServices] RanchAccessService access, TratamientoCreateDto dto, CancellationToken ct)
     {
-        if (item.IdTratamiento == Guid.Empty)
-            item.IdTratamiento = Guid.NewGuid();
+        var id = dto.IdTratamiento ?? Guid.NewGuid();
 
-        var existing = await db.Tratamientos.AsNoTracking()
-            .FirstOrDefaultAsync(t => t.IdTratamiento == item.IdTratamiento, ct);
+        var existing = await db.Tratamientos.AsNoTracking().FirstOrDefaultAsync(t => t.IdTratamiento == id, ct);
         if (existing is not null)
-            return Ok(existing);
+        {
+            return MatchesTratamiento(existing, dto)
+                ? Ok(ToResponseDto(existing))
+                : this.ConflictProblem("Ya existe un tratamiento con el identificador proporcionado y contenido diferente.");
+        }
 
-        if (item.FechaInicio == default) item.FechaInicio = DateTime.UtcNow;
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
+        if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, item.IdAutor, ct);
-        if (authorError is not null) return BadRequest(authorError);
+        var item = new Tratamiento
+        {
+            IdTratamiento = id,
+            IdEventoSanitario = dto.IdEventoSanitario,
+            Producto = dto.Producto.Trim(),
+            Dosis = dto.Dosis,
+            UnidadDosis = dto.UnidadDosis.Trim(),
+            ViaAdministracion = dto.ViaAdministracion?.Trim(),
+            Frecuencia = dto.Frecuencia.Trim(),
+            FechaInicio = ApiProblemResults.EnsureUtc(dto.FechaInicio),
+            FechaFin = ApiProblemResults.EnsureUtc(dto.FechaFin),
+            Responsable = dto.Responsable.Trim(),
+            PrescripcionUri = dto.PrescripcionUri?.Trim(),
+            Estado = dto.Estado.Trim(),
+            IdAutor = authorId,
+            CreadoEn = DateTime.UtcNow,
+            VersionRegistro = 1
+        };
 
         var validationError = await validator.ValidateTratamientoAsync(item, ct);
-        if (validationError is not null) return BadRequest(validationError);
-
-        item.IdAutor = authorId;
-        item.Producto = item.Producto.Trim();
-        item.UnidadDosis = item.UnidadDosis.Trim();
-        item.Frecuencia = item.Frecuencia.Trim();
-        item.Responsable = item.Responsable.Trim();
-        item.Estado = item.Estado.Trim();
-        if (item.CreadoEn == default) item.CreadoEn = DateTime.UtcNow;
-        if (item.VersionRegistro <= 0) item.VersionRegistro = 1;
+        if (validationError is not null) return this.ValidationError(validationError);
 
         db.Tratamientos.Add(item);
         try
@@ -66,37 +91,78 @@ public sealed class TratamientosController(FarmDbContext db, FarmDomainValidatio
         }
         catch (DbUpdateException)
         {
-            return Conflict("No se pudo crear el tratamiento; verifica que el evento sanitario exista.");
+            var collision = await db.Tratamientos.AsNoTracking().FirstOrDefaultAsync(t => t.IdTratamiento == id, ct);
+            if (collision is not null)
+            {
+                var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
+                var belongsToRanch = db.EventosSanitarios.Any(e => e.IdEventoSanitario == collision.IdEventoSanitario && db.Animales.Any(a => a.IdAnimal == e.IdAnimal && ranchIds.Contains(a.IdRancho)));
+                if (belongsToRanch)
+                {
+                    return MatchesTratamiento(collision, dto)
+                        ? Ok(ToResponseDto(collision))
+                        : this.ConflictProblem("Ya existe un tratamiento con el identificador proporcionado y contenido diferente.");
+                }
+
+                return this.ConflictProblem("Conflicto con un recurso existente.");
+            }
+
+            return this.ConflictProblem("No se pudo crear el tratamiento; verifica que el evento sanitario exista.");
         }
 
-        return CreatedAtAction(nameof(Get), new { id = item.IdTratamiento }, item);
+        return CreatedAtAction(nameof(Get), new { id = item.IdTratamiento }, ToResponseDto(item));
     }
 
     [HttpPut("{id:guid}")]
-    public async Task<IActionResult> Update(Guid id, Tratamiento input, CancellationToken ct)
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Update(Guid id, TratamientoUpdateDto dto, CancellationToken ct)
     {
         var item = await db.Tratamientos.FindAsync([id], ct);
-        if (item is null) return NotFound();
+        if (item is null) return this.NotFoundProblem("El tratamiento solicitado no existe.");
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, input.IdAutor, ct);
-        if (authorError is not null) return BadRequest(authorError);
+        if (dto.IdEventoSanitario != item.IdEventoSanitario)
+            return this.ValidationError("No se permite cambiar el evento sanitario asociado a un tratamiento.", nameof(dto.IdEventoSanitario));
 
-        var validationError = await validator.ValidateTratamientoAsync(input, ct);
-        if (validationError is not null) return BadRequest(validationError);
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
+        if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
 
-        item.IdEventoSanitario = input.IdEventoSanitario;
-        item.Producto = input.Producto.Trim();
-        item.Dosis = input.Dosis;
-        item.UnidadDosis = input.UnidadDosis.Trim();
-        item.ViaAdministracion = input.ViaAdministracion;
-        item.Frecuencia = input.Frecuencia.Trim();
-        item.FechaInicio = input.FechaInicio;
-        item.FechaFin = input.FechaFin;
-        item.Responsable = input.Responsable.Trim();
-        item.PrescripcionUri = input.PrescripcionUri;
-        item.Estado = input.Estado.Trim();
+        var candidate = new Tratamiento
+        {
+            IdTratamiento = item.IdTratamiento,
+            IdEventoSanitario = dto.IdEventoSanitario,
+            Producto = dto.Producto.Trim(),
+            Dosis = dto.Dosis,
+            UnidadDosis = dto.UnidadDosis.Trim(),
+            ViaAdministracion = dto.ViaAdministracion?.Trim(),
+            Frecuencia = dto.Frecuencia.Trim(),
+            FechaInicio = ApiProblemResults.EnsureUtc(dto.FechaInicio),
+            FechaFin = ApiProblemResults.EnsureUtc(dto.FechaFin),
+            Responsable = dto.Responsable.Trim(),
+            PrescripcionUri = dto.PrescripcionUri?.Trim(),
+            Estado = dto.Estado.Trim(),
+            IdAutor = authorId,
+            EliminadoEn = ApiProblemResults.EnsureUtc(dto.EliminadoEn)
+        };
+        var validationError = await validator.ValidateTratamientoAsync(candidate, ct);
+        if (validationError is not null) return this.ValidationError(validationError);
+
+        item.IdEventoSanitario = candidate.IdEventoSanitario;
+        item.Producto = candidate.Producto;
+        item.Dosis = candidate.Dosis;
+        item.UnidadDosis = candidate.UnidadDosis;
+        item.ViaAdministracion = candidate.ViaAdministracion;
+        item.Frecuencia = candidate.Frecuencia;
+        item.FechaInicio = candidate.FechaInicio;
+        item.FechaFin = candidate.FechaFin;
+        item.Responsable = candidate.Responsable;
+        item.PrescripcionUri = candidate.PrescripcionUri;
+        item.Estado = candidate.Estado;
         item.IdAutor = authorId;
-        item.EliminadoEn = input.EliminadoEn;
+        item.EliminadoEn = candidate.EliminadoEn;
         item.VersionRegistro++;
 
         try
@@ -105,22 +171,27 @@ public sealed class TratamientosController(FarmDbContext db, FarmDomainValidatio
         }
         catch (DbUpdateException)
         {
-            return Conflict("No se pudo actualizar el tratamiento; verifica las referencias.");
+            return this.ConflictProblem("No se pudo actualizar el tratamiento; verifica las referencias.");
         }
 
         return NoContent();
     }
 
     [HttpDelete("{id:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         var item = await db.Tratamientos.FindAsync([id], ct);
-        if (item is null) return NotFound();
+        if (item is null) return this.NotFoundProblem("El tratamiento solicitado no existe.");
 
         var hasActiveRecordatorios = await db.Recordatorios.AsNoTracking()
             .AnyAsync(r => r.IdTratamiento == id && r.EliminadoEn == null, ct);
         if (hasActiveRecordatorios)
-            return Conflict("No se puede eliminar un tratamiento que tiene recordatorios asociados.");
+            return this.ConflictProblem("No se puede eliminar un tratamiento que tiene recordatorios asociados.");
 
         if (item.EliminadoEn is null)
         {
@@ -131,4 +202,37 @@ public sealed class TratamientosController(FarmDbContext db, FarmDomainValidatio
 
         return NoContent();
     }
+
+    private static bool MatchesTratamiento(Tratamiento existing, TratamientoCreateDto dto) =>
+        existing.IdEventoSanitario == dto.IdEventoSanitario &&
+        ApiProblemResults.SameText(existing.Producto, dto.Producto) &&
+        existing.Dosis == dto.Dosis &&
+        ApiProblemResults.SameText(existing.UnidadDosis, dto.UnidadDosis) &&
+        ApiProblemResults.SameText(existing.ViaAdministracion, dto.ViaAdministracion) &&
+        ApiProblemResults.SameText(existing.Frecuencia, dto.Frecuencia) &&
+        ApiProblemResults.SameUtcInstant(existing.FechaInicio, dto.FechaInicio) &&
+        ApiProblemResults.SameUtcInstant(existing.FechaFin, dto.FechaFin) &&
+        ApiProblemResults.SameText(existing.Responsable, dto.Responsable) &&
+        ApiProblemResults.SameText(existing.PrescripcionUri, dto.PrescripcionUri) &&
+        ApiProblemResults.SameText(existing.Estado, dto.Estado);
+
+    private static TratamientoResponseDto ToResponseDto(Tratamiento t) => new()
+    {
+        IdTratamiento = t.IdTratamiento,
+        IdEventoSanitario = t.IdEventoSanitario,
+        Producto = t.Producto,
+        Dosis = t.Dosis,
+        UnidadDosis = t.UnidadDosis,
+        ViaAdministracion = t.ViaAdministracion,
+        Frecuencia = t.Frecuencia,
+        FechaInicio = t.FechaInicio,
+        FechaFin = t.FechaFin,
+        Responsable = t.Responsable,
+        PrescripcionUri = t.PrescripcionUri,
+        Estado = t.Estado,
+        IdAutor = t.IdAutor,
+        CreadoEn = t.CreadoEn,
+        VersionRegistro = t.VersionRegistro,
+        EliminadoEn = t.EliminadoEn
+    };
 }
