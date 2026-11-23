@@ -1,4 +1,5 @@
-﻿using Microsoft.EntityFrameworkCore.Migrations;
+﻿using System;
+using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
@@ -23,7 +24,7 @@ namespace FarmBovi.Api.Migrations
             migrationBuilder.DropForeignKey(name: "FK_Tratamiento_Usuario_IdAutor", table: "Tratamiento");
             migrationBuilder.DropForeignKey(name: "FK_UsuarioRancho_Usuario_IdUsuario", table: "UsuarioRancho");
 
-            // Soltar FK de GenealogiaAnimal si existe
+            // Soltar FK de GenealogiaAnimal si existe la tabla y la restricción
             migrationBuilder.Sql(@"
                 DROP PROCEDURE IF EXISTS `_sp_drop_fk_genealogia`;
             ");
@@ -31,17 +32,15 @@ namespace FarmBovi.Api.Migrations
                 CREATE PROCEDURE `_sp_drop_fk_genealogia`()
                 BEGIN
                     IF EXISTS (
-                        SELECT 1 FROM information_schema.table_constraints
-                        WHERE CONVERT(constraint_schema USING utf8mb4) COLLATE utf8mb4_unicode_ci = CONVERT(DATABASE() USING utf8mb4) COLLATE utf8mb4_unicode_ci
-                          AND CONVERT(table_name USING utf8mb4) COLLATE utf8mb4_unicode_ci = _utf8mb4'genealogiaanimal' COLLATE utf8mb4_unicode_ci
-                          AND CONVERT(constraint_name USING utf8mb4) COLLATE utf8mb4_unicode_ci = _utf8mb4'FK_GenealogiaAnimal_Usuario_IdAutor' COLLATE utf8mb4_unicode_ci
-                    ) THEN
-                        ALTER TABLE `genealogiaanimal` DROP FOREIGN KEY `FK_GenealogiaAnimal_Usuario_IdAutor`;
-                    ELSEIF EXISTS (
-                        SELECT 1 FROM information_schema.table_constraints
-                        WHERE CONVERT(constraint_schema USING utf8mb4) COLLATE utf8mb4_unicode_ci = CONVERT(DATABASE() USING utf8mb4) COLLATE utf8mb4_unicode_ci
-                          AND CONVERT(table_name USING utf8mb4) COLLATE utf8mb4_unicode_ci = _utf8mb4'GenealogiaAnimal' COLLATE utf8mb4_unicode_ci
-                          AND CONVERT(constraint_name USING utf8mb4) COLLATE utf8mb4_unicode_ci = _utf8mb4'FK_GenealogiaAnimal_Usuario_IdAutor' COLLATE utf8mb4_unicode_ci
+                        SELECT 1
+                        FROM information_schema.tables t
+                        INNER JOIN information_schema.table_constraints tc
+                            ON tc.table_schema = t.table_schema
+                           AND tc.table_name = t.table_name
+                        WHERE t.table_schema = DATABASE()
+                          AND t.table_name = 'GenealogiaAnimal'
+                          AND tc.constraint_name = 'FK_GenealogiaAnimal_Usuario_IdAutor'
+                          AND tc.constraint_type = 'FOREIGN KEY'
                     ) THEN
                         ALTER TABLE `GenealogiaAnimal` DROP FOREIGN KEY `FK_GenealogiaAnimal_Usuario_IdAutor`;
                     END IF;
