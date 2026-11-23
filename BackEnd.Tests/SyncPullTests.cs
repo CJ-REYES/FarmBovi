@@ -4,6 +4,7 @@ using FarmBovi.Api.Controllers;
 using FarmBovi.Api.Data;
 using FarmBovi.Api.DTOs;
 using FarmBovi.Api.Models;
+using FarmBovi.Api.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -410,7 +411,7 @@ public sealed class SyncPullTests
         });
         await db.SaveChangesAsync();
 
-        var pushController = new SincronizacionController(db)
+        var pushController = new SincronizacionController(db, new RanchAccessService(db))
         {
             ControllerContext = Controller(db, userA).ControllerContext
         };

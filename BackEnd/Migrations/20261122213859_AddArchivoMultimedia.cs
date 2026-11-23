@@ -27,7 +27,7 @@ namespace FarmBovi.Api.Migrations
                     ChecksumSha256 = table.Column<string>(type: "varchar(64)", maxLength: 64, nullable: true),
                     RutaArchivo = table.Column<string>(type: "varchar(500)", maxLength: 500, nullable: false),
                     FechaCaptura = table.Column<DateTime>(type: "datetime(6)", nullable: false),
-                    IdAutor = table.Column<Guid>(type: "char(36)", nullable: false),
+                    IdAutor = table.Column<int>(type: "int", nullable: false),
                     CreadoEn = table.Column<DateTime>(type: "datetime(6)", nullable: false),
                     VersionRegistro = table.Column<long>(type: "bigint", nullable: false),
                     EliminadoEn = table.Column<DateTime>(type: "datetime(6)", nullable: true)
@@ -50,8 +50,8 @@ namespace FarmBovi.Api.Migrations
                     table.ForeignKey(
                         name: "FK_ArchivoMultimedia_Usuario_IdAutor",
                         column: x => x.IdAutor,
-                        principalTable: "Usuario",
-                        principalColumn: "IdUsuario",
+                        principalTable: "usuario",
+                        principalColumn: "Id",
                         onDelete: ReferentialAction.Restrict);
                 })
                 .Annotation("MySQL:Charset", "utf8mb4");

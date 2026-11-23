@@ -23,38 +23,42 @@ namespace FarmBovi.Api.Migrations
             migrationBuilder.DropForeignKey(name: "FK_Tratamiento_Usuario_IdAutor", table: "Tratamiento");
             migrationBuilder.DropForeignKey(name: "FK_UsuarioRancho_Usuario_IdUsuario", table: "UsuarioRancho");
 
-            // 2. Transformar tabla Usuario (char(36) IdUsuario) -> usuario (int Id AUTO_INCREMENT)
-            // Usamos una tabla puente temporal para mapear GUIDs previos a IDs INT sin perder filas
+            // Soltar FK de GenealogiaAnimal si existe
             migrationBuilder.Sql(@"
-                CREATE TEMPORARY TABLE IF NOT EXISTS _tmp_usuario_map (
-                    OldGuid char(36) NOT NULL PRIMARY KEY,
-                    NewIntId int NOT NULL AUTO_INCREMENT UNIQUE
-                );
+                DROP PROCEDURE IF EXISTS `_sp_drop_fk_genealogia`;
+            ");
+            migrationBuilder.Sql(@"
+                CREATE PROCEDURE `_sp_drop_fk_genealogia`()
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints
+                        WHERE CONVERT(constraint_schema USING utf8mb4) COLLATE utf8mb4_unicode_ci = CONVERT(DATABASE() USING utf8mb4) COLLATE utf8mb4_unicode_ci
+                          AND CONVERT(table_name USING utf8mb4) COLLATE utf8mb4_unicode_ci = _utf8mb4'genealogiaanimal' COLLATE utf8mb4_unicode_ci
+                          AND CONVERT(constraint_name USING utf8mb4) COLLATE utf8mb4_unicode_ci = _utf8mb4'FK_GenealogiaAnimal_Usuario_IdAutor' COLLATE utf8mb4_unicode_ci
+                    ) THEN
+                        ALTER TABLE `genealogiaanimal` DROP FOREIGN KEY `FK_GenealogiaAnimal_Usuario_IdAutor`;
+                    ELSEIF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints
+                        WHERE CONVERT(constraint_schema USING utf8mb4) COLLATE utf8mb4_unicode_ci = CONVERT(DATABASE() USING utf8mb4) COLLATE utf8mb4_unicode_ci
+                          AND CONVERT(table_name USING utf8mb4) COLLATE utf8mb4_unicode_ci = _utf8mb4'GenealogiaAnimal' COLLATE utf8mb4_unicode_ci
+                          AND CONVERT(constraint_name USING utf8mb4) COLLATE utf8mb4_unicode_ci = _utf8mb4'FK_GenealogiaAnimal_Usuario_IdAutor' COLLATE utf8mb4_unicode_ci
+                    ) THEN
+                        ALTER TABLE `GenealogiaAnimal` DROP FOREIGN KEY `FK_GenealogiaAnimal_Usuario_IdAutor`;
+                    END IF;
+                END;
+            ");
+            migrationBuilder.Sql("CALL `_sp_drop_fk_genealogia`();");
+            migrationBuilder.Sql("DROP PROCEDURE IF EXISTS `_sp_drop_fk_genealogia`;");
+
+            // 2. Transformar tabla Usuario/usuario -> usuario (int Id AUTO_INCREMENT)
+            migrationBuilder.Sql(@"
+                DROP TEMPORARY TABLE IF EXISTS `_tmp_usuario_map`;
+                CREATE TEMPORARY TABLE `_tmp_usuario_map` (
+                    `OldGuid` char(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL PRIMARY KEY,
+                    `NewIntId` int NOT NULL AUTO_INCREMENT UNIQUE
+                ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             ");
 
-            migrationBuilder.Sql(@"
-                SET @sql_check = (
-                    SELECT IF(
-                        EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'Usuario'),
-                        'INSERT IGNORE INTO _tmp_usuario_map (OldGuid) SELECT IdUsuario FROM Usuario;',
-                        'SELECT 1;'
-                    )
-                );
-                PREPARE stmt FROM @sql_check; EXECUTE stmt; DEALLOCATE PREPARE stmt;
-            ");
-
-            migrationBuilder.Sql(@"
-                SET @sql_check2 = (
-                    SELECT IF(
-                        EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'usuario'),
-                        'INSERT IGNORE INTO _tmp_usuario_map (OldGuid) SELECT CAST(Id AS CHAR(36)) FROM usuario WHERE CAST(Id AS CHAR(36)) NOT IN (SELECT OldGuid FROM _tmp_usuario_map);',
-                        'SELECT 1;'
-                    )
-                );
-                PREPARE stmt2 FROM @sql_check2; EXECUTE stmt2; DEALLOCATE PREPARE stmt2;
-            ");
-
-            // Si existe 'Usuario' con IdUsuario char(36), recrear como 'usuario' con Id int AUTO_INCREMENT
             migrationBuilder.Sql(@"
                 DROP TABLE IF EXISTS `usuario_new`;
                 CREATE TABLE `usuario_new` (
@@ -65,22 +69,50 @@ namespace FarmBovi.Api.Migrations
                     `Estado` varchar(20) NOT NULL,
                     PRIMARY KEY (`Id`),
                     UNIQUE KEY `IX_usuario_Correo` (`Correo`)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             ");
 
+            migrationBuilder.Sql("DROP PROCEDURE IF EXISTS `_sp_migrar_usuarios`;");
+
             migrationBuilder.Sql(@"
-                SET @sql_copy_users = (
-                    SELECT IF(
-                        EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'Usuario'),
-                        'INSERT INTO `usuario_new` (`Id`, `Nombre`, `Correo`, `Contrasena`, `Estado`)
-                         SELECT m.NewIntId, u.Nombre, u.Correo, u.Contrasena, u.Estado
-                         FROM `Usuario` u
-                         INNER JOIN `_tmp_usuario_map` m ON m.OldGuid = u.IdUsuario;',
-                        'SELECT 1;'
-                    )
-                );
-                PREPARE stmt3 FROM @sql_copy_users; EXECUTE stmt3; DEALLOCATE PREPARE stmt3;
+                CREATE PROCEDURE `_sp_migrar_usuarios`()
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE CONVERT(table_schema USING utf8mb4) COLLATE utf8mb4_unicode_ci = CONVERT(DATABASE() USING utf8mb4) COLLATE utf8mb4_unicode_ci
+                          AND CONVERT(table_name USING utf8mb4) COLLATE utf8mb4_unicode_ci = _utf8mb4'Usuario' COLLATE utf8mb4_unicode_ci
+                          AND CONVERT(column_name USING utf8mb4) COLLATE utf8mb4_unicode_ci = _utf8mb4'IdUsuario' COLLATE utf8mb4_unicode_ci
+                    ) THEN
+                        INSERT IGNORE INTO `_tmp_usuario_map` (`OldGuid`)
+                        SELECT `IdUsuario` FROM `Usuario` WHERE `IdUsuario` IS NOT NULL;
+
+                        INSERT INTO `usuario_new` (`Id`, `Nombre`, `Correo`, `Contrasena`, `Estado`)
+                        SELECT m.`NewIntId`, u.`Nombre`, u.`Correo`, u.`Contrasena`, u.`Estado`
+                        FROM `Usuario` u
+                        INNER JOIN `_tmp_usuario_map` m
+                            ON m.`OldGuid` COLLATE utf8mb4_unicode_ci = u.`IdUsuario` COLLATE utf8mb4_unicode_ci;
+                    ELSEIF EXISTS (
+                        SELECT 1 FROM information_schema.tables
+                        WHERE CONVERT(table_schema USING utf8mb4) COLLATE utf8mb4_unicode_ci = CONVERT(DATABASE() USING utf8mb4) COLLATE utf8mb4_unicode_ci
+                          AND CONVERT(table_name USING utf8mb4) COLLATE utf8mb4_unicode_ci = _utf8mb4'Usuario' COLLATE utf8mb4_unicode_ci
+                    ) THEN
+                        INSERT INTO `usuario_new` (`Id`, `Nombre`, `Correo`, `Contrasena`, `Estado`)
+                        SELECT `Id`, `Nombre`, `Correo`, `Contrasena`, `Estado`
+                        FROM `Usuario`;
+                    ELSEIF EXISTS (
+                        SELECT 1 FROM information_schema.tables
+                        WHERE CONVERT(table_schema USING utf8mb4) COLLATE utf8mb4_unicode_ci = CONVERT(DATABASE() USING utf8mb4) COLLATE utf8mb4_unicode_ci
+                          AND CONVERT(table_name USING utf8mb4) COLLATE utf8mb4_unicode_ci = _utf8mb4'usuario' COLLATE utf8mb4_unicode_ci
+                    ) THEN
+                        INSERT INTO `usuario_new` (`Id`, `Nombre`, `Correo`, `Contrasena`, `Estado`)
+                        SELECT `Id`, `Nombre`, `Correo`, `Contrasena`, `Estado`
+                        FROM `usuario`;
+                    END IF;
+                END;
             ");
+
+            migrationBuilder.Sql("CALL `_sp_migrar_usuarios`();");
+            migrationBuilder.Sql("DROP PROCEDURE IF EXISTS `_sp_migrar_usuarios`;");
 
             // Mapear columnas GUID en tablas hijas a NewIntId antes de cambiar tipo a int
             string[] tablasIdAutor =
@@ -101,8 +133,9 @@ namespace FarmBovi.Api.Migrations
             {
                 migrationBuilder.Sql($@"
                     UPDATE `{tabla}` t
-                    INNER JOIN `_tmp_usuario_map` m ON CAST(t.`IdAutor` AS CHAR(36)) = m.OldGuid
-                    SET t.`IdAutor` = CAST(m.NewIntId AS CHAR(36));
+                    INNER JOIN `_tmp_usuario_map` m
+                        ON CAST(t.`IdAutor` AS CHAR(36)) COLLATE utf8mb4_unicode_ci = m.`OldGuid` COLLATE utf8mb4_unicode_ci
+                    SET t.`IdAutor` = CAST(m.`NewIntId` AS CHAR(36));
                 ");
             }
 
@@ -110,29 +143,34 @@ namespace FarmBovi.Api.Migrations
             {
                 migrationBuilder.Sql($@"
                     UPDATE `{tabla}` t
-                    INNER JOIN `_tmp_usuario_map` m ON CAST(t.`IdUsuario` AS CHAR(36)) = m.OldGuid
-                    SET t.`IdUsuario` = CAST(m.NewIntId AS CHAR(36));
+                    INNER JOIN `_tmp_usuario_map` m
+                        ON CAST(t.`IdUsuario` AS CHAR(36)) COLLATE utf8mb4_unicode_ci = m.`OldGuid` COLLATE utf8mb4_unicode_ci
+                    SET t.`IdUsuario` = CAST(m.`NewIntId` AS CHAR(36));
                 ");
             }
 
             migrationBuilder.Sql(@"
                 UPDATE `CambioServidor` t
-                INNER JOIN `_tmp_usuario_map` m ON CAST(t.`IdUsuario` AS CHAR(36)) = m.OldGuid
-                SET t.`IdUsuario` = CAST(m.NewIntId AS CHAR(36))
+                INNER JOIN `_tmp_usuario_map` m
+                    ON CAST(t.`IdUsuario` AS CHAR(36)) COLLATE utf8mb4_unicode_ci = m.`OldGuid` COLLATE utf8mb4_unicode_ci
+                SET t.`IdUsuario` = CAST(m.`NewIntId` AS CHAR(36))
                 WHERE t.`IdUsuario` IS NOT NULL;
             ");
 
             migrationBuilder.Sql(@"
                 UPDATE `Recordatorio` t
-                INNER JOIN `_tmp_usuario_map` m ON CAST(t.`IdResponsable` AS CHAR(36)) = m.OldGuid
-                SET t.`IdResponsable` = CAST(m.NewIntId AS CHAR(36))
+                INNER JOIN `_tmp_usuario_map` m
+                    ON CAST(t.`IdResponsable` AS CHAR(36)) COLLATE utf8mb4_unicode_ci = m.`OldGuid` COLLATE utf8mb4_unicode_ci
+                SET t.`IdResponsable` = CAST(m.`NewIntId` AS CHAR(36))
                 WHERE t.`IdResponsable` IS NOT NULL;
             ");
 
             // Reemplazar tabla Usuario/usuario por usuario_new
+            migrationBuilder.Sql("SET FOREIGN_KEY_CHECKS = 0;");
             migrationBuilder.Sql("DROP TABLE IF EXISTS `Usuario`;");
             migrationBuilder.Sql("DROP TABLE IF EXISTS `usuario`;");
             migrationBuilder.Sql("RENAME TABLE `usuario_new` TO `usuario`;");
+            migrationBuilder.Sql("SET FOREIGN_KEY_CHECKS = 1;");
             migrationBuilder.Sql("DROP TEMPORARY TABLE IF EXISTS `_tmp_usuario_map`;");
 
             // 3. Alterar columnas a int / int? en las tablas del modelo

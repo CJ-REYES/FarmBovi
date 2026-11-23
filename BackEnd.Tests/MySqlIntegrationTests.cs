@@ -284,37 +284,70 @@ public sealed class MySqlIntegrationTests
     {
         var (connStr, isIsolated, dbName) = await MySqlTestHelper.PrepareCleanDatabaseAsync("fb_legacy");
 
+        const int userId = 1;
+        var ranchoId = Guid.NewGuid();
+        var urId = Guid.NewGuid();
+        var loteId = Guid.NewGuid();
+        var animalId = Guid.NewGuid();
+
         try
         {
-            // 1. Aplicar únicamente la migración inicial anterior (int IDs)
+            // 1. Aplicar migraciones previas a la alineación final del modelo MySQL
             await using (var db = MySqlTestHelper.CreateContext(connStr))
             {
                 var migrator = db.GetService<IMigrator>();
-                await migrator.MigrateAsync("20261116071310_InitialMySqlModels");
+                await migrator.MigrateAsync("20261122223621_AddPesaje");
             }
 
-            // 2. Insertar datos reales previos con IDs enteros
-            await using (var conn = new MySqlConnection(connStr))
+            // 2. Insertar datos reales previos manteniendo relaciones coherentes
+            await using (var seedDb = MySqlTestHelper.CreateContext(connStr))
             {
-                await conn.OpenAsync();
-                await using var cmd = conn.CreateCommand();
-                cmd.CommandText = """
-                    INSERT INTO `Usuario` (`Id`, `Nombre`, `Correo`, `Contrasena`, `Estado`)
-                    VALUES (1, 'Roberto Legacy', 'legacy@farmbovi.local', 'hash_legacy', 'Activo');
-
-                    INSERT INTO `Rancho` (`IdRancho`, `Nombre`, `UbicacionGeneral`, `Estado`, `IdAutor`, `CreadoEn`, `VersionRegistro`)
-                    VALUES (10, 'Rancho Legacy', 'Campeche', 'Activo', 1, UTC_TIMESTAMP(6), 1);
-
-                    INSERT INTO `UsuarioRancho` (`IdUsuarioRancho`, `IdUsuario`, `IdRancho`, `Rol`, `Estado`, `FechaAlta`)
-                    VALUES (100, 1, 10, 'Admin', 'Activo', UTC_TIMESTAMP(6));
-
-                    INSERT INTO `Lote` (`IdLote`, `IdRancho`, `Nombre`, `Ubicacion`, `Estado`, `IdAutor`, `FechaCreacion`, `VersionRegistro`)
-                    VALUES (20, 10, 'Lote Legacy', 'Zona 1', 'Activo', 1, UTC_TIMESTAMP(6), 1);
-
-                    INSERT INTO `Animal` (`IdAnimal`, `IdRancho`, `IdLote`, `Arete`, `Raza`, `Sexo`, `FechaIngreso`, `Procedencia`, `Estado`, `IdAutor`, `FechaCreacion`, `VersionRegistro`)
-                    VALUES (30, 10, 20, 'LEG-001', 'Brahman', 'Hembra', UTC_TIMESTAMP(6), 'Propio', 'Activo', 1, UTC_TIMESTAMP(6), 1);
-                    """;
-                await cmd.ExecuteNonQueryAsync();
+                seedDb.Usuarios.Add(new Usuario
+                {
+                    Id = userId,
+                    Nombre = "Roberto Legacy",
+                    Correo = "legacy@farmbovi.local",
+                    Contrasena = "hash_legacy",
+                    Estado = "Activo"
+                });
+                seedDb.Ranchos.Add(new Rancho
+                {
+                    IdRancho = ranchoId,
+                    Nombre = "Rancho Legacy",
+                    UbicacionGeneral = "Campeche",
+                    Estado = "Activo",
+                    IdAutor = userId
+                });
+                seedDb.UsuarioRanchos.Add(new UsuarioRancho
+                {
+                    IdUsuarioRancho = urId,
+                    IdUsuario = userId,
+                    IdRancho = ranchoId,
+                    Rol = "Admin",
+                    Estado = "Activo"
+                });
+                seedDb.Lotes.Add(new Lote
+                {
+                    IdLote = loteId,
+                    IdRancho = ranchoId,
+                    Nombre = "Lote Legacy",
+                    Ubicacion = "Zona 1",
+                    Estado = "Activo",
+                    IdAutor = userId
+                });
+                seedDb.Animales.Add(new Animal
+                {
+                    IdAnimal = animalId,
+                    IdRancho = ranchoId,
+                    IdLote = loteId,
+                    Arete = "LEG-001",
+                    Raza = "Brahman",
+                    Sexo = "Hembra",
+                    Procedencia = "Propio",
+                    Estado = "Activo",
+                    IdAutor = userId
+                });
+                await seedDb.SaveChangesAsync();
             }
 
             // 3. Aplicar la migración incremental hacia el esquema actual
@@ -410,7 +443,7 @@ public sealed class MySqlIntegrationTests
                 Assert.False(db.Database.HasPendingModelChanges());
             }
 
-            var userId = Guid.NewGuid();
+            const int userId = 1;
             var ranchId = Guid.NewGuid();
             var padre1Id = Guid.NewGuid();
             var padre2Id = Guid.NewGuid();
@@ -419,7 +452,7 @@ public sealed class MySqlIntegrationTests
 
             await using (var seedDb = MySqlTestHelper.CreateContext(connStr))
             {
-                seedDb.Usuarios.Add(new Usuario { IdUsuario = userId, Nombre = "Prod", Correo = $"g-{userId:N}@farmbovi.local", Contrasena = "h", Estado = "Activo" });
+                seedDb.Usuarios.Add(new Usuario { Id = userId, Nombre = "Prod", Correo = $"g-{userId}-{Guid.NewGuid():N}@farmbovi.local", Contrasena = "h", Estado = "Activo" });
                 seedDb.Ranchos.Add(new Rancho { IdRancho = ranchId, Nombre = "Rancho G", UbicacionGeneral = "Norte", Estado = "Activo", IdAutor = userId });
                 seedDb.UsuarioRanchos.Add(new UsuarioRancho { IdUsuario = userId, IdRancho = ranchId, Rol = "Administrador", Estado = "Activo" });
                 seedDb.Animales.AddRange(
@@ -621,7 +654,7 @@ public sealed class MySqlIntegrationTests
                 Assert.False(db.Database.HasPendingModelChanges());
             }
 
-            var userId = Guid.NewGuid();
+            const int userId = 1;
             var ranchId = Guid.NewGuid();
             var padre1Id = Guid.NewGuid();
             var padre2Id = Guid.NewGuid();
@@ -630,7 +663,7 @@ public sealed class MySqlIntegrationTests
 
             await using (var seedDb = MySqlTestHelper.CreateContext(connStr))
             {
-                seedDb.Usuarios.Add(new Usuario { IdUsuario = userId, Nombre = "Prod", Correo = $"occ-{userId:N}@farmbovi.local", Contrasena = "h", Estado = "Activo" });
+                seedDb.Usuarios.Add(new Usuario { Id = userId, Nombre = "Prod", Correo = $"occ-{userId}-{Guid.NewGuid():N}@farmbovi.local", Contrasena = "h", Estado = "Activo" });
                 seedDb.Ranchos.Add(new Rancho { IdRancho = ranchId, Nombre = "Rancho OCC", UbicacionGeneral = "Norte", Estado = "Activo", IdAutor = userId });
                 seedDb.UsuarioRanchos.Add(new UsuarioRancho { IdUsuario = userId, IdRancho = ranchId, Rol = "Administrador", Estado = "Activo" });
                 seedDb.Animales.AddRange(

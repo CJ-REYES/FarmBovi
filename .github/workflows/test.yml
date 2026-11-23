@@ -1,0 +1,31 @@
+﻿name: Tests MySQL
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root_password
+          MYSQL_DATABASE: farmbovi
+          MYSQL_USER: farmbovi
+          MYSQL_PASSWORD: change_me
+        ports:
+          - 3306:3306
+        options: --health-cmd="mysqladmin ping -h localhost" --health-interval=10s --health-timeout=5s --health-retries=5
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Run dotnet test
+        env:
+          FARMBOVI_REQUIRE_REAL_DB: "true"
+          FARMBOVI_TEST_CONNECTION: "Server=127.0.0.1;Port=3306;Database=farmbovi;User ID=farmbovi;Password=change_me;"
+        run: dotnet test

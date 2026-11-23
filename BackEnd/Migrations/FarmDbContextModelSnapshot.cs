@@ -535,7 +535,7 @@ namespace FarmBovi.Api.Migrations
 
                     b.Property<decimal>("PesoRealKg")
                         .HasPrecision(10, 3)
-                        .HasColumnType("decimal(10,3)");
+                        .HasColumnType("decimal(10,2)");
 
                     b.Property<string>("Responsable")
                         .IsRequired()
@@ -837,6 +837,9 @@ namespace FarmBovi.Api.Migrations
                         .HasColumnType("varchar(254)")
                         .HasColumnName("Correo");
 
+                    b.Property<DateTime>("CreadoEn")
+                        .HasColumnType("datetime(6)");
+
                     b.Property<string>("Estado")
                         .IsRequired()
                         .HasMaxLength(20)
@@ -955,25 +958,6 @@ namespace FarmBovi.Api.Migrations
                         .HasForeignKey("IdRancho")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
-                });
-
-            modelBuilder.Entity("FarmBovi.Api.Models.CambioServidor", b =>
-                {
-                    b.HasOne("FarmBovi.Api.Models.RegistroSyncServidor", null)
-                        .WithMany()
-                        .HasForeignKey("IdOperacion")
-                        .OnDelete(DeleteBehavior.Restrict);
-
-                    b.HasOne("FarmBovi.Api.Models.Rancho", null)
-                        .WithMany()
-                        .HasForeignKey("IdRancho")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("FarmBovi.Api.Models.Usuario", null)
-                        .WithMany()
-                        .HasForeignKey("IdUsuario")
-                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("FarmBovi.Api.Models.EventoSanitario", b =>

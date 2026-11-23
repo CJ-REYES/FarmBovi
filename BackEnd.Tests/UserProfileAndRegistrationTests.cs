@@ -115,7 +115,7 @@ public sealed class UserProfileAndRegistrationTests : IClassFixture<FarmBoviApiF
         await using (var scope = _factory.Services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<FarmDbContext>();
-            var dbUser = await db.Usuarios.AsNoTracking().FirstAsync(u => u.IdUsuario == auth.IdUsuario);
+            var dbUser = await db.Usuarios.AsNoTracking().FirstAsync(u => u.Correo == newEmail);
             Assert.NotNull(dbUser.FotoPerfilRuta);
             Assert.StartsWith("public/imagenes/perfil-usuario/", dbUser.FotoPerfilRuta);
             Assert.DoesNotContain("base64", dbUser.FotoPerfilRuta, StringComparison.OrdinalIgnoreCase);
