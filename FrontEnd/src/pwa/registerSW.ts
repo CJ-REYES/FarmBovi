@@ -32,6 +32,15 @@ export function registerFarmBoviServiceWorker(): void {
   if (registeredOnce || typeof window === 'undefined' || !('serviceWorker' in navigator)) {
     return;
   }
+
+  // En desarrollo (`npm run dev`), VitePWA tiene `devOptions.enabled = false` y `/sw.js`
+  // no existe (el servidor devuelve index.html con MIME text/html). Registrar solo en build/producción.
+  const isDev = Boolean(import.meta.env.DEV);
+  const forceDevSw = import.meta.env.VITE_ENABLE_DEV_SW === 'true';
+  if (isDev && !forceDevSw) {
+    return;
+  }
+
   registeredOnce = true;
 
   // Escuchar mensajes enviados desde src/pwa/sw.ts (ej. solicitud de Background Sync)
@@ -49,7 +58,7 @@ export function registerFarmBoviServiceWorker(): void {
     window.location.reload();
   });
 
-  window.addEventListener('load', () => {
+  const performRegistration = () => {
     void (async () => {
       PwaUpdateManager.setRegistering();
       try {
@@ -94,5 +103,11 @@ export function registerFarmBoviServiceWorker(): void {
         PwaUpdateManager.setRegistrationError(msg);
       }
     })();
-  });
+  };
+
+  if (document.readyState === 'complete') {
+    performRegistration();
+  } else {
+    window.addEventListener('load', performRegistration, { once: true });
+  }
 }

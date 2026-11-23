@@ -220,4 +220,205 @@ export function configureMigrations(db: Dexie): void {
         if (raw.idPesajeConfirmado === undefined) raw.idPesajeConfirmado = null;
       });
     });
+
+  // Versión 4: Tabla local de ranchos y campos reales del contrato Backend para Animal y Lote
+  db.version(4)
+    .stores({
+      ranches: 'id, localNumericId, remoteId, nombre, estado, syncStatus, updatedAt',
+      cattle:
+        'id, localNumericId, remoteId, ranchId, arete, areteSiniiga, loteId, estado, syncStatus, updatedAt, createdAt',
+      weighings:
+        'id, localNumericId, remoteId, ranchId, cattleId, sourceAnalysisJobId, fecha, syncStatus, updatedAt',
+      healthRecords: 'id, localNumericId, remoteId, ranchId, cattleId, tipo, fecha, syncStatus, updatedAt',
+      feedingRecords: 'id, localNumericId, remoteId, ranchId, lotId, fecha, syncStatus, updatedAt',
+      reproductionRecords: 'id, localNumericId, remoteId, ranchId, cattleId, evento, fecha, syncStatus, updatedAt',
+      lots: 'id, localNumericId, remoteId, ranchId, nombre, estado, syncStatus, updatedAt',
+      movements: 'id, localNumericId, remoteId, ranchId, cattleId, fecha, syncStatus, updatedAt',
+      genealogy: 'id, localNumericId, remoteId, ranchId, cattleId, padreId, madreId, syncStatus, updatedAt',
+      alerts: 'id, localNumericId, remoteId, ranchId, tipo, prioridad, leida, fecha, syncStatus',
+      media:
+        'id, remoteId, ranchId, cattleId, idEntidadRelacionada, tipo, estadoArchivo, idOperacionSubida, fechaCaptura, syncStatus, updatedAt',
+      weighingAnalysisJobs:
+        'idTrabajo, idMedia, idBovino, ranchId, idPesajeConfirmado, estado, proximoIntento, fechaCreacion, actualizadoEn',
+      outbox: 'id, &idOperacion, entidad, idEntidad, tipoOperacion, estado, fechaCreacion, proximoIntento',
+      syncConflicts: 'idConflicto, idOperacion, entidad, idEntidad, tipoConflicto, estadoResolucion, fechaDeteccion',
+      syncCheckpoints: 'entidad, cursorOpaco, actualizadoEn',
+      syncMetadata: 'entityName'
+    })
+    .upgrade(async (tx) => {
+      const todayIso = new Date().toISOString().slice(0, 10);
+      const cattleTable = tx.table<Record<string, unknown>, string>('cattle');
+      await cattleTable.toCollection().modify((raw) => {
+        const arete =
+          typeof raw.arete === 'string' && raw.arete.trim().length > 0
+            ? raw.arete.trim()
+            : typeof raw.areteSiniiga === 'string'
+              ? raw.areteSiniiga.trim()
+              : '';
+        const sexo =
+          typeof raw.sexo === 'string' && raw.sexo.trim().length > 0
+            ? raw.sexo.trim()
+            : typeof raw.gender === 'string' && raw.gender.trim().length > 0
+              ? raw.gender.trim()
+              : 'Hembra';
+
+        raw.arete = arete;
+        raw.areteSiniiga = arete;
+        raw.sexo = sexo;
+        raw.gender = sexo;
+        if (typeof raw.fechaIngreso !== 'string' || raw.fechaIngreso.trim().length === 0) {
+          const created = typeof raw.createdAt === 'string' ? raw.createdAt.slice(0, 10) : todayIso;
+          raw.fechaIngreso = created;
+        }
+        if (typeof raw.procedencia !== 'string' || raw.procedencia.trim().length === 0) {
+          raw.procedencia = 'Propio';
+        }
+        if (typeof raw.estado !== 'string' || raw.estado.trim().length === 0) {
+          raw.estado = 'Activo';
+        }
+        if (raw.fechaSalida === undefined) {
+          raw.fechaSalida = null;
+        }
+        if (raw.observaciones === undefined) {
+          raw.observaciones = null;
+        }
+      });
+
+      const lotsTable = tx.table<Record<string, unknown>, string>('lots');
+      await lotsTable.toCollection().modify((raw) => {
+        if (typeof raw.estado !== 'string' || raw.estado.trim().length === 0) {
+          raw.estado = 'Activo';
+        }
+      });
+    });
+
+  // v5: Incorpora almacén dedicado `treatments` alineado al contrato real `Tratamiento` (1:N con EventoSanitario)
+  db.version(5).stores({
+    ranches: 'id, localNumericId, remoteId, ranchId, nombre, estado, syncStatus, updatedAt',
+    cattle:
+      'id, localNumericId, remoteId, ranchId, arete, areteSiniiga, loteId, estado, syncStatus, updatedAt, createdAt',
+    weighings:
+      'id, localNumericId, remoteId, ranchId, cattleId, sourceAnalysisJobId, fecha, syncStatus, updatedAt',
+    healthRecords: 'id, localNumericId, remoteId, ranchId, cattleId, tipo, fecha, syncStatus, updatedAt',
+    treatments:
+      'id, localNumericId, remoteId, ranchId, eventoSanitarioId, cattleId, estado, fechaInicio, syncStatus, updatedAt',
+    feedingRecords: 'id, localNumericId, remoteId, ranchId, lotId, fecha, syncStatus, updatedAt',
+    reproductionRecords: 'id, localNumericId, remoteId, ranchId, cattleId, evento, fecha, syncStatus, updatedAt',
+    lots: 'id, localNumericId, remoteId, ranchId, nombre, estado, syncStatus, updatedAt',
+    movements: 'id, localNumericId, remoteId, ranchId, cattleId, fecha, syncStatus, updatedAt',
+    genealogy: 'id, localNumericId, remoteId, ranchId, cattleId, padreId, madreId, syncStatus, updatedAt',
+    alerts: 'id, localNumericId, remoteId, ranchId, tipo, prioridad, leida, fecha, syncStatus',
+    media:
+      'id, remoteId, ranchId, cattleId, idEntidadRelacionada, tipo, estadoArchivo, idOperacionSubida, fechaCaptura, syncStatus, updatedAt',
+    weighingAnalysisJobs:
+      'idTrabajo, idMedia, idBovino, ranchId, idPesajeConfirmado, estado, proximoIntento, fechaCreacion, actualizadoEn',
+    outbox: 'id, &idOperacion, entidad, idEntidad, tipoOperacion, estado, fechaCreacion, proximoIntento',
+    syncConflicts: 'idConflicto, idOperacion, entidad, idEntidad, tipoConflicto, estadoResolucion, fechaDeteccion',
+    syncCheckpoints: 'entidad, cursorOpaco, actualizadoEn',
+    syncMetadata: 'entityName'
+  });
+
+  // v6 (FE-03): Índices relacionales completos (`feedingRecords.cattleId`, `alerts` FK/estado,
+  // índice compuesto `[entidad+idEntidad]` en `outbox`), deduplicación por `remoteId` y
+  // recuperación de operaciones interrumpidas (`en_proceso` -> `pendiente`).
+  db.version(6)
+    .stores({
+      ranches: 'id, localNumericId, remoteId, ranchId, nombre, estado, syncStatus, updatedAt',
+      cattle:
+        'id, localNumericId, remoteId, ranchId, arete, areteSiniiga, loteId, estado, syncStatus, updatedAt, createdAt',
+      weighings:
+        'id, localNumericId, remoteId, ranchId, cattleId, sourceAnalysisJobId, fecha, syncStatus, updatedAt',
+      healthRecords:
+        'id, localNumericId, remoteId, ranchId, cattleId, tipo, fecha, syncStatus, updatedAt',
+      treatments:
+        'id, localNumericId, remoteId, ranchId, eventoSanitarioId, cattleId, estado, fechaInicio, syncStatus, updatedAt',
+      feedingRecords:
+        'id, localNumericId, remoteId, ranchId, lotId, cattleId, fecha, syncStatus, updatedAt',
+      reproductionRecords:
+        'id, localNumericId, remoteId, ranchId, cattleId, evento, fecha, syncStatus, updatedAt',
+      lots: 'id, localNumericId, remoteId, ranchId, nombre, estado, syncStatus, updatedAt',
+      movements: 'id, localNumericId, remoteId, ranchId, cattleId, fecha, syncStatus, updatedAt',
+      genealogy:
+        'id, localNumericId, remoteId, ranchId, cattleId, padreId, madreId, syncStatus, updatedAt',
+      alerts:
+        'id, localNumericId, remoteId, ranchId, cattleId, lotId, treatmentId, tipo, prioridad, estado, leida, fecha, syncStatus, updatedAt',
+      media:
+        'id, remoteId, ranchId, cattleId, idEntidadRelacionada, tipo, estadoArchivo, idOperacionSubida, fechaCaptura, syncStatus, updatedAt',
+      weighingAnalysisJobs:
+        'idTrabajo, idMedia, idBovino, ranchId, idPesajeConfirmado, estado, proximoIntento, fechaCreacion, actualizadoEn',
+      outbox:
+        'id, &idOperacion, entidad, idEntidad, [entidad+idEntidad], tipoOperacion, estado, fechaCreacion, proximoIntento',
+      syncConflicts:
+        'idConflicto, idOperacion, entidad, idEntidad, tipoConflicto, estadoResolucion, fechaDeteccion',
+      syncCheckpoints: 'entidad, cursorOpaco, actualizadoEn',
+      syncMetadata: 'entityName'
+    })
+    .upgrade(async (tx) => {
+      // 1. Recuperar operaciones que pudieran haber quedado atascadas en 'en_proceso'
+      const outboxTable = tx.table<Record<string, unknown>, string>('outbox');
+      await outboxTable.toCollection().modify((raw) => {
+        if (raw.estado === 'en_proceso') {
+          raw.estado = 'pendiente';
+        }
+      });
+
+      // 2. Normalizar estado en alertas heredadas
+      const alertsTable = tx.table<Record<string, unknown>, string>('alerts');
+      await alertsTable.toCollection().modify((raw) => {
+        if (typeof raw.estado !== 'string' || raw.estado.trim().length === 0) {
+          raw.estado = raw.leida === true ? 'Completado' : 'Pendiente';
+        }
+      });
+
+      // 3. Deduplicar registros por remoteId (conservando pendientes/conflictos o la versión más reciente)
+      const dedupeTables = [
+        'ranches',
+        'cattle',
+        'lots',
+        'weighings',
+        'healthRecords',
+        'treatments',
+        'feedingRecords',
+        'reproductionRecords',
+        'movements',
+        'genealogy',
+        'alerts'
+      ];
+
+      for (const tableName of dedupeTables) {
+        const table = tx.table<Record<string, unknown>, string>(tableName);
+        const rows = await table.toArray();
+        const byRemoteId = new Map<string, Record<string, unknown>[]>();
+
+        for (const row of rows) {
+          const remote = row.remoteId;
+          if (typeof remote !== 'string' && typeof remote !== 'number') continue;
+          const key = String(remote);
+          const group = byRemoteId.get(key);
+          if (group) {
+            group.push(row);
+          } else {
+            byRemoteId.set(key, [row]);
+          }
+        }
+
+        for (const group of byRemoteId.values()) {
+          if (group.length <= 1) continue;
+          group.sort((a, b) => {
+            const aPriority = a.syncStatus === 'pending' || a.syncStatus === 'conflict' ? 1 : 0;
+            const bPriority = b.syncStatus === 'pending' || b.syncStatus === 'conflict' ? 1 : 0;
+            if (aPriority !== bPriority) return bPriority - aPriority;
+            const aUpd = typeof a.updatedAt === 'string' ? a.updatedAt : '';
+            const bUpd = typeof b.updatedAt === 'string' ? b.updatedAt : '';
+            return bUpd.localeCompare(aUpd);
+          });
+          for (let i = 1; i < group.length; i++) {
+            const dupId = group[i].id;
+            if (typeof dupId === 'string') {
+              await table.delete(dupId);
+            }
+          }
+        }
+      }
+    });
 }

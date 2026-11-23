@@ -1,5 +1,6 @@
 import { db } from '../db';
 import { OutboxRepository } from './outbox.repository';
+import { PHOTO_CAPTURE_LIMITS } from '../../../types/media';
 import type {
   LocalMedia,
   LocalWeighingAnalysisJob,
@@ -25,23 +26,51 @@ const ALLOWED_IMAGE_MIME_TYPES = new Set([
   'image/webp'
 ]);
 
+async function computeBlobSha256(blob: Blob): Promise<string | null> {
+  try {
+    if (
+      typeof crypto === 'undefined' ||
+      !crypto.subtle ||
+      typeof crypto.subtle.digest !== 'function' ||
+      typeof blob.arrayBuffer !== 'function'
+    ) {
+      return null;
+    }
+    const buffer = await blob.arrayBuffer();
+    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+    const bytes = new Uint8Array(hashBuffer);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return null;
+  }
+}
+
 export const MediaRepository = {
   async saveCapture(options: SaveMediaCaptureOptions): Promise<{
     media: LocalMedia;
     weighingJob?: LocalWeighingAnalysisJob;
   }> {
-    const MAX_SIZE_BYTES = 10 * 1024 * 1024;
+    const MAX_SIZE_BYTES = PHOTO_CAPTURE_LIMITS.maxSizeBytes;
+    const maxSizeMb = Math.round(MAX_SIZE_BYTES / (1024 * 1024));
     if (options.fileOrBlob.size === 0) {
       throw new Error('El archivo seleccionado está vacío.');
     }
     if (options.fileOrBlob.size > MAX_SIZE_BYTES) {
-      throw new Error('El archivo excede el límite máximo permitido de 10 MB.');
+      throw new Error(`El archivo excede el límite máximo permitido de ${maxSizeMb} MB.`);
     }
 
-    const mimeType = options.fileOrBlob.type || 'image/jpeg';
-    if (options.crearTrabajoPesaje && !ALLOWED_IMAGE_MIME_TYPES.has(mimeType.toLowerCase())) {
+    const mimeType = (options.fileOrBlob.type || '').trim().toLowerCase();
+    const isImageCapture =
+      options.tipo === 'BoviScaleVision' ||
+      options.tipo === 'FotoPerfil' ||
+      Boolean(options.crearTrabajoPesaje);
+
+    if (isImageCapture && !ALLOWED_IMAGE_MIME_TYPES.has(mimeType)) {
       throw new Error('Formato de imagen no compatible. Utiliza JPEG, PNG o WebP.');
     }
+
+    const normalizedMime = mimeType === 'image/jpg' ? 'image/jpeg' : mimeType || 'image/jpeg';
+    const checksumSha256 = await computeBlobSha256(options.fileOrBlob);
 
     try {
       return await db.transaction(
@@ -50,7 +79,7 @@ export const MediaRepository = {
         async () => {
           const now = new Date().toISOString();
           const mediaId = crypto.randomUUID();
-          const extension = (mimeType.split('/')[1] || 'jpg').replace('jpeg', 'jpg');
+          const extension = (normalizedMime.split('/')[1] || 'jpg').replace('jpeg', 'jpg');
           const cattleUuid = options.cattleId || options.idEntidadRelacionada;
 
           if (options.crearTrabajoPesaje && !cattleUuid) {
@@ -64,12 +93,19 @@ export const MediaRepository = {
               idEntidad: mediaId,
               tipoOperacion: 'CREATE',
               versionBase: null,
+              idRancho: options.ranchId ?? null,
               payload: {
-                mediaId,
-                cattleId: cattleUuid,
+                idMedia: mediaId,
+                idRancho: options.ranchId ?? null,
+                idAnimal: cattleUuid ?? null,
+                entidadRelacionada: options.entidadRelacionada || 'cattle',
+                idRegistro: cattleUuid ?? null,
                 tipo: options.tipo,
-                mimeType,
+                nombreArchivo:
+                  options.nombreArchivo || `${options.tipo.toLowerCase()}-${mediaId}.${extension}`,
+                mimeType: normalizedMime,
                 tamanoBytes: options.fileOrBlob.size,
+                checksumSha256,
                 fechaCaptura: now
               }
             });
@@ -86,9 +122,9 @@ export const MediaRepository = {
             tipo: options.tipo,
             nombreArchivo:
               options.nombreArchivo || `${options.tipo.toLowerCase()}-${mediaId}.${extension}`,
-            mimeType,
+            mimeType: normalizedMime,
             tamanoBytes: options.fileOrBlob.size,
-            checksumSha256: null,
+            checksumSha256,
             blobData: options.fileOrBlob,
             urlRemota: null,
             idOperacionSubida: uploadOperationId,
@@ -153,12 +189,20 @@ export const MediaRepository = {
     return record && !record.deletedAt ? record : undefined;
   },
 
+  async getAllActive(options?: { cattleId?: string }): Promise<LocalMedia[]> {
+    const rows = options?.cattleId
+      ? await db.media
+          .where('cattleId')
+          .equals(options.cattleId)
+          .filter((m) => !m.deletedAt)
+          .toArray()
+      : await db.media.filter((m) => !m.deletedAt).toArray();
+
+    return rows.sort((a, b) => b.fechaCaptura.localeCompare(a.fechaCaptura));
+  },
+
   async getByCattleId(cattleId: string): Promise<LocalMedia[]> {
-    return await db.media
-      .where('cattleId')
-      .equals(cattleId)
-      .filter((m) => !m.deletedAt)
-      .toArray();
+    return await this.getAllActive({ cattleId });
   },
 
   async getAllAnalysisJobs(): Promise<LocalWeighingAnalysisJob[]> {
@@ -346,6 +390,30 @@ export const MediaRepository = {
       if (!existing || existing.deletedAt) return;
 
       const now = new Date().toISOString();
+      const existingOps = await db.outbox
+        .where('[entidad+idEntidad]')
+        .equals(['media', mediaId])
+        .toArray();
+      const hasUploadedToServer =
+        Boolean(existing.remoteId) ||
+        existing.estadoArchivo === 'subido' ||
+        existingOps.some((op) => op.estado === 'confirmado');
+
+      if (!hasUploadedToServer) {
+        const unconfirmedIds = existingOps
+          .filter((op) => op.estado !== 'confirmado')
+          .map((op) => op.idOperacion);
+        if (unconfirmedIds.length > 0) {
+          await db.outbox.bulkDelete(unconfirmedIds);
+        }
+        await db.media.update(mediaId, {
+          deletedAt: now,
+          updatedAt: now,
+          syncStatus: 'synced'
+        });
+        return;
+      }
+
       await db.media.update(mediaId, {
         deletedAt: now,
         updatedAt: now,
@@ -357,6 +425,7 @@ export const MediaRepository = {
         idEntidad: mediaId,
         tipoOperacion: 'DELETE',
         versionBase: existing.serverVersion ?? null,
+        idRancho: existing.ranchId ?? null,
         payload: { id: existing.remoteId ?? existing.id }
       });
 

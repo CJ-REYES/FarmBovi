@@ -1,8 +1,27 @@
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useSharedCattle } from '../../context/CattleContext';
-import type { Cattle } from '../../types/cattle';
+import { useSharedCattle } from '../../hooks/useCattle';
+import { FeedingRepository } from '../../lib/database/repositories/feeding.repository';
+import { WeighingRepository } from '../../lib/database/repositories/weighing.repository';
+import { AlertRepository } from '../../lib/database/repositories/alert.repository';
+import { TreatmentRepository } from '../../lib/database/repositories/treatment.repository';
+import { AlertService } from '../../services/alert.service';
+import {
+  classifyAlertTiming,
+  formatAlertRelativeTiming,
+  isAlertPendingEstado
+} from '../../services/alert.validation';
+import { HealthService } from '../../services/health.service';
+import { isTreatmentPending } from '../../services/health.validation';
+import { WeighingService } from '../../services/weighing.service';
+import { computeWeightAnalytics } from '../../services/weighing.validation';
+import type { LocalFeedingRecord } from '../../lib/database/schema';
+import type { AlertRecord } from '../../types/alert';
+import type { Treatment } from '../../types/health';
+import type { Weighing } from '../../types/weighing';
 import KpiCard from './KpiCard';
 import EmptyState from '../ui/EmptyState';
+import WeightEvolutionChart from '../management/WeightEvolutionChart';
 import {
   Beef, Scale, Activity, AlertTriangle, TrendingUp, ChevronRight,
   Map, PieChart, Wheat, ClipboardList, Stethoscope, Plus
@@ -12,10 +31,60 @@ export function DashboardPage() {
   const navigate = useNavigate();
   // CORRECCIÓN 1: Usamos 'loading' en lugar de 'isLoading' según la firma de tu hook
   const { cattle, loading } = useSharedCattle();
+  const [recentFeeding, setRecentFeeding] = useState<LocalFeedingRecord[]>([]);
+  const [weighings, setWeighings] = useState<Weighing[]>([]);
+  const [alerts, setAlerts] = useState<AlertRecord[]>([]);
+  const [pendingTreatments, setPendingTreatments] = useState<Treatment[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        const [feedingItems, weighingItems, alertItems, treatmentItems] = await Promise.all([
+          FeedingRepository.getAllWithOptions({ includeDeleted: false, order: 'desc' }),
+          WeighingRepository.getAllWithOptions({ includeDeleted: false, order: 'asc' }),
+          AlertRepository.getAllWithOptions({ includeDeleted: false, order: 'asc' }),
+          TreatmentRepository.getAllWithOptions({ includeDeleted: false })
+        ]);
+        if (active) {
+          setRecentFeeding(feedingItems.slice(0, 4));
+          setWeighings(weighingItems.map((w) => WeighingService.toWeighing(w)));
+          setAlerts(alertItems.map((a) => AlertService.toAlertRecord(a)));
+          setPendingTreatments(
+            treatmentItems
+              .map((t) => HealthService.toTreatment(t))
+              .filter((t) => isTreatmentPending(t.estado))
+          );
+        }
+      } catch {
+        // Mantener vacío si IndexedDB no está disponible
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const weightAnalytics = useMemo(
+    () => computeWeightAnalytics(weighings, cattle || []),
+    [weighings, cattle]
+  );
+
+  const alertSummary = useMemo(() => {
+    const activePending = alerts.filter((a) => !a.deletedAt && isAlertPendingEstado(a.estado));
+    const overdue = activePending.filter((a) => classifyAlertTiming(a) === 'vencida');
+    const upcoming = activePending.filter((a) => classifyAlertTiming(a) === 'proxima');
+    return {
+      activePending,
+      overdue,
+      upcoming,
+      totalActiveCount: activePending.length + pendingTreatments.length
+    };
+  }, [alerts, pendingTreatments]);
 
   const totalBovinos = cattle?.length || 0;
-  const machos = cattle?.filter((c: Cattle & { gender?: string; sex?: string }) => c.gender === 'Macho' || c.sex === 'Macho').length || 0;
-  const hembras = cattle?.filter((c: Cattle & { gender?: string; sex?: string }) => c.gender === 'Hembra' || c.sex === 'Hembra').length || 0;
+  const machos = cattle?.filter((c) => c.sexo === 'Macho').length || 0;
+  const hembras = cattle?.filter((c) => c.sexo === 'Hembra').length || 0;
 
   const pctMachos = totalBovinos > 0 ? Math.round((machos / totalBovinos) * 100) : 0;
   const pctHembras = totalBovinos > 0 ? Math.round((hembras / totalBovinos) * 100) : 0;
@@ -63,10 +132,18 @@ export function DashboardPage() {
         <KpiCard
           title="GDP Promedio"
           icon={Scale}
-          value="--.-"
+          value={
+            weightAnalytics.averageGdpKgDay !== null
+              ? `${weightAnalytics.averageGdpKgDay > 0 ? '+' : ''}${weightAnalytics.averageGdpKgDay.toFixed(2)}`
+              : '--.-'
+          }
           unit="kg/día"
-          sub="Sin registros históricos recientes"
-          color="bg-brand-slate/30"
+          sub={
+            weightAnalytics.latestWeighing
+              ? `Último pesaje: ${weightAnalytics.latestWeighing.pesoRealKg.toFixed(1)} kg`
+              : 'Sin registros históricos recientes'
+          }
+          color={weightAnalytics.averageGdpKgDay !== null ? 'bg-brand-primary' : 'bg-brand-slate/30'}
         />
         <KpiCard
           title="Tasa de Preñez"
@@ -78,47 +155,91 @@ export function DashboardPage() {
         <KpiCard
           title="Alertas Activas"
           icon={AlertTriangle}
-          value="0"
+          value={alertSummary.totalActiveCount.toString()}
           unit="Pendientes"
-          sub="Sanidad y recordatorios al día"
-          color="bg-status-warning"
+          sub={
+            alertSummary.overdue.length > 0
+              ? `${alertSummary.overdue.length} vencida(s) · ${pendingTreatments.length} trat. activos`
+              : alertSummary.totalActiveCount > 0
+                ? `${alertSummary.upcoming.length} próxima(s) · ${pendingTreatments.length} trat. activos`
+                : 'Sanidad y recordatorios al día'
+          }
+          color={alertSummary.overdue.length > 0 ? 'bg-status-danger' : 'bg-status-warning'}
         />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <div className="lg:col-span-8 bg-surface-white border border-border-light rounded-xl shadow-sm flex flex-col h-[380px] overflow-hidden">
+        <div className="lg:col-span-8 bg-surface-white border border-border-light rounded-xl shadow-sm flex flex-col min-h-[380px] overflow-hidden">
           <div className="px-5 py-4 border-b border-border-light flex justify-between items-center bg-surface-app/30">
             <div>
               <h2 className="font-bold text-[16px] text-brand-slate flex items-center gap-2">
                 <TrendingUp size={18} className="text-brand-primary" /> Evolución de Pesos y Ganancia
               </h2>
             </div>
-            <select className="text-[12px] font-medium border border-border-light rounded px-2 py-1 bg-surface-white text-brand-slate outline-none focus:border-brand-primary">
-              <option>Últimos 6 meses</option>
-            </select>
+            <button
+              type="button"
+              onClick={() => navigate('/weighing')}
+              className="text-[12px] font-semibold text-brand-primary hover:underline cursor-pointer"
+            >
+              Ir a Pesajes
+            </button>
           </div>
-          <div className="flex-1 p-6 flex flex-col">
-            <EmptyState
-              title="Gráfica no disponible"
-              message="Registra al menos 2 pesajes oficiales para generar la curva de crecimiento."
-              icon={Scale}
-              actionLabel="Ir a Pesajes"
+          <div className="flex-1 p-5 flex flex-col justify-center">
+            <WeightEvolutionChart
+              points={weightAnalytics.evolutionPoints}
+              subtitle={`Promedio real del hato (${weightAnalytics.evolutionPoints.length} jornada(s))`}
+              emptyActionLabel="Ir a Pesajes"
+              onEmptyAction={() => navigate('/weighing')}
             />
           </div>
         </div>
 
         <div className="lg:col-span-4 bg-surface-white border border-border-light rounded-xl shadow-sm flex flex-col h-[380px] overflow-hidden">
-          <div className="px-5 py-4 border-b border-border-light bg-surface-app/30">
+          <div className="px-5 py-4 border-b border-border-light bg-surface-app/30 flex items-center justify-between">
             <h2 className="font-bold text-[16px] text-brand-slate flex items-center gap-2">
               <AlertTriangle size={18} className="text-status-warning" /> Panel de Alertas
             </h2>
+            <button
+              type="button"
+              onClick={() => navigate('/alerts')}
+              className="text-[12px] font-semibold text-brand-primary hover:underline cursor-pointer"
+            >
+              Ver todas
+            </button>
           </div>
-          <div className="flex-1 p-6">
-            <EmptyState
-              title="Hato Saludable"
-              message="No hay alertas sanitarias ni tratamientos vencidos registrados actualmente."
-              icon={Stethoscope}
-            />
+          <div className="flex-1 p-4 overflow-y-auto">
+            {alertSummary.overdue.length === 0 && pendingTreatments.length === 0 ? (
+              <EmptyState
+                title="Hato Saludable"
+                message="No hay alertas vencidas ni tratamientos pendientes registrados actualmente."
+                icon={Stethoscope}
+              />
+            ) : (
+              <ul className="divide-y divide-border-light text-[13px]">
+                {alertSummary.overdue.slice(0, 3).map((a) => (
+                  <li key={a.id} className="py-2.5 space-y-0.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-status-danger">{a.tipo}</span>
+                      <span className="text-[11px] font-semibold text-status-danger">
+                        {formatAlertRelativeTiming(a)}
+                      </span>
+                    </div>
+                    <p className="text-[12px] text-brand-slate/80 line-clamp-2">{a.descripcion}</p>
+                  </li>
+                ))}
+                {pendingTreatments.slice(0, 3).map((t) => (
+                  <li key={t.id} className="py-2.5 space-y-0.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-brand-forest">{t.producto}</span>
+                      <span className="text-[11px] font-semibold text-status-info">{t.estado}</span>
+                    </div>
+                    <p className="text-[12px] text-brand-slate/75">
+                      {t.dosis} {t.unidadDosis} · {t.frecuencia}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
       </div>
@@ -177,17 +298,50 @@ export function DashboardPage() {
         </div>
 
         <div className="bg-surface-white border border-border-light rounded-xl shadow-sm flex flex-col h-[300px]">
-          <div className="px-5 py-4 border-b border-border-light">
+          <div className="px-5 py-4 border-b border-border-light flex items-center justify-between gap-2">
             <h2 className="font-bold text-[15px] text-brand-slate flex items-center gap-2">
               <Wheat size={18} className="text-brand-yellow" /> Alimentación Diaria
             </h2>
+            <button
+              type="button"
+              onClick={() => navigate('/feeding')}
+              className="text-[12px] font-semibold text-brand-primary hover:underline cursor-pointer"
+            >
+              Ver módulo
+            </button>
           </div>
-          <div className="flex-1 p-5">
-            <EmptyState
-              title="Módulo Pendiente"
-              message="La gestión de raciones y suplementos aún no está sincronizada."
-              icon={Wheat}
-            />
+          <div className="flex-1 p-4 overflow-y-auto">
+            {recentFeeding.length === 0 ? (
+              <EmptyState
+                title="Sin registros de alimentación"
+                message="Registra suministros por potrero o animal individual desde el módulo de alimentación."
+                icon={Wheat}
+                actionLabel="Ir a Alimentación"
+                onAction={() => navigate('/feeding')}
+              />
+            ) : (
+              <ul className="divide-y divide-border-light/60 text-[13px]">
+                {recentFeeding.map((item) => (
+                  <li
+                    key={item.id}
+                    onClick={() => navigate('/feeding')}
+                    className="py-2.5 flex items-center justify-between gap-2 cursor-pointer hover:bg-surface-app/60 px-2 rounded-md transition-colors"
+                  >
+                    <div className="min-w-0">
+                      <p className="font-semibold text-brand-forest truncate">
+                        {item.tipoAlimento}
+                      </p>
+                      <p className="text-[11px] text-brand-slate/65 truncate">
+                        {item.racion || item.tipoAlimento} • {item.frecuencia || 'Diaria'}
+                      </p>
+                    </div>
+                    <span className="text-[12px] font-bold text-brand-slate shrink-0">
+                      {item.cantidadKg} {item.unidad || 'kg'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
       </div>
@@ -209,18 +363,21 @@ export function DashboardPage() {
                <div className="p-8"><EmptyState title="Bitácora Vacía" message="No hay actividad reciente en el rancho." icon={ClipboardList} /></div>
             ) : (
                <ul className="divide-y divide-border-light/50">
-                 {/* CORRECCIÓN 2: Extendemos el tipado añadiendo gender y sex al inline type */}
-                 {cattle?.slice(0, 4).map((bovino: Cattle & { tagNumber?: string; areteSiniiga?: string; breed?: string; raza?: string; gender?: string; sex?: string }, index: number) => (
-                   <li key={bovino.id || index} className="flex items-center gap-4 p-3 hover:bg-surface-secondary/50 transition-colors cursor-pointer group">
+                 {cattle?.slice(0, 4).map((bovino) => (
+                   <li
+                     key={bovino.id}
+                     onClick={() => navigate(`/cattle/${bovino.id}`)}
+                     className="flex items-center gap-4 p-3 hover:bg-surface-secondary/50 transition-colors cursor-pointer group"
+                   >
                      <div className="w-10 h-10 rounded-full bg-surface-secondary border border-border-light flex items-center justify-center text-brand-slate shrink-0">
                        <Beef size={18} />
                      </div>
                      <div className="flex-1 min-w-0">
                        <p className="text-[14px] font-semibold text-brand-slate truncate">
-                         Registro en Padrón: {bovino.tagNumber || bovino.areteSiniiga || `ID-${bovino.id}`}
+                         Registro en Padrón: {bovino.arete || bovino.id}
                        </p>
                        <p className="text-[12px] text-brand-slate/60 truncate">
-                         {bovino.breed || bovino.raza || 'Bovino'} • {bovino.gender || bovino.sex || 'Sin clasificar'}
+                         {bovino.raza || 'Bovino'} • {bovino.sexo} • {bovino.estado}
                        </p>
                      </div>
                      <div className="text-[12px] font-medium text-brand-slate/40 px-4">
@@ -235,17 +392,40 @@ export function DashboardPage() {
         </div>
 
         <div className="lg:col-span-4 bg-surface-white border border-border-light rounded-xl shadow-sm flex flex-col min-h-[300px]">
-          <div className="px-5 py-4 border-b border-border-light">
+          <div className="px-5 py-4 border-b border-border-light flex items-center justify-between">
             <h2 className="font-bold text-[16px] text-brand-slate flex items-center gap-2">
               <Activity size={18} className="text-brand-primary" /> Tareas de Seguimiento
             </h2>
+            <button
+              type="button"
+              onClick={() => navigate('/alerts')}
+              className="text-[12px] font-semibold text-brand-primary hover:underline cursor-pointer"
+            >
+              Gestionar
+            </button>
           </div>
-          <div className="flex-1 p-6">
-            <EmptyState
-              title="Sin tareas pendientes"
-              message="Las actividades programadas de vacunación o destete aparecerán aquí."
-              icon={Activity}
-            />
+          <div className="flex-1 p-4">
+            {alertSummary.activePending.length === 0 ? (
+              <EmptyState
+                title="Sin tareas pendientes"
+                message="Las actividades programadas de vacunación o manejo aparecerán aquí."
+                icon={Activity}
+              />
+            ) : (
+              <ul className="divide-y divide-border-light text-[13px]">
+                {alertSummary.activePending.slice(0, 4).map((a) => (
+                  <li key={a.id} className="py-2.5 space-y-0.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-brand-forest">{a.tipo}</span>
+                      <span className="text-[11px] font-semibold text-brand-slate/70">
+                        {formatAlertRelativeTiming(a)}
+                      </span>
+                    </div>
+                    <p className="text-[12px] text-brand-slate/75 line-clamp-2">{a.descripcion}</p>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
       </div>

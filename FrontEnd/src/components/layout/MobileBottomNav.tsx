@@ -26,17 +26,17 @@ export default function MobileBottomNav({
       className="lg:hidden sticky bottom-0 z-30 bg-surface-white/95 backdrop-blur border-t border-border-light px-1 pb-[env(safe-area-inset-bottom)]"
     >
       <div className="flex items-center justify-around">
-        <NavLink to="/" end className={linkClass}>
+        <NavLink to="/dashboard" end className={linkClass}>
           <LayoutDashboard size={18} />
           <span>Inicio</span>
         </NavLink>
 
-        <NavLink to="/ganado" className={linkClass}>
+        <NavLink to="/cattle" className={linkClass}>
           <Beef size={18} />
           <span>Hato</span>
         </NavLink>
 
-        <NavLink to="/pesajes" className={linkClass}>
+        <NavLink to="/weighing" className={linkClass}>
           <Scale size={18} />
           <span>Pesajes</span>
         </NavLink>

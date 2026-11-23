@@ -23,10 +23,18 @@ export interface SyncOperationRequestDto<TPayload = unknown> {
   entidad: SyncEntityName;
   idEntidad: string;
   remoteId?: string | number | null;
+  ranchId?: string | null;
+  idDispositivo?: string | null;
   tipoOperacion: OutboxOperationType;
   versionBase: number | string | null;
   payload: TPayload;
   fechaCreacionCliente: string;
+}
+
+export interface SyncConflictFieldDiffDto {
+  campo: string;
+  valorServidor: unknown;
+  valorCliente: unknown;
 }
 
 /**
@@ -49,6 +57,8 @@ export interface SyncOperationResultDto {
   remoteId?: string | number | null;
   versionServidor?: number | string | null;
   estadoServidor?: Record<string, unknown> | null;
+  tipoConflicto?: 'VERSION_MISMATCH' | 'DELETED_ON_SERVER';
+  camposModificados?: SyncConflictFieldDiffDto[];
   mensaje?: string;
   erroresCampos?: Record<string, string[]>;
   codigoHttp?: number;

@@ -133,8 +133,8 @@ public sealed class PesajesController(FarmDbContext db, RanchAccessService acces
         if (currentRanchId != newRanchId)
             return BadRequest("No se puede reasignar el pesaje a un animal de otro rancho.");
 
-        item.IdAnimal = input.IdAnimal;
-        item.Peso = input.Peso;
+      item.IdAnimal = input.IdAnimal;
+        item.PesoRealKg = input.PesoRealKg;
         item.Fecha = input.Fecha;
         item.Observaciones = input.Observaciones;
         item.IdAutor = userId.Value;

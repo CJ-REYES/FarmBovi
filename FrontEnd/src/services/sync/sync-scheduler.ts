@@ -1,4 +1,7 @@
+import { hasActiveAuthSession } from '../../lib/api';
 import { db } from '../../lib/database/db';
+import { OutboxRepository } from '../../lib/database/repositories/outbox.repository';
+import { StorageMonitor } from '../../lib/database/storage-monitor';
 import { ConnectivityService } from '../connectivity.service';
 import { SyncHttpClient } from './sync-http.client';
 import { SyncEngine, type FullSyncCycleResult } from './sync-engine';
@@ -21,6 +24,7 @@ export type SyncTriggerReason =
 
 export interface SyncQueueCounts {
   pendingOperationsCount: number;
+  confirmedOperationsCount: number;
   failedOperationsCount: number;
   pendingFilesCount: number;
   failedFilesCount: number;
@@ -73,6 +77,7 @@ function createInitialSnapshot(): SyncSchedulerSnapshot {
     isSyncing: false,
     counts: {
       pendingOperationsCount: 0,
+      confirmedOperationsCount: 0,
       failedOperationsCount: 0,
       pendingFilesCount: 0,
       failedFilesCount: 0,
@@ -212,10 +217,13 @@ async function readCountsFromIndexedDb(): Promise<{
   ]);
 
   let pendingOperationsCount = 0;
+  let confirmedOperationsCount = 0;
   let failedOperationsCount = 0;
   for (const op of allOutbox) {
     if (op.estado === 'pendiente' || op.estado === 'en_proceso') {
       pendingOperationsCount++;
+    } else if (op.estado === 'confirmado') {
+      confirmedOperationsCount++;
     } else if (op.estado === 'fallido') {
       failedOperationsCount++;
     }
@@ -244,6 +252,7 @@ async function readCountsFromIndexedDb(): Promise<{
   return {
     counts: {
       pendingOperationsCount,
+      confirmedOperationsCount,
       failedOperationsCount,
       pendingFilesCount,
       failedFilesCount,
@@ -352,26 +361,35 @@ export const SyncScheduler = {
       }, MUTATION_DEBOUNCE_MS);
     };
 
-    // Hooks de Dexie para detectar trabajo nuevo en outbox, media o conflictos
-    const onOutboxChange = () => {
-      window.setTimeout(scheduleMutationCheck, 100);
-    };
-    const onMediaChange = () => {
-      window.setTimeout(scheduleMutationCheck, 100);
-    };
-    const onConflictChange = () => {
-      window.setTimeout(() => {
+    let refreshDebounceTimerId: number | null = null;
+    const scheduleCountRefreshOnly = () => {
+      if (refreshDebounceTimerId !== null) {
+        window.clearTimeout(refreshDebounceTimerId);
+      }
+      refreshDebounceTimerId = window.setTimeout(() => {
+        refreshDebounceTimerId = null;
         void this.refreshState();
-      }, 100);
+      }, 250);
     };
 
-    db.outbox.hook('creating', onOutboxChange);
-    db.outbox.hook('updating', onOutboxChange);
-    db.outbox.hook('deleting', onOutboxChange);
-    db.media.hook('creating', onMediaChange);
-    db.media.hook('updating', onMediaChange);
-    db.syncConflicts.hook('creating', onConflictChange);
-    db.syncConflicts.hook('updating', onConflictChange);
+    // Hooks de Dexie:
+    // - SOLO nuevas operaciones creadas (`creating`) disparan sincronización automática.
+    // - Actualizaciones/borrados internos de outbox/media/conflictos solo refrescan contadores UI
+    //   para evitar bucles infinitos cuando PushSyncEngine actualiza estados/backoffs.
+    const onNewOutboxItem = () => {
+      window.setTimeout(scheduleMutationCheck, 100);
+    };
+    const onNewMediaItem = () => {
+      window.setTimeout(scheduleMutationCheck, 100);
+    };
+
+    db.outbox.hook('creating', onNewOutboxItem);
+    db.outbox.hook('updating', scheduleCountRefreshOnly);
+    db.outbox.hook('deleting', scheduleCountRefreshOnly);
+    db.media.hook('creating', onNewMediaItem);
+    db.media.hook('updating', scheduleCountRefreshOnly);
+    db.syncConflicts.hook('creating', scheduleCountRefreshOnly);
+    db.syncConflicts.hook('updating', scheduleCountRefreshOnly);
 
     // 1. Recuperación de conexión de red
     const handleOnline = () => {
@@ -421,13 +439,13 @@ export const SyncScheduler = {
     }, FOREGROUND_POLL_INTERVAL_MS);
 
     cleanupLifecycleListeners = () => {
-      db.outbox.hook('creating').unsubscribe(onOutboxChange);
-      db.outbox.hook('updating').unsubscribe(onOutboxChange);
-      db.outbox.hook('deleting').unsubscribe(onOutboxChange);
-      db.media.hook('creating').unsubscribe(onMediaChange);
-      db.media.hook('updating').unsubscribe(onMediaChange);
-      db.syncConflicts.hook('creating').unsubscribe(onConflictChange);
-      db.syncConflicts.hook('updating').unsubscribe(onConflictChange);
+      db.outbox.hook('creating').unsubscribe(onNewOutboxItem);
+      db.outbox.hook('updating').unsubscribe(scheduleCountRefreshOnly);
+      db.outbox.hook('deleting').unsubscribe(scheduleCountRefreshOnly);
+      db.media.hook('creating').unsubscribe(onNewMediaItem);
+      db.media.hook('updating').unsubscribe(scheduleCountRefreshOnly);
+      db.syncConflicts.hook('creating').unsubscribe(scheduleCountRefreshOnly);
+      db.syncConflicts.hook('updating').unsubscribe(scheduleCountRefreshOnly);
 
       unsubscribeConnectivity();
       window.removeEventListener('online', handleOnline);
@@ -444,6 +462,10 @@ export const SyncScheduler = {
         window.clearTimeout(mutationDebounceTimerId);
         mutationDebounceTimerId = null;
       }
+      if (refreshDebounceTimerId !== null) {
+        window.clearTimeout(refreshDebounceTimerId);
+        refreshDebounceTimerId = null;
+      }
     };
 
     // 5. Revisión inmediata al iniciar FarmBovi
@@ -458,11 +480,21 @@ export const SyncScheduler = {
   },
 
   async handleAppStartup(): Promise<void> {
+    // 1. Recuperar cualquier operación interrumpida en un cierre previo (incluso si reabrimos offline)
+    await OutboxRepository.recoverInterruptedOperations(new Set());
+    // 2. Solicitar almacenamiento persistente del navegador para proteger IndexedDB
+    void StorageMonitor.initPersistenceAndCheck();
+
+    // Sin sesión JWT/cookie activa no iniciar sondeos automáticos contra endpoints protegidos
+    if (!hasActiveAuthSession()) {
+      await this.refreshState();
+      return;
+    }
+
     const probe = await ConnectivityService.checkBackendAvailability();
     const current = await this.refreshState(probe.isOnline);
 
     if (probe.isOnline) {
-      // Al iniciar, sincronizar si hay trabajo pendiente o para comprobar cambios remotos
       if (
         current.totalPendingWork > 0 ||
         (current.pushEndpointReady && current.pullEndpointReady)
@@ -475,6 +507,11 @@ export const SyncScheduler = {
   },
 
   async handleAppResumed(): Promise<void> {
+    if (!hasActiveAuthSession()) {
+      await this.refreshState();
+      return;
+    }
+
     const probe = await ConnectivityService.checkBackendAvailability();
     const current = await this.refreshState(probe.isOnline);
 
@@ -484,17 +521,30 @@ export const SyncScheduler = {
   },
 
   async handleLocalMutationDetected(): Promise<void> {
+    if (activeRunPromise) return;
     const current = await this.refreshState();
     if (current.totalPendingWork === 0) return;
 
-    if (current.isOnline) {
-      await this.triggerSync('local_mutation');
-    } else {
+    if (!current.isOnline) {
       await tryRegisterProgressiveBackgroundSync();
+      return;
     }
+
+    if (!hasActiveAuthSession()) return;
+
+    const readyOps = await OutboxRepository.getDispatchableOperations();
+    if (readyOps.length === 0 && current.counts.pendingFilesCount === 0) {
+      return;
+    }
+
+    await this.triggerSync('local_mutation');
   },
 
   async handlePeriodicPoll(): Promise<void> {
+    if (!hasActiveAuthSession() || activeRunPromise) {
+      return;
+    }
+
     const probe = await ConnectivityService.checkBackendAvailability();
     const current = await this.refreshState(probe.isOnline);
 
@@ -511,6 +561,16 @@ export const SyncScheduler = {
    * Inicia una sincronización manual explícita desde la interfaz de usuario.
    */
   async triggerManualSync(): Promise<FullSyncCycleResult | null> {
+    return await this.triggerSync('manual');
+  },
+
+  /**
+   * Restablece todas las operaciones fallidas conservando su `idOperacion` original
+   * y dispara un ciclo inmediato de sincronización Push + Pull.
+   */
+  async retryFailedOperations(): Promise<FullSyncCycleResult | null> {
+    await OutboxRepository.resetAllFailedForRetry();
+    await this.refreshState();
     return await this.triggerSync('manual');
   },
 

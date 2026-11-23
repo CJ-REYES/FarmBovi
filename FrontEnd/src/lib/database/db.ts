@@ -1,8 +1,10 @@
 import Dexie, { type Table } from 'dexie';
 import type {
+  LocalRanch,
   LocalCattle,
   LocalWeighing,
   LocalHealthRecord,
+  LocalTreatment,
   LocalFeedingRecord,
   LocalReproductionRecord,
   LocalLot,
@@ -19,9 +21,11 @@ import type {
 import { configureMigrations } from './migrations';
 
 export class FarmBoviLocalDB extends Dexie {
+  ranches!: Table<LocalRanch, string>;
   cattle!: Table<LocalCattle, string>;
   weighings!: Table<LocalWeighing, string>;
   healthRecords!: Table<LocalHealthRecord, string>;
+  treatments!: Table<LocalTreatment, string>;
   feedingRecords!: Table<LocalFeedingRecord, string>;
   reproductionRecords!: Table<LocalReproductionRecord, string>;
   lots!: Table<LocalLot, string>;

@@ -10,6 +10,7 @@ import {
   MAX_PUSH_RETRY_ATTEMPTS,
   OutboxRepository
 } from '../../lib/database/repositories/outbox.repository';
+import { isValidGuid } from '../cattle.validation';
 import { SyncHttpClient } from './sync-http.client';
 import type {
   SyncOperationRequestDto,
@@ -36,30 +37,53 @@ export interface PushCycleSummary {
  * se sincronicen antes que registros dependientes (pesajes, salud, movimientos).
  */
 const ENTITY_SYNC_PRIORITY: Record<SyncEntityName, number> = {
+  ranches: 0,
   lots: 1,
   cattle: 2,
   genealogy: 3,
   movements: 4,
   weighings: 5,
   healthRecords: 6,
-  feedingRecords: 7,
-  reproductionRecords: 8,
-  alerts: 9,
-  media: 10,
-  weighingAnalysisJobs: 11
+  treatments: 7,
+  feedingRecords: 8,
+  reproductionRecords: 9,
+  alerts: 10,
+  media: 11,
+  weighingAnalysisJobs: 12
 };
+
+/**
+ * Entidades habilitadas para Push en `POST /api/sync/operaciones`.
+ * Si el Backend aún no habilita alguna (p. ej. `Pesaje`), `sync-http.client.ts`
+ * clasifica el 400 "no está soportada" como error transitorio para conservarla en cola.
+ */
+const BACKEND_PUSH_SUPPORTED_ENTITIES = new Set<SyncEntityName>([
+  'ranches',
+  'lots',
+  'cattle',
+  'weighings',
+  'healthRecords',
+  'treatments',
+  'feedingRecords',
+  'movements',
+  'alerts'
+]);
 
 const inFlightOperationIds = new Set<string>();
 let activePushPromise: Promise<PushCycleSummary> | null = null;
 
 function getEntityTable(entidad: SyncEntityName): Table<BaseLocalEntity, string> | null {
   switch (entidad) {
+    case 'ranches':
+      return db.ranches as unknown as Table<BaseLocalEntity, string>;
     case 'cattle':
       return db.cattle as unknown as Table<BaseLocalEntity, string>;
     case 'weighings':
       return db.weighings as unknown as Table<BaseLocalEntity, string>;
     case 'healthRecords':
       return db.healthRecords as unknown as Table<BaseLocalEntity, string>;
+    case 'treatments':
+      return db.treatments as unknown as Table<BaseLocalEntity, string>;
     case 'feedingRecords':
       return db.feedingRecords as unknown as Table<BaseLocalEntity, string>;
     case 'reproductionRecords':
@@ -81,6 +105,116 @@ function getEntityTable(entidad: SyncEntityName): Table<BaseLocalEntity, string>
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readGuidField(record: Record<string, unknown> | undefined, keys: readonly string[]): string | null {
+  if (!record) return null;
+  for (const key of keys) {
+    const val = record[key];
+    if (typeof val === 'string' && isValidGuid(val.trim())) {
+      return val.trim();
+    }
+  }
+  return null;
+}
+
+/**
+ * Resuelve el `idRancho` requerido por `POST /api/sync/operaciones` para cualquier entidad
+ * (incluyendo entidades hijas como movimientos, tratamientos, salud o bajas lógicas).
+ */
+async function resolveOperationRanchId(
+  op: LocalOutboxQueue,
+  latestEntity: BaseLocalEntity | undefined
+): Promise<string | null> {
+  if (op.idRancho && isValidGuid(op.idRancho)) {
+    return op.idRancho;
+  }
+  if (latestEntity?.ranchId && isValidGuid(latestEntity.ranchId)) {
+    return latestEntity.ranchId;
+  }
+
+  const payloadRec = isPlainRecord(op.payload) ? op.payload : undefined;
+  const entityRec = latestEntity as unknown as Record<string, unknown> | undefined;
+
+  const direct =
+    readGuidField(payloadRec, ['idRancho', 'ranchId']) ??
+    readGuidField(entityRec, ['ranchId', 'idRancho']);
+  if (direct) return direct;
+
+  if (op.entidad === 'ranches' && isValidGuid(op.idEntidad)) {
+    return op.idEntidad;
+  }
+
+  // Resolver desde animal padre si existe
+  const cattleId =
+    readGuidField(payloadRec, ['idAnimal', 'cattleId']) ??
+    readGuidField(entityRec, ['cattleId', 'idAnimal']);
+  if (cattleId) {
+    const animal = await db.cattle.get(cattleId);
+    if (animal?.ranchId && isValidGuid(animal.ranchId)) {
+      return animal.ranchId;
+    }
+  }
+
+  // Resolver desde lote padre si existe
+  const lotId =
+    readGuidField(payloadRec, ['idLote', 'lotId', 'loteId', 'idLoteDestino', 'idLoteOrigen']) ??
+    readGuidField(entityRec, ['lotId', 'loteId', 'destinoLotId', 'origenLotId']);
+  if (lotId) {
+    const lot = await db.lots.get(lotId);
+    if (lot?.ranchId && isValidGuid(lot.ranchId)) {
+      return lot.ranchId;
+    }
+  }
+
+  // Resolver desde evento sanitario padre (para tratamientos)
+  const eventId =
+    readGuidField(payloadRec, ['idEventoSanitario', 'eventoSanitarioId']) ??
+    readGuidField(entityRec, ['eventoSanitarioId']);
+  if (eventId) {
+    const event = await db.healthRecords.get(eventId);
+    if (event?.ranchId && isValidGuid(event.ranchId)) {
+      return event.ranchId;
+    }
+    if (event?.cattleId) {
+      const animal = await db.cattle.get(event.cattleId);
+      if (animal?.ranchId && isValidGuid(animal.ranchId)) {
+        return animal.ranchId;
+      }
+    }
+  }
+
+  // Último respaldo: primer rancho autorizado de la sesión activa o caché local
+  if (typeof window !== 'undefined') {
+    const rawCandidates = [
+      window.sessionStorage?.getItem('farmbovi_session_user'),
+      window.localStorage?.getItem('farmbovi_session_meta')
+    ];
+    for (const raw of rawCandidates) {
+      if (!raw) continue;
+      try {
+        const parsed = JSON.parse(raw) as {
+          idUsuario?: unknown;
+          ranchos?: Array<{ idRancho?: string }>;
+        };
+        if (typeof parsed.idUsuario === 'string') {
+          const firstAuthRanch = parsed.ranchos?.find(
+            (r) => typeof r?.idRancho === 'string' && isValidGuid(r.idRancho)
+          )?.idRancho;
+          return firstAuthRanch ?? null;
+        }
+      } catch {
+        // Ignorar si no es JSON válido
+      }
+    }
+  }
+
+  const fallbackRanch = await db.ranches.filter((r) => !r.deletedAt).first();
+  if (fallbackRanch && isValidGuid(fallbackRanch.id)) {
+    return fallbackRanch.id;
+  }
+
+  return null;
 }
 
 function formatValidationErrorMessage(result: SyncOperationResultDto): string {
@@ -159,7 +293,10 @@ export const PushSyncEngine = {
     // Recuperar operaciones que quedaron en 'en_proceso' tras un cierre inesperado
     await OutboxRepository.recoverInterruptedOperations(inFlightOperationIds);
 
-    const dispatchableOps = await OutboxRepository.getDispatchableOperations();
+    const allDispatchableOps = await OutboxRepository.getDispatchableOperations();
+    const dispatchableOps = allDispatchableOps.filter((op) =>
+      BACKEND_PUSH_SUPPORTED_ENTITIES.has(op.entidad)
+    );
     if (dispatchableOps.length === 0) {
       return { ...summary, status: 'nothing_to_push' };
     }
@@ -277,12 +414,53 @@ export const PushSyncEngine = {
           ? op.versionBase
           : (latestEntity?.serverVersion ?? null);
 
+      // Protección contra operaciones huérfanas sin versionBase (p. ej. DELETE/UPDATE heredados
+      // cuyo CREATE nunca se confirmó en el servidor o fue descartado): evita HTTP 400 repetidos.
+      if (op.tipoOperacion === 'DELETE' && effectiveVersionBase === null && !latestEntity?.remoteId) {
+        await OutboxRepository.discardOperation(op.idOperacion, { allowInProgress: true });
+        return 'ALREADY_PROCESSED';
+      }
+
+      if (op.tipoOperacion === 'UPDATE' && effectiveVersionBase === null && !latestEntity?.remoteId) {
+        await this.applyValidationErrorOutcome(op, {
+          idOperacion: op.idOperacion,
+          entidad: op.entidad,
+          idEntidad: op.idEntidad,
+          resultado: 'VALIDATION_ERROR',
+          mensaje:
+            'Esta actualización pertenece a un registro local que nunca se creó en el servidor. Puedes descartarla desde el Centro de Sincronización.'
+        });
+        return 'VALIDATION_ERROR';
+      }
+
+      const resolvedRanchId = await resolveOperationRanchId(op, latestEntity);
+
+      if (op.entidad !== 'ranches' && !resolvedRanchId) {
+        await this.applyTransientErrorOutcome(op, {
+          idOperacion: op.idOperacion,
+          entidad: op.entidad,
+          idEntidad: op.idEntidad,
+          resultado: 'TRANSIENT_ERROR',
+          mensaje:
+            'Registra o sincroniza un rancho en la sección Ranchos para poder subir esta operación.'
+        });
+        return 'TRANSIENT_ERROR';
+      }
+
+      if (resolvedRanchId && op.idRancho !== resolvedRanchId) {
+        await db.outbox.update(op.idOperacion, { idRancho: resolvedRanchId });
+      }
+
+      const effectiveOp: LocalOutboxQueue = {
+        ...op,
+        versionBase: effectiveVersionBase,
+        idRancho: resolvedRanchId ?? op.idRancho ?? null
+      };
+
       const dto: SyncOperationRequestDto = SyncHttpClient.serializeOperationDto(
-        {
-          ...op,
-          versionBase: effectiveVersionBase
-        },
-        latestEntity?.remoteId ?? null
+        effectiveOp,
+        latestEntity?.remoteId ?? null,
+        resolvedRanchId
       );
 
       const result = await SyncHttpClient.sendOperation(dto);
@@ -290,20 +468,20 @@ export const PushSyncEngine = {
       switch (result.resultado) {
         case 'ACCEPTED':
         case 'ALREADY_PROCESSED': {
-          await this.applyConfirmedOutcome(op, result);
+          await this.applyConfirmedOutcome(effectiveOp, result);
           return result.resultado;
         }
         case 'CONFLICT': {
-          await this.applyConflictOutcome(op, result);
+          await this.applyConflictOutcome(effectiveOp, result);
           return 'CONFLICT';
         }
         case 'VALIDATION_ERROR': {
-          await this.applyValidationErrorOutcome(op, result);
+          await this.applyValidationErrorOutcome(effectiveOp, result);
           return 'VALIDATION_ERROR';
         }
         case 'TRANSIENT_ERROR':
         default: {
-          await this.applyTransientErrorOutcome(op, result);
+          await this.applyTransientErrorOutcome(effectiveOp, result);
           return 'TRANSIENT_ERROR';
         }
       }
@@ -423,7 +601,9 @@ export const PushSyncEngine = {
         versionBase: op.versionBase,
         estadoServidor: result.estadoServidor ?? null,
         versionServidor: result.versionServidor ?? null,
-        tipoConflicto: op.tipoOperacion === 'DELETE' ? 'DELETED_ON_SERVER' : 'VERSION_MISMATCH',
+        tipoConflicto:
+          result.tipoConflicto ??
+          (op.tipoOperacion === 'DELETE' ? 'DELETED_ON_SERVER' : 'VERSION_MISMATCH'),
         estadoResolucion: 'pendiente',
         fechaDeteccion: existingConflict?.fechaDeteccion ?? now,
         fechaResolucion: null,

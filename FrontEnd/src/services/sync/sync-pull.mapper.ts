@@ -8,6 +8,7 @@ import type {
   LocalFeedingRecord,
   LocalGenealogy,
   LocalHealthRecord,
+  LocalTreatment,
   LocalLot,
   LocalMedia,
   LocalMovement,
@@ -73,6 +74,9 @@ async function resolveLocalForeignUuid(
   const byUuid = await parentTable.get(rawRef);
   if (byUuid) return byUuid.id;
 
+  const byStringRemote = await parentTable.where('remoteId').equals(rawRef).first();
+  if (byStringRemote) return byStringRemote.id;
+
   const numericRef = Number(rawRef);
   if (!Number.isNaN(numericRef)) {
     const byRemote = await parentTable.where('remoteId').equals(numericRef).first();
@@ -86,12 +90,16 @@ export function getSyncEntityTable(
   entidad: SyncEntityName
 ): Table<BaseLocalEntity, string> | null {
   switch (entidad) {
+    case 'ranches':
+      return db.ranches as unknown as Table<BaseLocalEntity, string>;
     case 'cattle':
       return db.cattle as unknown as Table<BaseLocalEntity, string>;
     case 'weighings':
       return db.weighings as unknown as Table<BaseLocalEntity, string>;
     case 'healthRecords':
       return db.healthRecords as unknown as Table<BaseLocalEntity, string>;
+    case 'treatments':
+      return db.treatments as unknown as Table<BaseLocalEntity, string>;
     case 'feedingRecords':
       return db.feedingRecords as unknown as Table<BaseLocalEntity, string>;
     case 'reproductionRecords':
@@ -123,7 +131,12 @@ export async function mapRemoteChangeToLocalEntity(
   }
 
   const data = change.datos;
-  const stableId = existing?.id || change.clientUuid || crypto.randomUUID();
+  const stableId =
+    existing?.id ||
+    change.clientUuid ||
+    (typeof change.remoteId === 'string' && change.remoteId.trim().length > 0
+      ? change.remoteId
+      : crypto.randomUUID());
   const localNumericId = existing?.localNumericId ?? computeStableNegativeId(stableId);
   const ranchId = readString(data, ['ranchId', 'ranchoId'], existing?.ranchId);
   const createdAt =
@@ -144,12 +157,34 @@ export async function mapRemoteChangeToLocalEntity(
 
   switch (entidad) {
     case 'cattle': {
-      const areteSiniiga = readString(data, ['areteSiniiga', 'tagNumber', 'earTag'], '') ?? '';
-      const raza = readString(data, ['raza', 'breed'], 'Cruzado') ?? 'Cruzado';
-      const gender = readString(data, ['gender', 'sex', 'sexo'], 'Hembra') ?? 'Hembra';
-      const nombre = readString(data, ['nombre', 'name']);
-      const fechaNacimiento = readString(data, ['fechaNacimiento', 'birthDate']);
-      const rawLoteId = readString(data, ['loteId', 'lotId']);
+      const existingCattle = existing as LocalCattle | undefined;
+      const arete =
+        readString(data, ['arete', 'areteSiniiga', 'tagNumber', 'earTag'], existingCattle?.arete ?? '') ??
+        '';
+      const raza = readString(data, ['raza', 'breed'], existingCattle?.raza ?? 'Cruzado') ?? 'Cruzado';
+      const sexo =
+        readString(data, ['sexo', 'gender', 'sex'], existingCattle?.sexo ?? 'Hembra') ?? 'Hembra';
+      const nombre = readString(data, ['nombre', 'name'], existingCattle?.nombre);
+      const fechaNacimiento = readString(
+        data,
+        ['fechaNacimiento', 'birthDate'],
+        existingCattle?.fechaNacimiento
+      );
+      const fechaIngreso =
+        readString(
+          data,
+          ['fechaIngreso'],
+          existingCattle?.fechaIngreso ?? createdAt.slice(0, 10)
+        ) ?? createdAt.slice(0, 10);
+      const procedencia =
+        readString(data, ['procedencia'], existingCattle?.procedencia ?? 'Propio') ?? 'Propio';
+      const estado =
+        readString(data, ['estado'], existingCattle?.estado ?? 'Activo') ?? 'Activo';
+      const fechaSalida =
+        readString(data, ['fechaSalida'], existingCattle?.fechaSalida ?? undefined) ?? null;
+      const observaciones =
+        readString(data, ['observaciones'], existingCattle?.observaciones ?? undefined) ?? null;
+      const rawLoteId = readString(data, ['idLote', 'loteId', 'lotId']);
       const loteId = rawLoteId
         ? await resolveLocalForeignUuid(
             db.lots as unknown as Table<BaseLocalEntity, string>,
@@ -157,27 +192,35 @@ export async function mapRemoteChangeToLocalEntity(
           )
         : undefined;
 
-      if (!areteSiniiga && !nombre) {
+      if (!arete && !nombre) {
         throw new Error(
-          `Registro remoto de bovino inválido (remoteId=${String(change.remoteId)}): falta areteSiniiga y nombre.`
+          `Registro remoto de bovino inválido (remoteId=${String(change.remoteId)}): falta arete.`
         );
       }
 
       const cattleRecord: LocalCattle = {
         ...baseFields,
-        areteSiniiga,
+        arete,
+        areteSiniiga: arete,
         nombre,
         raza,
-        gender,
+        sexo,
+        gender: sexo,
         fechaNacimiento,
+        fechaIngreso,
+        procedencia,
+        estado,
+        fechaSalida,
+        observaciones,
         loteId
       };
       return cattleRecord;
     }
 
     case 'weighings': {
-      const rawCattleId = readString(data, ['cattleId', 'animalId', 'bovinoId']);
-      const peso = readNumber(data, ['peso', 'weight', 'weightKg']);
+      const existingWeighing = existing as LocalWeighing | undefined;
+      const rawCattleId = readString(data, ['idAnimal', 'cattleId', 'animalId', 'bovinoId']);
+      const peso = readNumber(data, ['pesoRealKg', 'peso', 'weight', 'weightKg']);
       const fecha = readString(data, ['fecha', 'date', 'fechaPesaje'], change.actualizadoEnServidor);
 
       if (!rawCattleId || peso === undefined || peso <= 0 || !fecha) {
@@ -196,7 +239,9 @@ export async function mapRemoteChangeToLocalEntity(
         cattleId,
         peso,
         fecha,
-        observaciones: readString(data, ['observaciones', 'notes']),
+        fuenteBascula: readString(data, ['fuenteBascula'], existingWeighing?.fuenteBascula),
+        responsable: readString(data, ['responsable'], existingWeighing?.responsable),
+        observaciones: readString(data, ['observaciones', 'notes'], existingWeighing?.observaciones),
         origenPesaje:
           data.origenPesaje === 'boviscale_ia' ? 'boviscale_ia' : 'manual',
         sourceAnalysisJobId: readString(data, ['sourceAnalysisJobId']) ?? null,
@@ -206,12 +251,23 @@ export async function mapRemoteChangeToLocalEntity(
     }
 
     case 'healthRecords': {
-      const rawCattleId = readString(data, ['cattleId', 'animalId', 'bovinoId']);
-      const tipo = readString(data, ['tipo', 'type']);
-      const descripcion = readString(data, ['descripcion', 'description']);
+      const existingHealth = existing as LocalHealthRecord | undefined;
+      const rawCattleId = readString(data, ['idAnimal', 'cattleId', 'animalId', 'bovinoId']);
+      const tipo = readString(data, ['tipo', 'type'], existingHealth?.tipo);
+      const sintomas = readString(data, ['sintomas'], existingHealth?.sintomas ?? undefined) ?? null;
+      const diagnostico =
+        readString(data, ['diagnostico'], existingHealth?.diagnostico ?? undefined) ?? null;
+      const observaciones =
+        readString(data, ['observaciones'], existingHealth?.observaciones ?? undefined) ?? null;
+      const descripcion =
+        readString(
+          data,
+          ['descripcion', 'description', 'diagnostico', 'sintomas', 'observaciones'],
+          existingHealth?.descripcion ?? tipo ?? ''
+        ) ?? '';
       const fecha = readString(data, ['fecha', 'date'], change.actualizadoEnServidor);
 
-      if (!rawCattleId || !tipo || !descripcion || !fecha) {
+      if (!rawCattleId || !tipo || !fecha) {
         throw new Error(
           `Registro remoto de salud inválido (remoteId=${String(change.remoteId)}).`
         );
@@ -226,20 +282,109 @@ export async function mapRemoteChangeToLocalEntity(
         ...baseFields,
         cattleId,
         tipo,
-        descripcion,
+        descripcion: descripcion || tipo,
         fecha,
-        proximaAplicacion: readString(data, ['proximaAplicacion', 'nextApplicationDate'])
+        proximaAplicacion: readString(data, ['proximaAplicacion', 'nextApplicationDate']),
+        sintomas,
+        diagnostico,
+        profesionalDiagnostico:
+          readString(
+            data,
+            ['profesionalDiagnostico'],
+            existingHealth?.profesionalDiagnostico ?? undefined
+          ) ?? null,
+        evidenciaDiagnosticoUri:
+          readString(
+            data,
+            ['evidenciaDiagnosticoUri'],
+            existingHealth?.evidenciaDiagnosticoUri ?? undefined
+          ) ?? null,
+        responsable: readString(data, ['responsable'], existingHealth?.responsable ?? 'No especificado'),
+        observaciones
       };
       return healthRecord;
     }
 
-    case 'feedingRecords': {
-      const tipoAlimento = readString(data, ['tipoAlimento', 'feedType']);
-      const cantidadKg = readNumber(data, ['cantidadKg', 'quantityKg']);
-      const fecha = readString(data, ['fecha', 'date'], change.actualizadoEnServidor);
-      const rawLotId = readString(data, ['lotId', 'loteId']);
+    case 'treatments': {
+      const existingTreatment = existing as LocalTreatment | undefined;
+      const rawEventId = readString(
+        data,
+        ['idEventoSanitario', 'eventoSanitarioId'],
+        existingTreatment?.eventoSanitarioId
+      );
+      const producto = readString(data, ['producto'], existingTreatment?.producto);
+      const dosis = readNumber(data, ['dosis']) ?? existingTreatment?.dosis;
+      const unidadDosis = readString(data, ['unidadDosis'], existingTreatment?.unidadDosis ?? 'mL');
+      const frecuencia = readString(data, ['frecuencia'], existingTreatment?.frecuencia ?? 'Diaria');
+      const fechaInicio = readString(
+        data,
+        ['fechaInicio'],
+        existingTreatment?.fechaInicio ?? change.actualizadoEnServidor
+      );
+      const responsable = readString(
+        data,
+        ['responsable'],
+        existingTreatment?.responsable ?? 'No especificado'
+      );
+      const estado = readString(data, ['estado'], existingTreatment?.estado ?? 'Pendiente');
 
-      if (!tipoAlimento || cantidadKg === undefined || cantidadKg < 0 || !fecha) {
+      if (!rawEventId || !producto || dosis === undefined || dosis <= 0 || !fechaInicio) {
+        throw new Error(
+          `Registro remoto de tratamiento inválido (remoteId=${String(change.remoteId)}).`
+        );
+      }
+
+      const eventoSanitarioId = await resolveLocalForeignUuid(
+        db.healthRecords as unknown as Table<BaseLocalEntity, string>,
+        rawEventId
+      );
+      const parentEvent = await db.healthRecords.get(eventoSanitarioId);
+      const rawCattleId = readString(
+        data,
+        ['idAnimal', 'cattleId'],
+        parentEvent?.cattleId ?? existingTreatment?.cattleId ?? ''
+      );
+
+      const treatmentRecord: LocalTreatment = {
+        ...baseFields,
+        eventoSanitarioId,
+        cattleId: rawCattleId || '',
+        producto,
+        dosis,
+        unidadDosis: unidadDosis || 'mL',
+        viaAdministracion:
+          readString(data, ['viaAdministracion'], existingTreatment?.viaAdministracion ?? undefined) ??
+          null,
+        frecuencia: frecuencia || 'Diaria',
+        fechaInicio,
+        fechaFin: readString(data, ['fechaFin'], existingTreatment?.fechaFin ?? undefined) ?? null,
+        responsable: responsable || 'No especificado',
+        prescripcionUri:
+          readString(data, ['prescripcionUri'], existingTreatment?.prescripcionUri ?? undefined) ??
+          null,
+        estado: estado || 'Pendiente'
+      };
+      return treatmentRecord;
+    }
+
+    case 'feedingRecords': {
+      const existingFeeding = existing as LocalFeedingRecord | undefined;
+      const tipoAlimento = readString(
+        data,
+        ['alimento', 'tipoAlimento', 'feedType'],
+        existingFeeding?.tipoAlimento
+      );
+      const cantidadKg =
+        readNumber(data, ['cantidad', 'cantidadKg', 'quantityKg']) ?? existingFeeding?.cantidadKg;
+      const fecha = readString(
+        data,
+        ['inicio', 'fecha', 'date'],
+        existingFeeding?.fecha ?? change.actualizadoEnServidor
+      );
+      const rawLotId = readString(data, ['idLote', 'lotId', 'loteId']);
+      const rawCattleId = readString(data, ['idAnimal', 'cattleId', 'animalId']);
+
+      if (!tipoAlimento || cantidadKg === undefined || cantidadKg <= 0 || !fecha) {
         throw new Error(
           `Registro remoto de alimentación inválido (remoteId=${String(change.remoteId)}).`
         );
@@ -251,20 +396,33 @@ export async function mapRemoteChangeToLocalEntity(
             rawLotId
           )
         : undefined;
+      const cattleId = rawCattleId
+        ? await resolveLocalForeignUuid(
+            db.cattle as unknown as Table<BaseLocalEntity, string>,
+            rawCattleId
+          )
+        : undefined;
 
       const feedingRecord: LocalFeedingRecord = {
         ...baseFields,
         lotId,
+        cattleId,
         tipoAlimento,
         cantidadKg,
-        fecha
+        fecha,
+        racion: readString(data, ['racion'], existingFeeding?.racion ?? tipoAlimento),
+        unidad: readString(data, ['unidad'], existingFeeding?.unidad ?? 'kg'),
+        frecuencia: readString(data, ['frecuencia'], existingFeeding?.frecuencia ?? 'Diaria'),
+        fin: readString(data, ['fin'], existingFeeding?.fin ?? undefined) ?? null,
+        cambioDieta:
+          readString(data, ['cambioDieta'], existingFeeding?.cambioDieta ?? undefined) ?? null
       };
       return feedingRecord;
     }
 
     case 'reproductionRecords': {
-      const rawCattleId = readString(data, ['cattleId', 'animalId', 'bovinoId']);
-      const evento = readString(data, ['evento', 'event']);
+      const rawCattleId = readString(data, ['idAnimal', 'cattleId', 'animalId', 'bovinoId']);
+      const evento = readString(data, ['tipo', 'evento', 'event']);
       const fecha = readString(data, ['fecha', 'date'], change.actualizadoEnServidor);
 
       if (!rawCattleId || !evento || !fecha) {
@@ -283,14 +441,17 @@ export async function mapRemoteChangeToLocalEntity(
         cattleId,
         evento,
         fecha,
+        resultado: readString(data, ['resultado', 'result']) ?? null,
         observaciones: readString(data, ['observaciones', 'notes'])
       };
       return reproductionRecord;
     }
 
     case 'lots': {
+      const existingLot = existing as LocalLot | undefined;
       const nombre = readString(data, ['nombre', 'name']);
-      const capacidad = readNumber(data, ['capacidad', 'capacity']) ?? 0;
+      const capacidad = readNumber(data, ['capacidad', 'capacity']) ?? existingLot?.capacidad ?? 0;
+      const estado = readString(data, ['estado'], existingLot?.estado ?? 'Activo') ?? 'Activo';
 
       if (!nombre) {
         throw new Error(`Registro remoto de lote inválido (remoteId=${String(change.remoteId)}).`);
@@ -300,17 +461,22 @@ export async function mapRemoteChangeToLocalEntity(
         ...baseFields,
         nombre,
         capacidad,
-        ubicacion: readString(data, ['ubicacion', 'location'])
+        ubicacion: readString(data, ['ubicacion', 'location']),
+        estado
       };
       return lotRecord;
     }
 
     case 'movements': {
-      const rawCattleId = readString(data, ['cattleId', 'animalId', 'bovinoId']);
+      const existingMovement = existing as LocalMovement | undefined;
+      const rawCattleId = readString(data, ['idAnimal', 'cattleId', 'animalId', 'bovinoId']);
       const fecha = readString(data, ['fecha', 'date'], change.actualizadoEnServidor);
-      const motivo = readString(data, ['motivo', 'reason'], 'Movimiento registrado') ?? 'Movimiento registrado';
-      const rawOrigen = readString(data, ['origenLotId', 'originLotId']);
-      const rawDestino = readString(data, ['destinoLotId', 'destinationLotId']);
+      const motivo = readString(data, ['motivo', 'reason'], existingMovement?.motivo ?? '') ?? '';
+      const rawOrigen = readString(data, ['idLoteOrigen', 'origenLotId', 'originLotId']);
+      const rawDestino = readString(data, ['idLoteDestino', 'destinoLotId', 'destinationLotId']);
+      const tipo = readString(data, ['tipo'], existingMovement?.tipo ?? 'CambioInterno');
+      const origenExterno = readString(data, ['origenExterno'], existingMovement?.origenExterno);
+      const destinoExterno = readString(data, ['destinoExterno'], existingMovement?.destinoExterno);
 
       if (!rawCattleId || !fecha) {
         throw new Error(
@@ -329,6 +495,9 @@ export async function mapRemoteChangeToLocalEntity(
         cattleId,
         origenLotId: rawOrigen ? await resolveLocalForeignUuid(lotsTable, rawOrigen) : undefined,
         destinoLotId: rawDestino ? await resolveLocalForeignUuid(lotsTable, rawDestino) : undefined,
+        tipo,
+        origenExterno,
+        destinoExterno,
         fecha,
         motivo
       };
@@ -336,7 +505,7 @@ export async function mapRemoteChangeToLocalEntity(
     }
 
     case 'genealogy': {
-      const rawCattleId = readString(data, ['cattleId', 'animalId', 'bovinoId']);
+      const rawCattleId = readString(data, ['idAnimal', 'cattleId', 'animalId', 'bovinoId']);
       if (!rawCattleId) {
         throw new Error(
           `Registro remoto de genealogía inválido (remoteId=${String(change.remoteId)}).`
@@ -345,8 +514,8 @@ export async function mapRemoteChangeToLocalEntity(
 
       const cattleTable = db.cattle as unknown as Table<BaseLocalEntity, string>;
       const cattleId = await resolveLocalForeignUuid(cattleTable, rawCattleId);
-      const rawPadre = readString(data, ['padreId', 'fatherId']);
-      const rawMadre = readString(data, ['madreId', 'motherId']);
+      const rawPadre = readString(data, ['idPadre', 'padreId', 'fatherId']);
+      const rawMadre = readString(data, ['idMadre', 'madreId', 'motherId']);
 
       const genealogyRecord: LocalGenealogy = {
         ...baseFields,
@@ -358,22 +527,43 @@ export async function mapRemoteChangeToLocalEntity(
     }
 
     case 'alerts': {
-      const tipo = readString(data, ['tipo', 'type'], 'General') ?? 'General';
-      const prioridad = readString(data, ['prioridad', 'priority'], 'Media') ?? 'Media';
-      const mensaje = readString(data, ['mensaje', 'message']);
-      const fecha = readString(data, ['fecha', 'date'], change.actualizadoEnServidor);
+      const existingAlert = existing as LocalAlert | undefined;
+      const tipo = readString(data, ['tipo', 'type'], existingAlert?.tipo ?? 'General') ?? 'General';
+      const prioridad =
+        readString(data, ['prioridad', 'priority'], existingAlert?.prioridad ?? 'Media') ?? 'Media';
+      const mensaje = readString(data, ['descripcion', 'mensaje', 'message']);
+      const fecha = readString(
+        data,
+        ['fechaProgramada', 'fecha', 'date'],
+        change.actualizadoEnServidor
+      );
 
       if (!mensaje || !fecha) {
         throw new Error(`Registro remoto de alerta inválido (remoteId=${String(change.remoteId)}).`);
       }
+
+      const leida = readBoolean(data, ['leida', 'read'], existingAlert?.leida ?? false);
+      const rawEstado = readString(data, ['estado']);
+      const estado = rawEstado ?? (leida ? 'Completado' : existingAlert?.estado ?? 'Pendiente');
 
       const alertRecord: LocalAlert = {
         ...baseFields,
         tipo,
         prioridad,
         mensaje,
-        leida: readBoolean(data, ['leida', 'read'], false),
-        fecha
+        leida: estado.toLowerCase() === 'completado' || leida,
+        fecha,
+        cattleId: readString(data, ['idAnimal', 'cattleId']) ?? existingAlert?.cattleId ?? null,
+        lotId: readString(data, ['idLote', 'lotId']) ?? existingAlert?.lotId ?? null,
+        treatmentId:
+          readString(data, ['idTratamiento', 'treatmentId']) ?? existingAlert?.treatmentId ?? null,
+        responsableId:
+          readString(data, ['idResponsable', 'responsableId']) ??
+          existingAlert?.responsableId ??
+          null,
+        estado,
+        fechaCompletado:
+          readString(data, ['fechaCompletado']) ?? existingAlert?.fechaCompletado ?? null
       };
       return alertRecord;
     }

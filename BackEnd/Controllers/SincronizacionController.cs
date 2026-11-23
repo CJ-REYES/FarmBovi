@@ -19,7 +19,10 @@ namespace FarmBovi.Api.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/sync")]
-public sealed partial class SincronizacionController(FarmDbContext db, RanchAccessService access) : ControllerBase
+public sealed partial class SincronizacionController(
+    FarmDbContext db,
+    RanchAccessService access,
+    ILogger<SincronizacionController>? logger = null) : ControllerBase
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -116,9 +119,12 @@ public sealed partial class SincronizacionController(FarmDbContext db, RanchAcce
             },
             [nameof(Pesaje)] = new(StringComparer.OrdinalIgnoreCase)
             {
-                nameof(Pesaje.Peso),
+                nameof(Pesaje.PesoRealKg),
                 nameof(Pesaje.Fecha),
-                nameof(Pesaje.Observaciones)
+                nameof(Pesaje.FuenteBascula),
+                nameof(Pesaje.Responsable),
+                nameof(Pesaje.Observaciones),
+                nameof(Pesaje.OrigenPesaje)
             },
             [nameof(Reproduccion)] = new(StringComparer.OrdinalIgnoreCase)
             {
@@ -349,6 +355,11 @@ public sealed partial class SincronizacionController(FarmDbContext db, RanchAcce
         var versionResultante = GetEntityVersion(entidadNueva);
         var despuesJson = JsonSerializer.Serialize(entidadNueva, entidadNueva.GetType(), JsonOptions);
         var idCambio = Guid.NewGuid();
+
+        // Diagnóstico explícito previo a guardar para evitar 409 opacos en duplicados de PK/Arete/Lote
+        var preCreateConflict = await DetectPreCreateConflictAsync(entidadNormalizada, entidadNueva, idRegistro, request, ct);
+        if (preCreateConflict is not null) return preCreateConflict;
+
         await using var tx = db.Database.IsRelational()
             ? await db.Database.BeginTransactionAsync(ct)
             : null;
@@ -380,7 +391,7 @@ public sealed partial class SincronizacionController(FarmDbContext db, RanchAcce
             await db.SaveChangesAsync(ct);
             if (tx is not null) await tx.CommitAsync(ct);
         }
-        catch (DbUpdateException)
+        catch (DbUpdateException ex)
         {
             db.ClearPendingPushMetadata();
             if (tx is not null) await tx.RollbackAsync(ct);
@@ -391,11 +402,23 @@ public sealed partial class SincronizacionController(FarmDbContext db, RanchAcce
             {
                 return await BuildIdempotentResultAsync(concurrentOp, idUsuarioJwt, request.IdRancho, hashSolicitud, operacionEstandar, ct);
             }
+
+            logger?.LogWarning(
+                ex,
+                "Sync CREATE DbUpdateException entidad={Entidad} idRegistro={IdRegistro} idRancho={IdRancho} idOperacion={IdOperacion}: {Detalle}",
+                entidadNormalizada,
+                idRegistro,
+                request.IdRancho,
+                request.IdOperacion,
+                ex.InnerException?.Message ?? ex.Message);
+
             return Conflict(new
             {
                 tipoConflicto = "DUPLICATE_OR_INVALID_REFERENCE",
                 mensaje = "No se pudo crear el registro por restricción de unicidad o clave foránea.",
-                idOperacion = request.IdOperacion
+                idOperacion = request.IdOperacion,
+                entidad = entidadNormalizada,
+                idRegistro
             });
         }
         using var doc = JsonDocument.Parse(despuesJson);
@@ -457,6 +480,47 @@ public sealed partial class SincronizacionController(FarmDbContext db, RanchAcce
         using var docServidor = JsonDocument.Parse(antesJson);
         if (eliminadoEnServidor.HasValue)
         {
+            // Eliminación idempotente: si el registro ya estaba eliminado en el servidor y la operación
+            // solicitada también es Eliminar, confirmar sin generar conflicto innecesario.
+            if (operacionEstandar == "Eliminar")
+            {
+                var ahoraIdemp = DateTime.UtcNow;
+                db.RegistrosSyncServidor.Add(new RegistroSyncServidor
+                {
+                    IdOperacion = request.IdOperacion,
+                    IdUsuario = idUsuarioJwt,
+                    IdRancho = request.IdRancho,
+                    IdDispositivo = idDispositivo,
+                    HashSolicitud = hashSolicitud,
+                    Entidad = entidadNormalizada,
+                    IdRegistro = idRegistro,
+                    Resultado = string.Empty,
+                    VersionResultante = versionServidor,
+                    AplicadoEn = ahoraIdemp
+                });
+                try
+                {
+                    await db.SaveChangesAsync(ct);
+                    if (tx is not null) await tx.CommitAsync(ct);
+                }
+                catch (DbUpdateException)
+                {
+                    if (tx is not null) await tx.RollbackAsync(ct);
+                    db.ChangeTracker.Clear();
+                }
+
+                return Ok(new OperacionSyncResponse(
+                    request.IdOperacion,
+                    entidadNormalizada,
+                    idRegistro,
+                    operacionEstandar,
+                    versionServidor,
+                    Guid.Empty,
+                    ahoraIdemp,
+                    DuplicadoIgnorado: true,
+                    Datos: null));
+            }
+
             var camposEliminado = await CalcularCamposConflictoDesdeHistorialAsync(
                 request.IdRancho, entidadNormalizada, idRegistro,
                 request.VersionBase.Value, versionServidor, docServidor.RootElement, payload, ct);
@@ -567,7 +631,7 @@ public sealed partial class SincronizacionController(FarmDbContext db, RanchAcce
                 CamposModificados: camposConflicto,
                 EstadoServidor: docActual.RootElement.Clone()));
         }
-        catch (DbUpdateException)
+        catch (DbUpdateException ex)
         {
             db.ClearPendingPushMetadata();
             if (tx is not null) await tx.RollbackAsync(ct);
@@ -578,11 +642,24 @@ public sealed partial class SincronizacionController(FarmDbContext db, RanchAcce
             {
                 return await BuildIdempotentResultAsync(concurrentOp, idUsuarioJwt, request.IdRancho, hashSolicitud, operacionEstandar, ct);
             }
+
+            logger?.LogWarning(
+                ex,
+                "Sync {Operacion} DbUpdateException entidad={Entidad} idRegistro={IdRegistro} idRancho={IdRancho} idOperacion={IdOperacion}: {Detalle}",
+                operacionEstandar,
+                entidadNormalizada,
+                idRegistro,
+                request.IdRancho,
+                request.IdOperacion,
+                ex.InnerException?.Message ?? ex.Message);
+
             return Conflict(new
             {
                 tipoConflicto = "CONSTRAINT_VIOLATION",
                 mensaje = "No se pudo aplicar el cambio por una restricción de integridad en la base de datos.",
-                idOperacion = request.IdOperacion
+                idOperacion = request.IdOperacion,
+                entidad = entidadNormalizada,
+                idRegistro
             });
         }
         JsonElement? datosRespuesta = null;
@@ -922,6 +999,22 @@ public sealed partial class SincronizacionController(FarmDbContext db, RanchAcce
                     return ForbidRanchMismatch();
                 return null;
             }
+            case Pesaje pesaje:
+            {
+                var pesoError = FarmDomainValidationService.ValidatePesaje(pesaje.PesoRealKg);
+                if (pesoError is not null)
+                    return BadRequest(pesoError);
+
+                var animalRancho = await db.Animales.AsNoTracking()
+                    .Where(a => a.IdAnimal == pesaje.IdAnimal)
+                    .Select(a => a.IdRancho)
+                    .FirstOrDefaultAsync(ct);
+                if (animalRancho == Guid.Empty)
+                    return BadRequest("El animal asociado al pesaje no existe.");
+                if (animalRancho != expectedRanchoId)
+                    return ForbidRanchMismatch();
+                return null;
+            }
             case Alimentacion al:
             {
                 if (al.IdAnimal.HasValue && al.IdAnimal.Value != Guid.Empty)
@@ -960,18 +1053,6 @@ public sealed partial class SincronizacionController(FarmDbContext db, RanchAcce
                     return ForbidRanchMismatch();
                 return null;
             }
-            case Pesaje p:
-            {
-                var animalRancho = await db.Animales.AsNoTracking()
-                    .Where(a => a.IdAnimal == p.IdAnimal)
-                    .Select(a => a.IdRancho)
-                    .FirstOrDefaultAsync(ct);
-                if (animalRancho == Guid.Empty)
-                    return BadRequest("El animal asociado al pesaje no existe.");
-                if (animalRancho != expectedRanchoId)
-                    return ForbidRanchMismatch();
-                return null;
-            }
             case Reproduccion rep:
             {
                 var animalRancho = await db.Animales.AsNoTracking()
@@ -987,6 +1068,90 @@ public sealed partial class SincronizacionController(FarmDbContext db, RanchAcce
             default:
                 return null;
         }
+    }
+
+    private async Task<IActionResult?> DetectPreCreateConflictAsync(
+        string entidadNormalizada,
+        object entidadNueva,
+        Guid idRegistro,
+        OperacionSyncRequest request,
+        CancellationToken ct)
+    {
+        var existingByPk = await FindEntityByIdAsNoTrackingAsync(entidadNormalizada, idRegistro, ct);
+        if (existingByPk is not null)
+        {
+            var versionActual = GetEntityVersion(existingByPk);
+            var eliminado = GetEntityDeletedAt(existingByPk);
+            return Conflict(new
+            {
+                tipoConflicto = "DUPLICATE_OR_INVALID_REFERENCE",
+                campo = "idRegistro",
+                mensaje = eliminado.HasValue
+                    ? $"El registro '{idRegistro}' de '{entidadNormalizada}' ya existe en el servidor (desactivado)."
+                    : $"El registro '{idRegistro}' de '{entidadNormalizada}' ya existe en el servidor (versión {versionActual}).",
+                idOperacion = request.IdOperacion,
+                entidad = entidadNormalizada,
+                idRegistro,
+                versionServidor = versionActual
+            });
+        }
+
+        switch (entidadNueva)
+        {
+            case Animal a:
+            {
+                var normalizedArete = (a.Arete ?? string.Empty).Trim();
+                if (normalizedArete.Length > 0)
+                {
+                    var dupArete = await db.Animales.AsNoTracking()
+                        .FirstOrDefaultAsync(
+                            x => x.IdRancho == request.IdRancho && x.Arete.ToLower() == normalizedArete.ToLower(),
+                            ct);
+                    if (dupArete is not null)
+                    {
+                        var detalleEstado = dupArete.EliminadoEn.HasValue
+                            ? "en un registro desactivado previamente"
+                            : "en otro bovino activo";
+                        return Conflict(new
+                        {
+                            tipoConflicto = "DUPLICATE_OR_INVALID_REFERENCE",
+                            campo = "arete",
+                            mensaje = $"Ya existe el arete '{normalizedArete}' en este rancho ({detalleEstado}).",
+                            idOperacion = request.IdOperacion,
+                            entidad = entidadNormalizada,
+                            idRegistro
+                        });
+                    }
+                }
+                break;
+            }
+            case Lote l:
+            {
+                var normalizedNombre = (l.Nombre ?? string.Empty).Trim();
+                if (normalizedNombre.Length > 0)
+                {
+                    var dupLote = await db.Lotes.AsNoTracking()
+                        .FirstOrDefaultAsync(
+                            x => x.IdRancho == request.IdRancho && x.Nombre.ToLower() == normalizedNombre.ToLower(),
+                            ct);
+                    if (dupLote is not null)
+                    {
+                        return Conflict(new
+                        {
+                            tipoConflicto = "DUPLICATE_OR_INVALID_REFERENCE",
+                            campo = "nombre",
+                            mensaje = $"Ya existe un lote/potrero llamado '{normalizedNombre}' en este rancho.",
+                            idOperacion = request.IdOperacion,
+                            entidad = entidadNormalizada,
+                            idRegistro
+                        });
+                    }
+                }
+                break;
+            }
+        }
+
+        return null;
     }
 
     private IActionResult ForbidRanchMismatch() =>
@@ -1118,12 +1283,16 @@ public sealed partial class SincronizacionController(FarmDbContext db, RanchAcce
                 mov.VersionRegistro = 1;
                 mov.EliminadoEn = null;
                 break;
-            case Pesaje p:
-                p.IdPesaje = targetId;
-                p.IdAutor = idUsuarioJwt;
-                if (p.Fecha == default) p.Fecha = ahora;
-                p.VersionRegistro = 1;
-                p.EliminadoEn = null;
+            case Pesaje pesaje:
+                pesaje.IdPesaje = targetId;
+                pesaje.IdAutor = idUsuarioJwt;
+                if (pesaje.Fecha == default) pesaje.Fecha = ahora;
+                if (string.IsNullOrWhiteSpace(pesaje.FuenteBascula)) pesaje.FuenteBascula = "Báscula registrada en campo";
+                if (string.IsNullOrWhiteSpace(pesaje.Responsable)) pesaje.Responsable = "Operador de campo";
+                if (string.IsNullOrWhiteSpace(pesaje.OrigenPesaje)) pesaje.OrigenPesaje = "manual";
+                pesaje.CreadoEn = ahora;
+                pesaje.VersionRegistro = 1;
+                pesaje.EliminadoEn = null;
                 break;
             case Reproduccion rep:
                 rep.IdReproduccion = targetId;
@@ -1146,7 +1315,7 @@ public sealed partial class SincronizacionController(FarmDbContext db, RanchAcce
             Recordatorio rec => rec.IdRecordatorio,
             Alimentacion al => al.IdAlimentacion,
             MovimientoAnimal mov => mov.IdMovimiento,
-            Pesaje p => p.IdPesaje,
+            Pesaje pesaje => pesaje.IdPesaje,
             Reproduccion rep => rep.IdReproduccion,
             _ => throw new InvalidOperationException($"Entidad desconocida: {entidadNormalizada}")
         };
@@ -1162,7 +1331,7 @@ public sealed partial class SincronizacionController(FarmDbContext db, RanchAcce
             Recordatorio rec => rec.VersionRegistro,
             Alimentacion al => al.VersionRegistro,
             MovimientoAnimal mov => mov.VersionRegistro,
-            Pesaje p => p.VersionRegistro,
+            Pesaje pesaje => pesaje.VersionRegistro,
             Reproduccion rep => rep.VersionRegistro,
             _ => 1
         };
@@ -1179,7 +1348,7 @@ public sealed partial class SincronizacionController(FarmDbContext db, RanchAcce
             case Recordatorio rec: rec.VersionRegistro = version; break;
             case Alimentacion al: al.VersionRegistro = version; break;
             case MovimientoAnimal mov: mov.VersionRegistro = version; break;
-            case Pesaje p: p.VersionRegistro = version; break;
+            case Pesaje pesaje: pesaje.VersionRegistro = version; break;
             case Reproduccion rep: rep.VersionRegistro = version; break;
         }
     }
@@ -1195,7 +1364,7 @@ public sealed partial class SincronizacionController(FarmDbContext db, RanchAcce
             Recordatorio rec => rec.EliminadoEn,
             Alimentacion al => al.EliminadoEn,
             MovimientoAnimal mov => mov.EliminadoEn,
-            Pesaje p => p.EliminadoEn,
+            Pesaje pesaje => pesaje.EliminadoEn,
             Reproduccion rep => rep.EliminadoEn,
             _ => null
         };
@@ -1212,7 +1381,7 @@ public sealed partial class SincronizacionController(FarmDbContext db, RanchAcce
             case Recordatorio rec: rec.EliminadoEn = deletedAt; break;
             case Alimentacion al: al.EliminadoEn = deletedAt; break;
             case MovimientoAnimal mov: mov.EliminadoEn = deletedAt; break;
-            case Pesaje p: p.EliminadoEn = deletedAt; break;
+            case Pesaje pesaje: pesaje.EliminadoEn = deletedAt; break;
             case Reproduccion rep: rep.EliminadoEn = deletedAt; break;
         }
     }
@@ -1230,7 +1399,7 @@ public sealed partial class SincronizacionController(FarmDbContext db, RanchAcce
             "recordatorio" or "recordatorios" or "alerts" => nameof(Recordatorio),
             "alimentacion" or "alimentaciones" or "feedingrecords" => nameof(Alimentacion),
             "movimientoanimal" or "movimientos-animales" or "movements" => nameof(MovimientoAnimal),
-            "pesaje" or "pesajes" or "weighings" => nameof(Pesaje),
+            "pesaje" or "pesajes" or "weighing" or "weighings" => nameof(Pesaje),
             "reproduccion" or "reproducciones" or "reproduction" => nameof(Reproduccion),
             _ => null
         };

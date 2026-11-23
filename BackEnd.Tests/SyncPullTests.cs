@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Text.Json;
 using FarmBovi.Api.Controllers;
 using FarmBovi.Api.Data;
+using FarmBovi.Api.DTOs;
 using FarmBovi.Api.Models;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -310,7 +311,7 @@ public sealed class SyncPullTests
     {
         await using var db = CreateDb(Guid.NewGuid().ToString("N"));
         var (userA, _, ranchA, _) = await SeedAsync(db);
-        foreach (var entity in new[] { "weighings", "genealogy", "reproductionRecords", "media" })
+        foreach (var entity in new[] { "genealogy", "reproductionRecords", "media" })
         {
             var result = await Controller(db, userA).GetCambios(entity, ranchA, null, null, null, 10);
             Assert.IsType<BadRequestObjectResult>(result.Result);
@@ -386,5 +387,94 @@ public sealed class SyncPullTests
 
         var result = await Controller(db, userA).GetCambios("lots", ranchA, null, null, null, 10);
         Assert.IsType<UnprocessableEntityObjectResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task SyncPushYPull_Pesaje_CreaActualizaEliminaYEntregaCambiosPorRancho()
+    {
+        await using var db = CreateDb(Guid.NewGuid().ToString("N"));
+        var (userA, _, ranchA, _) = await SeedAsync(db);
+
+        var animalId = Guid.NewGuid();
+        db.Animales.Add(new Animal
+        {
+            IdAnimal = animalId,
+            IdRancho = ranchA,
+            Arete = "PES-001",
+            Raza = "Indubrasil",
+            Sexo = "Hembra",
+            FechaIngreso = new DateTime(2026, 11, 1, 0, 0, 0, DateTimeKind.Utc),
+            Procedencia = "Propio",
+            Estado = "Activo",
+            IdAutor = userA
+        });
+        await db.SaveChangesAsync();
+
+        var pushController = new SincronizacionController(db)
+        {
+            ControllerContext = Controller(db, userA).ControllerContext
+        };
+
+        var weighingId = Guid.NewGuid();
+        var createPayload = JsonSerializer.SerializeToElement(new
+        {
+            idPesaje = weighingId,
+            idAnimal = animalId,
+            pesoRealKg = 325.5m,
+            fecha = "2026-11-22T16:13:58Z",
+            fuenteBascula = "Báscula digital corral principal",
+            responsable = "Carlos Reyes",
+            observaciones = "Pesaje oficial en ayuno"
+        });
+
+        var createResult = await pushController.RecibirOperacion(new OperacionSyncRequest
+        {
+            IdOperacion = Guid.NewGuid(),
+            IdRancho = ranchA,
+            IdDispositivo = "pwa-test-device",
+            Entidad = "Pesaje",
+            IdRegistro = weighingId,
+            Operacion = "Crear",
+            Datos = createPayload
+        }, CancellationToken.None);
+
+        Assert.IsType<CreatedAtActionResult>(createResult);
+        var saved = await db.Pesajes.AsNoTracking().SingleAsync(p => p.IdPesaje == weighingId);
+        Assert.Equal(325.5m, saved.PesoRealKg);
+        Assert.Equal(animalId, saved.IdAnimal);
+        Assert.Equal(1, saved.VersionRegistro);
+
+        var updatePayload = JsonSerializer.SerializeToElement(new
+        {
+            pesoRealKg = 330.0m,
+            observaciones = "Ajuste por calibración"
+        });
+
+        var updateResult = await pushController.RecibirOperacion(new OperacionSyncRequest
+        {
+            IdOperacion = Guid.NewGuid(),
+            IdRancho = ranchA,
+            IdDispositivo = "pwa-test-device",
+            Entidad = "weighings",
+            IdRegistro = weighingId,
+            Operacion = "Actualizar",
+            VersionBase = 1,
+            Datos = updatePayload
+        }, CancellationToken.None);
+
+        Assert.IsType<OkObjectResult>(updateResult);
+        var updated = await db.Pesajes.AsNoTracking().SingleAsync(p => p.IdPesaje == weighingId);
+        Assert.Equal(330.0m, updated.PesoRealKg);
+        Assert.Equal(2, updated.VersionRegistro);
+
+        var pull = OkValue(await Controller(db, userA).GetCambios("weighings", ranchA, null, null, null, 20));
+        Assert.Equal("weighings", pull.Entidad);
+        Assert.True(pull.Cambios.Count >= 2);
+        var latest = pull.Cambios.Last();
+        Assert.Equal(weighingId, latest.RemoteId);
+        Assert.Equal(2, latest.VersionServidor);
+        Assert.NotNull(latest.Datos);
+        Assert.Equal(330.0m, latest.Datos!.Value.GetProperty("pesoRealKg").GetDecimal());
+        Assert.Equal(animalId, latest.Datos!.Value.GetProperty("cattleId").GetGuid());
     }
 }

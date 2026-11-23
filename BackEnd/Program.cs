@@ -62,6 +62,21 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ClockSkew = TimeSpan.FromSeconds(30),
             NameClaimType = ClaimTypes.Name
         };
+        // Permite autenticar peticiones tanto vía encabezado Authorization: Bearer
+        // como vía cookie HttpOnly persistente (farmbovi_auth) emitida para la PWA.
+        options.Events = new JwtBearerEvents
+        {
+            OnMessageReceived = context =>
+            {
+                if (string.IsNullOrEmpty(context.Token) &&
+                    context.Request.Cookies.TryGetValue(FarmBovi.Api.Controllers.AuthController.AuthCookieName, out var cookieToken) &&
+                    !string.IsNullOrWhiteSpace(cookieToken))
+                {
+                    context.Token = cookieToken;
+                }
+                return Task.CompletedTask;
+            }
+        };
     });
 
 // Política global: todo endpoint exige JWT salvo los marcados explícitamente con [AllowAnonymous].
@@ -74,6 +89,8 @@ builder.Services.AddAuthorization(options =>
 
 builder.Services.AddScoped<FarmDomainValidationService>();
 builder.Services.AddScoped<RanchAccessService>();
+builder.Services.AddScoped<GenealogiaService>();
+builder.Services.AddSingleton<ProfilePhotoStorageService>();
 
 var connectionString = builder.Configuration.GetConnectionString("FarmBovi")
     ?? throw new InvalidOperationException("Configura ConnectionStrings:FarmBovi.");
@@ -88,7 +105,10 @@ builder.Services.AddCors(options => options.AddPolicy("Frontend", policy =>
 {
     if (allowedOrigins.Length > 0)
     {
-        policy.WithOrigins(allowedOrigins).AllowAnyHeader().AllowAnyMethod();
+        policy.WithOrigins(allowedOrigins)
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials();
     }
 }));
 

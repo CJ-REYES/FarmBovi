@@ -18,6 +18,7 @@ import { CattleRepository } from '../../lib/database/repositories/cattle.reposit
 import { useConnectivity } from '../../hooks/useConnectivity';
 import { useBoviScaleJobs, type EnrichedBoviScaleJob } from '../../hooks/useBoviScaleJobs';
 import type { LocalCattle, WeighingJobState } from '../../lib/database/schema';
+import AnimalSelectField from '../shared/AnimalSelectField';
 
 function StoredBlobPreview({ blob, alt }: { blob?: Blob; alt: string }) {
   const previewUrl = useMemo(() => {
@@ -266,23 +267,20 @@ export default function BoviScalePage() {
         )}
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label className="block text-[12px] font-semibold text-brand-slate mb-1">
-              Bovino a Pesar *
-            </label>
-            <select
-              value={selectedCattleId}
-              onChange={(e) => setSelectedCattleId(e.target.value)}
-              className="w-full border border-border-light rounded-lg px-3 py-2 text-[13px] bg-surface-white text-brand-slate"
-            >
-              <option value="">-- Selecciona un ejemplar --</option>
-              {cattleList.map((bovino) => (
-                <option key={bovino.id} value={bovino.id}>
-                  {bovino.areteSiniiga || 'Sin Arete'} — {bovino.nombre || bovino.raza}
-                </option>
-              ))}
-            </select>
-          </div>
+          <AnimalSelectField
+            id="boviscale-evidencia-animal"
+            name="idBovino"
+            label="Bovino a Pesar"
+            required
+            value={selectedCattleId}
+            options={cattleList.map((bovino) => ({
+              id: bovino.id,
+              arete: bovino.arete || bovino.areteSiniiga || 'Sin Arete',
+              raza: bovino.nombre || bovino.raza
+            }))}
+            placeholder="Selecciona un animal"
+            onChange={setSelectedCattleId}
+          />
 
           <div>
             <label className="block text-[12px] font-semibold text-brand-slate mb-1">

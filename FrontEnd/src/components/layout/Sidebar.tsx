@@ -1,7 +1,7 @@
-import { NavLink } from 'react-router-dom';
+import { Link, NavLink } from 'react-router-dom';
 import {
-  LayoutDashboard, Map, Activity,
-  Beef, Scale, Syringe, HeartPulse, Dna, Camera,
+  LayoutDashboard, Building2, Map, Activity,
+  Beef, Wheat, Scale, Syringe, HeartPulse, Dna, Camera,
   Bell, FileText, Settings, UserCircle, X, type LucideIcon
 } from 'lucide-react';
 
@@ -22,7 +22,10 @@ interface MenuGroup {
 const MENU_GROUPS: MenuGroup[] = [
   {
     category: "GENERAL",
-    items: [{ id: 'dashboard', path: '/dashboard', label: 'Panel Principal', icon: LayoutDashboard }]
+    items: [
+      { id: 'dashboard', path: '/dashboard', label: 'Panel Principal', icon: LayoutDashboard },
+      { id: 'ranchos', path: '/ranches', label: 'Ranchos', icon: Building2 }
+    ]
   },
   {
     category: "GANADO",
@@ -35,6 +38,7 @@ const MENU_GROUPS: MenuGroup[] = [
   {
     category: "MANEJO GANADERO",
     items: [
+      { id: 'alimentacion', path: '/feeding', label: 'Alimentación', icon: Wheat },
       { id: 'pesajes', path: '/weighing', label: 'Pesajes', icon: Scale },
       { id: 'salud', path: '/health', label: 'Salud y Tratamientos', icon: Syringe },
       { id: 'reproduccion', path: '/reproduction', label: 'Reproducción', icon: HeartPulse },
@@ -55,9 +59,14 @@ export default function Sidebar({ onCloseMobile }: { onCloseMobile: () => void }
   return (
     <aside className="flex flex-col w-[260px] h-full bg-surface-white border-r border-border-light shadow-[1px_0_4px_rgba(0,0,0,0.02)]">
       <div className="h-[64px] min-h-[64px] flex items-center justify-between px-6 border-b border-border-light">
-        <span className="font-condensed text-2xl font-bold text-brand-primary tracking-wide">
+        <Link
+          to="/"
+          onClick={onCloseMobile}
+          title="Ver página principal del proyecto"
+          className="font-condensed text-2xl font-bold text-brand-primary tracking-wide hover:opacity-85 transition-opacity"
+        >
           FARM<span className="text-brand-slate">BOVI</span>
-        </span>
+        </Link>
         <button onClick={onCloseMobile} className="lg:hidden p-1 text-brand-slate/60 hover:text-brand-slate bg-surface-secondary rounded">
           <X size={20} />
         </button>

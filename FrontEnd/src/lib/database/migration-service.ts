@@ -23,18 +23,30 @@ export const MigrationService = {
       const legacyItems = JSON.parse(legacyDataRaw);
       if (Array.isArray(legacyItems) && legacyItems.length > 0) {
         const now = new Date().toISOString();
-        const recordsToImport: LocalCattle[] = legacyItems.map((item) => ({
-          id: item.id ? String(item.id) : crypto.randomUUID(),
-          remoteId: item.id || undefined,
-          areteSiniiga: item.areteSiniiga || item.tagNumber || 'SIN ARETE',
-          nombre: item.nombre || item.name || '',
-          raza: item.raza || item.breed || 'Cruzado',
-          gender: item.gender || item.sex || 'Hembra',
-          fechaNacimiento: item.fechaNacimiento || undefined,
-          createdAt: item.createdAt || now,
-          updatedAt: now,
-          syncStatus: 'synced'
-        }));
+        const recordsToImport: LocalCattle[] = legacyItems.map((item) => {
+          const arete = item.arete || item.areteSiniiga || item.tagNumber || 'SIN ARETE';
+          const sexo = item.sexo || item.gender || item.sex || 'Hembra';
+          const created = item.createdAt || now;
+          return {
+            id: item.id ? String(item.id) : crypto.randomUUID(),
+            remoteId: item.id || undefined,
+            arete,
+            areteSiniiga: arete,
+            nombre: item.nombre || item.name || '',
+            raza: item.raza || item.breed || 'Cruzado',
+            sexo,
+            gender: sexo,
+            fechaNacimiento: item.fechaNacimiento || undefined,
+            fechaIngreso: item.fechaIngreso || String(created).slice(0, 10),
+            procedencia: item.procedencia || 'Propio',
+            estado: item.estado || 'Activo',
+            fechaSalida: item.fechaSalida ?? null,
+            observaciones: item.observaciones ?? null,
+            createdAt: created,
+            updatedAt: now,
+            syncStatus: 'synced'
+          };
+        });
 
         await CattleRepository.bulkUpsert(recordsToImport);
       }

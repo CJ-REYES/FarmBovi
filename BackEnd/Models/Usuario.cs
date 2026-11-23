@@ -22,4 +22,10 @@ public sealed class Usuario
 
     [Column("Estado")]
     public string Estado { get; set; } = string.Empty;
+
+    public string? FotoPerfilRuta { get; set; }
+
+    public string? ConfiguracionJson { get; set; }
+
+    public DateTime CreadoEn { get; set; } = DateTime.UtcNow;
 }

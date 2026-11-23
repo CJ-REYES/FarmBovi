@@ -1,102 +1,191 @@
-import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
-import type { Cattle, CattleInput } from '../types/cattle';
-import { CattleService } from '../services/cattle.service';
+import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
+import type { Cattle, CattleInput, LotOption, RanchOption } from '../types/cattle';
+import { CattleService, type CattleMutationResult } from '../services/cattle.service';
 import { MigrationService } from '../lib/database/migration-service';
-
-interface CattleContextType {
-  cattle: Cattle[];
-  loading: boolean;
-  source: 'cache' | 'server' | 'unavailable';
-  error: string | null;
-  refresh: () => Promise<void>;
-  save: (data: CattleInput, id?: number) => Promise<void>;
-  remove: (id: number) => Promise<void>;
-}
-
-const CattleContext = createContext<CattleContextType | undefined>(undefined);
+import { SyncScheduler } from '../services/sync/sync-scheduler';
+import { CattleContext } from './cattle-context';
 
 export function CattleProvider({ children }: { children: ReactNode }) {
   const [cattle, setCattle] = useState<Cattle[]>([]);
+  const [ranches, setRanches] = useState<RanchOption[]>([]);
+  const [lots, setLots] = useState<LotOption[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [source, setSource] = useState<'cache' | 'server' | 'unavailable'>('cache');
   const [error, setError] = useState<string | null>(null);
+  const [apiWarning, setApiWarning] = useState<string | null>(null);
   const mutationLockRef = useRef<boolean>(false);
+  const lastOptionsRef = useRef<{ ranchId?: string; includeDeleted?: boolean } | undefined>(
+    undefined
+  );
 
-  const fetchCattle = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      await MigrationService.migrateLegacyCacheIfNeeded();
-      const result = await CattleService.getAll();
-
-      const normalizedCattle: Cattle[] = result.data.map((item) => ({
-        ...item,
-        earTag: item.earTag || item.tagNumber || item.areteSiniiga || '',
-        name: item.name || item.nombre || '',
-        breed: item.breed || item.raza || '',
-        sex: item.sex || 'Hembra'
-      } as Cattle));
-
-      setCattle(normalizedCattle);
-      setSource(result.source);
-    } catch (err) {
-      console.error('Error al consultar datos de bovinos:', err);
-      setError('No se pudo cargar la información ganadera.');
-      setSource('unavailable');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const loadCattle = useCallback(
+    async (options?: { ranchId?: string; includeDeleted?: boolean }) => {
+      if (options !== undefined) {
+        lastOptionsRef.current = options;
+      }
+      setLoading(true);
+      setError(null);
+      try {
+        await MigrationService.migrateLegacyCacheIfNeeded();
+        const result = await CattleService.getAll(lastOptionsRef.current);
+        setCattle(result.data);
+        setRanches(result.ranches);
+        setLots(result.lots);
+        setSource(result.source);
+        setApiWarning(result.warning);
+      } catch (err) {
+        console.error('Error al consultar datos de animales:', err);
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'No se pudo cargar la información ganadera desde el almacenamiento local.'
+        );
+        setSource('unavailable');
+      } finally {
+        setLoading(false);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void fetchCattle();
-  }, [fetchCattle]);
+    let active = true;
+    void (async () => {
+      try {
+        await MigrationService.migrateLegacyCacheIfNeeded();
+        const result = await CattleService.getAll(lastOptionsRef.current);
+        if (!active) return;
+        setCattle(result.data);
+        setRanches(result.ranches);
+        setLots(result.lots);
+        setSource(result.source);
+        setApiWarning(result.warning);
+        setError(null);
+      } catch (err) {
+        if (!active) return;
+        console.error('Error inicial cargando animales:', err);
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'No se pudo cargar la información ganadera.'
+        );
+        setSource('unavailable');
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    })();
 
-  const save = async (data: CattleInput, id?: number) => {
-    if (mutationLockRef.current) return;
-    mutationLockRef.current = true;
-    setLoading(true);
-    try {
-      await CattleService.save(data, id);
-      await fetchCattle();
-    } catch (err) {
-      console.error('Error al guardar bovino:', err);
-      throw err;
-    } finally {
-      mutationLockRef.current = false;
-      setLoading(false);
-    }
-  };
+    let previousSyncAt = SyncScheduler.getSnapshot().lastCompletedSyncAt;
+    const unsubscribe = SyncScheduler.subscribe(() => {
+      const nextSyncAt = SyncScheduler.getSnapshot().lastCompletedSyncAt;
+      if (nextSyncAt && nextSyncAt !== previousSyncAt) {
+        previousSyncAt = nextSyncAt;
+        void loadCattle();
+      }
+    });
 
-  const remove = async (id: number) => {
-    if (mutationLockRef.current) return;
-    mutationLockRef.current = true;
-    setLoading(true);
-    try {
-      await CattleService.delete(id);
-      await fetchCattle();
-    } catch (err) {
-      console.error('Error al eliminar bovino:', err);
-      throw err;
-    } finally {
-      mutationLockRef.current = false;
-      setLoading(false);
-    }
-  };
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [loadCattle]);
+
+  const create = useCallback(
+    async (data: CattleInput): Promise<CattleMutationResult> => {
+      if (mutationLockRef.current) {
+        throw new Error('Ya hay un guardado en curso. Espera un momento.');
+      }
+      mutationLockRef.current = true;
+      try {
+        const result = await CattleService.create(data);
+        await loadCattle();
+        return result;
+      } finally {
+        mutationLockRef.current = false;
+      }
+    },
+    [loadCattle]
+  );
+
+  const update = useCallback(
+    async (id: string, data: CattleInput): Promise<CattleMutationResult> => {
+      if (mutationLockRef.current) {
+        throw new Error('Ya hay un guardado en curso. Espera un momento.');
+      }
+      mutationLockRef.current = true;
+      try {
+        const result = await CattleService.update(id, data);
+        await loadCattle();
+        return result;
+      } finally {
+        mutationLockRef.current = false;
+      }
+    },
+    [loadCattle]
+  );
+
+  const registerExit = useCallback(
+    async (
+      id: string,
+      params: { estado: 'Vendido' | 'Baja'; fechaSalida: string; observaciones?: string | null }
+    ): Promise<CattleMutationResult> => {
+      if (mutationLockRef.current) {
+        throw new Error('Ya hay una operación en curso.');
+      }
+      mutationLockRef.current = true;
+      try {
+        const result = await CattleService.registerExit(id, params);
+        await loadCattle();
+        return result;
+      } finally {
+        mutationLockRef.current = false;
+      }
+    },
+    [loadCattle]
+  );
+
+  const deactivate = useCallback(
+    async (id: string): Promise<{ synced: boolean; syncMessage?: string }> => {
+      if (mutationLockRef.current) {
+        throw new Error('Ya hay una operación en curso.');
+      }
+      mutationLockRef.current = true;
+      try {
+        const result = await CattleService.deactivate(id);
+        await loadCattle();
+        return result;
+      } finally {
+        mutationLockRef.current = false;
+      }
+    },
+    [loadCattle]
+  );
+
+  const getById = useCallback(async (id: string): Promise<Cattle | undefined> => {
+    return await CattleService.getById(id);
+  }, []);
 
   return (
-    <CattleContext.Provider value={{ cattle, loading, source, error, refresh: fetchCattle, save, remove }}>
+    <CattleContext.Provider
+      value={{
+        cattle,
+        ranches,
+        lots,
+        loading,
+        source,
+        error,
+        apiWarning,
+        refresh: loadCattle,
+        getById,
+        create,
+        update,
+        registerExit,
+        deactivate
+      }}
+    >
       {children}
     </CattleContext.Provider>
   );
-}
-
-// eslint-disable-next-line react-refresh/only-export-components
-export function useSharedCattle() {
-  const context = useContext(CattleContext);
-  if (!context) {
-    throw new Error('useSharedCattle debe utilizarse dentro de un CattleProvider');
-  }
-  return context;
 }

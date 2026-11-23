@@ -3,6 +3,11 @@ import { SyncHttpClient } from '../../services/sync/sync-http.client';
 import { OutboxRepository } from '../../lib/database/repositories/outbox.repository';
 import { db } from '../../lib/database/db';
 import { useSyncStatus } from '../../hooks/useSyncStatus';
+import { usePwaUpdate } from '../../hooks/usePwaUpdate';
+import {
+  OfflineInventoryService,
+  type OfflineInventorySnapshot
+} from '../../services/offline-inventory.service';
 import type {
   LocalOutboxQueue,
   LocalSyncCheckpoint,
@@ -19,7 +24,10 @@ import {
   Info,
   Database,
   WifiOff,
-  FileImage
+  FileImage,
+  HardDrive,
+  ShieldCheck,
+  Trash2
 } from 'lucide-react';
 import SyncConflictsPanel from './SyncConflictsPanel';
 
@@ -48,25 +56,35 @@ export default function SyncStatusPanel() {
     isSyncing,
     counts,
     lastCompletedSyncAt,
+    lastCycleResult,
     triggerManualSync,
+    retryFailedOperations,
     refreshStatus
   } = useSyncStatus();
 
+  const { updateAvailable, offlineReady, swVersion, applyUpdate } = usePwaUpdate();
+
   const [pendingOps, setPendingOps] = useState<LocalOutboxQueue[]>([]);
   const [checkpoints, setCheckpoints] = useState<LocalSyncCheckpoint[]>([]);
+  const [inventory, setInventory] = useState<OfflineInventorySnapshot | null>(null);
   const [retryingOpId, setRetryingOpId] = useState<string | null>(null);
+  const [discardingOpId, setDiscardingOpId] = useState<string | null>(null);
+  const [isRetryingAll, setIsRetryingAll] = useState<boolean>(false);
+  const [isDiscardingAll, setIsDiscardingAll] = useState<boolean>(false);
 
   const availability = SyncHttpClient.getEndpointAvailability();
 
   const reloadPending = useCallback(async () => {
     try {
-      const [allOps, allCheckpoints] = await Promise.all([
+      const [allOps, allCheckpoints, inv] = await Promise.all([
         db.outbox.orderBy('fechaCreacion').toArray(),
-        db.syncCheckpoints.toArray()
+        db.syncCheckpoints.toArray(),
+        OfflineInventoryService.getSnapshot()
       ]);
 
       setPendingOps(allOps.filter((op) => op.estado !== 'confirmado'));
       setCheckpoints(allCheckpoints);
+      setInventory(inv);
       await refreshStatus();
     } catch (err) {
       console.error('Error cargando estado de sincronización:', err);
@@ -78,14 +96,16 @@ export default function SyncStatusPanel() {
 
     const syncView = async () => {
       try {
-        const [allOps, allCheckpoints] = await Promise.all([
+        const [allOps, allCheckpoints, inv] = await Promise.all([
           db.outbox.orderBy('fechaCreacion').toArray(),
-          db.syncCheckpoints.toArray()
+          db.syncCheckpoints.toArray(),
+          OfflineInventoryService.getSnapshot()
         ]);
 
         if (!active) return;
         setPendingOps(allOps.filter((op) => op.estado !== 'confirmado'));
         setCheckpoints(allCheckpoints);
+        setInventory(inv);
       } catch (err) {
         console.error('Error cargando estado de sincronización:', err);
       }
@@ -107,6 +127,26 @@ export default function SyncStatusPanel() {
     await reloadPending();
   };
 
+  const handleRetryAllFailed = async () => {
+    setIsRetryingAll(true);
+    try {
+      await retryFailedOperations();
+      await reloadPending();
+    } finally {
+      setIsRetryingAll(false);
+    }
+  };
+
+  const handleDiscardAllFailed = async () => {
+    setIsDiscardingAll(true);
+    try {
+      await OutboxRepository.discardAllFailedOperations();
+      await reloadPending();
+    } finally {
+      setIsDiscardingAll(false);
+    }
+  };
+
   const handleManualRetryOp = async (idOperacion: string) => {
     setRetryingOpId(idOperacion);
     try {
@@ -115,6 +155,16 @@ export default function SyncStatusPanel() {
       await reloadPending();
     } finally {
       setRetryingOpId(null);
+    }
+  };
+
+  const handleDiscardOp = async (idOperacion: string) => {
+    setDiscardingOpId(idOperacion);
+    try {
+      await OutboxRepository.discardOperation(idOperacion);
+      await reloadPending();
+    } finally {
+      setDiscardingOpId(null);
     }
   };
 
@@ -135,8 +185,15 @@ export default function SyncStatusPanel() {
   };
 
   const formattedLastSync = lastCompletedSyncAt
-    ? new Date(lastCompletedSyncAt).toLocaleTimeString()
+    ? new Date(lastCompletedSyncAt).toLocaleString()
     : 'Aún sin ciclo completo confirmado';
+
+  const pullAppliedTotal = lastCycleResult
+    ? lastCycleResult.pull.reduce((acc, item) => acc + item.appliedCount, 0)
+    : 0;
+  const pullDeletedTotal = lastCycleResult
+    ? lastCycleResult.pull.reduce((acc, item) => acc + item.deletedCount, 0)
+    : 0;
 
   return (
     <div className="bg-surface-white border border-border-light rounded-xl p-5 shadow-sm space-y-4">
@@ -174,21 +231,69 @@ export default function SyncStatusPanel() {
           <p className="text-[11px] text-brand-slate/55">
             Última sincronización completa (Push + Pull): {formattedLastSync}
           </p>
+          {lastCycleResult && (
+            <p className="text-[11px] text-brand-slate/65">
+              Último ciclo · Push: {lastCycleResult.push.confirmedCount} confirmada(s)
+              {lastCycleResult.push.alreadyProcessedCount > 0
+                ? ` (${lastCycleResult.push.alreadyProcessedCount} duplicada(s))`
+                : ''}{' '}
+              · Pull: {pullAppliedTotal} actualizada(s), {pullDeletedTotal} eliminada(s)
+            </p>
+          )}
         </div>
 
-        <button
-          type="button"
-          onClick={() => void handleManualSync()}
-          disabled={isSyncing || !isOnline}
-          className="inline-flex items-center justify-center gap-1.5 bg-brand-primary hover:bg-brand-dark text-white px-3.5 py-2 rounded-lg text-[12px] font-semibold transition-colors disabled:opacity-50 shrink-0"
-        >
-          <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
-          {isSyncing ? 'Sincronizando...' : 'Sincronizar Ahora'}
-        </button>
+        <div className="flex items-center gap-2 shrink-0 flex-wrap">
+          {counts.failedOperationsCount > 0 && (
+            <>
+              <button
+                type="button"
+                onClick={() => void handleRetryAllFailed()}
+                disabled={isSyncing || isRetryingAll || isDiscardingAll || !isOnline}
+                className="inline-flex items-center justify-center gap-1.5 bg-surface-white border border-status-error/40 text-status-error hover:bg-status-error/10 px-3 py-2 rounded-lg text-[12px] font-semibold transition-colors disabled:opacity-50 cursor-pointer"
+              >
+                <RotateCcw size={14} className={isRetryingAll ? 'animate-spin' : ''} />
+                Reintentar fallidas ({counts.failedOperationsCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleDiscardAllFailed()}
+                disabled={isSyncing || isDiscardingAll || isRetryingAll}
+                className="inline-flex items-center justify-center gap-1.5 bg-status-error/10 border border-status-error/30 text-status-error hover:bg-status-error/20 px-3 py-2 rounded-lg text-[12px] font-semibold transition-colors disabled:opacity-50 cursor-pointer"
+                title="Descartar todas las operaciones fallidas y sus operaciones huérfanas dependientes"
+              >
+                <Trash2 size={14} />
+                Descartar fallidas ({counts.failedOperationsCount})
+              </button>
+            </>
+          )}
+          <button
+            type="button"
+            onClick={() => void handleManualSync()}
+            disabled={isSyncing || !isOnline}
+            className="inline-flex items-center justify-center gap-1.5 bg-brand-primary hover:bg-brand-dark text-white px-3.5 py-2 rounded-lg text-[12px] font-semibold transition-colors disabled:opacity-50 cursor-pointer"
+          >
+            <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
+            {isSyncing ? 'Sincronizando...' : 'Sincronizar Ahora'}
+          </button>
+        </div>
       </div>
 
-      {/* Métricas de operaciones pendientes y archivos pendientes */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+      {/* Indicador explícito de sincronización activa */}
+      {isSyncing && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="p-3 rounded-lg bg-brand-primary/10 border border-brand-primary/30 text-brand-forest text-[12px] font-semibold flex items-center gap-2"
+        >
+          <RefreshCw size={15} className="animate-spin text-brand-primary shrink-0" />
+          <span>
+            Sincronización activa en curso: enviando operaciones Push y descargando cambios Pull…
+          </span>
+        </div>
+      )}
+
+      {/* Métricas completas de sincronización (FE-05) */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
         <div className="p-3 rounded-lg bg-surface-secondary/50 border border-border-light">
           <p className="text-[11px] text-brand-slate/65 font-medium">Operaciones pendientes</p>
           <p className="text-[18px] font-bold text-brand-slate mt-0.5">
@@ -198,10 +303,17 @@ export default function SyncStatusPanel() {
 
         <div className="p-3 rounded-lg bg-surface-secondary/50 border border-border-light">
           <p className="text-[11px] text-brand-slate/65 font-medium flex items-center gap-1">
-            <FileImage size={12} /> Archivos pendientes
+            <CheckCircle2 size={12} className="text-status-success" /> Operaciones exitosas
           </p>
-          <p className="text-[18px] font-bold text-brand-slate mt-0.5">
-            {counts.pendingFilesCount}
+          <p className="text-[18px] font-bold text-status-success mt-0.5">
+            {counts.confirmedOperationsCount}
+          </p>
+        </div>
+
+        <div className="p-3 rounded-lg bg-surface-secondary/50 border border-border-light">
+          <p className="text-[11px] text-brand-slate/65 font-medium">Operaciones fallidas</p>
+          <p className="text-[18px] font-bold text-status-error mt-0.5">
+            {counts.failedOperationsCount + counts.failedFilesCount}
           </p>
         </div>
 
@@ -213,12 +325,89 @@ export default function SyncStatusPanel() {
         </div>
 
         <div className="p-3 rounded-lg bg-surface-secondary/50 border border-border-light">
-          <p className="text-[11px] text-brand-slate/65 font-medium">Con error / detenidos</p>
-          <p className="text-[18px] font-bold text-status-error mt-0.5">
-            {counts.failedOperationsCount + counts.failedFilesCount}
+          <p className="text-[11px] text-brand-slate/65 font-medium flex items-center gap-1">
+            <FileImage size={12} /> Archivos pendientes
+          </p>
+          <p className="text-[18px] font-bold text-brand-slate mt-0.5">
+            {counts.pendingFilesCount}
           </p>
         </div>
       </div>
+
+      {/* Indicador de datos disponibles localmente en IndexedDB y estado PWA */}
+      {inventory && (
+        <div className="p-3.5 rounded-lg bg-surface-app/45 border border-border-light space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h4 className="text-[12px] font-bold text-brand-forest uppercase tracking-wider flex items-center gap-1.5">
+              <HardDrive size={14} className="text-brand-primary" />
+              Datos Disponibles Localmente ({inventory.totalLocalRecords})
+            </h4>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                  inventory.isStoragePersisted
+                    ? 'bg-status-success/15 text-status-success'
+                    : 'bg-brand-slate/10 text-brand-slate/75'
+                }`}
+              >
+                <ShieldCheck size={11} />
+                {inventory.isStoragePersisted ? 'Persistencia protegida' : 'IndexedDB activo'}
+              </span>
+              {offlineReady && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-brand-primary/10 text-brand-primary">
+                  App lista offline{swVersion ? ` · ${swVersion}` : ''}
+                </span>
+              )}
+              {updateAvailable && (
+                <button
+                  type="button"
+                  onClick={() => applyUpdate(false)}
+                  className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-brand-primary text-white hover:bg-brand-dark"
+                >
+                  Aplicar actualización PWA
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-[11px] text-brand-slate/80">
+            <span className="px-2 py-1 rounded bg-surface-white border border-border-light">
+              Bovinos: <strong>{inventory.counts.cattle}</strong>
+            </span>
+            <span className="px-2 py-1 rounded bg-surface-white border border-border-light">
+              Potreros: <strong>{inventory.counts.lots}</strong>
+            </span>
+            <span className="px-2 py-1 rounded bg-surface-white border border-border-light">
+              Pesajes: <strong>{inventory.counts.weighings}</strong>
+            </span>
+            <span className="px-2 py-1 rounded bg-surface-white border border-border-light">
+              Movimientos: <strong>{inventory.counts.movements}</strong>
+            </span>
+            <span className="px-2 py-1 rounded bg-surface-white border border-border-light">
+              Alimentación: <strong>{inventory.counts.feedingRecords}</strong>
+            </span>
+            <span className="px-2 py-1 rounded bg-surface-white border border-border-light">
+              Salud / Trat.:{' '}
+              <strong>
+                {inventory.counts.healthRecords + inventory.counts.treatments}
+              </strong>
+            </span>
+            <span className="px-2 py-1 rounded bg-surface-white border border-border-light">
+              Reproducción: <strong>{inventory.counts.reproductionRecords}</strong>
+            </span>
+            <span className="px-2 py-1 rounded bg-surface-white border border-border-light">
+              Alertas: <strong>{inventory.counts.alerts}</strong>
+            </span>
+          </div>
+
+          {inventory.storageWarning && (
+            <p className="text-[11px] font-semibold text-status-danger">
+              Advertencia: el almacenamiento local supera el {inventory.storageUsagePercentage}% de
+              la cuota del navegador.
+            </p>
+          )}
+        </div>
+      )}
 
       {(!availability.pushDisponible || !availability.pullDisponible) && (
         <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-[12px] text-brand-slate">
@@ -267,7 +456,7 @@ export default function SyncStatusPanel() {
         ) : (
           <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
             {pendingOps.map((op) => {
-              const isValidationOrStopped = op.estado === 'fallido' && op.proximoIntento === null;
+              const isRetryableFailed = op.estado === 'fallido';
               return (
                 <div
                   key={op.idOperacion}
@@ -278,6 +467,12 @@ export default function SyncStatusPanel() {
                     <div className="min-w-0">
                       <p className="font-semibold text-brand-slate uppercase text-[11px]">
                         {op.tipoOperacion} : {op.entidad}
+                      </p>
+                      <p
+                        className="text-[10px] font-mono text-brand-slate/55"
+                        title={`ID Operación: ${op.idOperacion}`}
+                      >
+                        Op: {op.idOperacion.slice(0, 8)}… · {new Date(op.fechaCreacion).toLocaleString()}
                       </p>
                       <p className="text-[11px] text-brand-slate/65 break-words">
                         Intentos: {op.intentos}
@@ -292,20 +487,32 @@ export default function SyncStatusPanel() {
                   </div>
 
                   <div className="flex items-center gap-2 shrink-0">
-                    {isValidationOrStopped && (
-                      <button
-                        type="button"
-                        onClick={() => void handleManualRetryOp(op.idOperacion)}
-                        disabled={retryingOpId === op.idOperacion}
-                        className="inline-flex items-center gap-1 px-2 py-1 rounded border border-border-light bg-surface-white hover:bg-surface-secondary text-[11px] font-semibold text-brand-slate disabled:opacity-50"
-                        title="Reintentar operación con el mismo idOperacion"
-                      >
-                        <RotateCcw
-                          size={12}
-                          className={retryingOpId === op.idOperacion ? 'animate-spin' : ''}
-                        />
-                        Reintentar
-                      </button>
+                    {isRetryableFailed && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => void handleManualRetryOp(op.idOperacion)}
+                          disabled={retryingOpId === op.idOperacion || discardingOpId === op.idOperacion || !isOnline}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded border border-border-light bg-surface-white hover:bg-surface-secondary text-[11px] font-semibold text-brand-slate disabled:opacity-50 cursor-pointer"
+                          title="Reintentar operación con el mismo idOperacion"
+                        >
+                          <RotateCcw
+                            size={12}
+                            className={retryingOpId === op.idOperacion ? 'animate-spin' : ''}
+                          />
+                          Reintentar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleDiscardOp(op.idOperacion)}
+                          disabled={discardingOpId === op.idOperacion || retryingOpId === op.idOperacion}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded border border-status-error/30 bg-status-error/5 hover:bg-status-error/15 text-[11px] font-semibold text-status-error disabled:opacity-50 cursor-pointer"
+                          title="Descartar operación fallida de la cola local"
+                        >
+                          <Trash2 size={12} />
+                          Descartar
+                        </button>
+                      </>
                     )}
                     <span
                       className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${STATE_BADGE_CLASSES[op.estado]}`}
