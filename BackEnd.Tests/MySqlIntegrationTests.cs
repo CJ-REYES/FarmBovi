@@ -300,16 +300,13 @@ public sealed class MySqlIntegrationTests
             }
 
             // 2. Insertar datos reales previos manteniendo relaciones coherentes
+            // (en este punto la tabla `usuario` aún no tiene la columna `CreadoEn`)
             await using (var seedDb = MySqlTestHelper.CreateContext(connStr))
             {
-                seedDb.Usuarios.Add(new Usuario
-                {
-                    Id = userId,
-                    Nombre = "Roberto Legacy",
-                    Correo = "legacy@farmbovi.local",
-                    Contrasena = "hash_legacy",
-                    Estado = "Activo"
-                });
+                await seedDb.Database.ExecuteSqlRawAsync(
+                    "INSERT INTO `usuario` (`Id`, `Nombre`, `Correo`, `Contrasena`, `Estado`) VALUES ({0}, {1}, {2}, {3}, {4});",
+                    userId, "Roberto Legacy", "legacy@farmbovi.local", "hash_legacy", "Activo");
+
                 seedDb.Ranchos.Add(new Rancho
                 {
                     IdRancho = ranchoId,

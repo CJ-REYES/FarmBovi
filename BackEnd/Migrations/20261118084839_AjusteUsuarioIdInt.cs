@@ -68,6 +68,21 @@ namespace FarmBovi.Api.Migrations
                            AND tc.constraint_name = kcu.constraint_name
                         WHERE tc.constraint_schema = DATABASE()
                           AND tc.constraint_type = 'FOREIGN KEY'
+                          AND tc.table_name = 'GenealogiaAnimal'
+                          AND tc.constraint_name = 'FK_GenealogiaAnimal_Usuario_IdAutor'
+                          AND LOWER(kcu.referenced_table_name) = 'usuario'
+                    ) THEN
+                        ALTER TABLE `GenealogiaAnimal` DROP FOREIGN KEY `FK_GenealogiaAnimal_Usuario_IdAutor`;
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints tc
+                        INNER JOIN information_schema.key_column_usage kcu
+                            ON tc.constraint_schema = kcu.constraint_schema
+                           AND tc.table_name = kcu.table_name
+                           AND tc.constraint_name = kcu.constraint_name
+                        WHERE tc.constraint_schema = DATABASE()
+                          AND tc.constraint_type = 'FOREIGN KEY'
                           AND tc.table_name = 'Lote'
                           AND LOWER(kcu.referenced_table_name) = 'usuario'
                     ) THEN
@@ -372,6 +387,14 @@ namespace FarmBovi.Api.Migrations
                 onDelete: ReferentialAction.Restrict);
 
             migrationBuilder.AddForeignKey(
+                name: "FK_GenealogiaAnimal_Usuario_IdAutor",
+                table: "GenealogiaAnimal",
+                column: "IdAutor",
+                principalTable: "usuario",
+                principalColumn: "Id",
+                onDelete: ReferentialAction.Restrict);
+
+            migrationBuilder.AddForeignKey(
                 name: "FK_Lote_Usuario_IdAutor",
                 table: "Lote",
                 column: "IdAutor",
@@ -442,6 +465,7 @@ namespace FarmBovi.Api.Migrations
             migrationBuilder.DropForeignKey(name: "FK_Alimentacion_Usuario_IdAutor", table: "Alimentacion");
             migrationBuilder.DropForeignKey(name: "FK_Animal_Usuario_IdAutor", table: "Animal");
             migrationBuilder.DropForeignKey(name: "FK_EventoSanitario_Usuario_IdAutor", table: "EventoSanitario");
+            migrationBuilder.DropForeignKey(name: "FK_GenealogiaAnimal_Usuario_IdAutor", table: "GenealogiaAnimal");
             migrationBuilder.DropForeignKey(name: "FK_Lote_Usuario_IdAutor", table: "Lote");
             migrationBuilder.DropForeignKey(name: "FK_MovimientoAnimal_Usuario_IdAutor", table: "MovimientoAnimal");
             migrationBuilder.DropForeignKey(name: "FK_Rancho_Usuario_IdAutor", table: "Rancho");
