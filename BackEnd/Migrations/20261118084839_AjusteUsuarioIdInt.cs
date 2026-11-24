@@ -18,67 +18,165 @@ namespace FarmBovi.Api.Migrations
             migrationBuilder.Sql(@"
                 CREATE PROCEDURE `_sp_drop_fks_usuario_seguro`()
                 BEGIN
-                    DECLARE done INT DEFAULT FALSE;
-                    DECLARE v_table_name VARCHAR(128);
-                    DECLARE v_constraint_name VARCHAR(128);
-                    DECLARE cur CURSOR FOR
-                        SELECT tc.TABLE_NAME, tc.CONSTRAINT_NAME
-                        FROM information_schema.TABLE_CONSTRAINTS tc
-                        INNER JOIN information_schema.KEY_COLUMN_USAGE kcu
-                            ON tc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA
-                           AND tc.TABLE_NAME = kcu.TABLE_NAME
-                           AND tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
-                        WHERE tc.CONSTRAINT_SCHEMA = DATABASE()
-                          AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
-                          AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
-                          AND LOWER(kcu.REFERENCED_TABLE_NAME) = 'usuario';
-                    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints tc
+                        INNER JOIN information_schema.key_column_usage kcu
+                            ON tc.constraint_schema = kcu.constraint_schema
+                           AND tc.table_name = kcu.table_name
+                           AND tc.constraint_name = kcu.constraint_name
+                        WHERE tc.constraint_schema = DATABASE()
+                          AND tc.constraint_type = 'FOREIGN KEY'
+                          AND tc.table_name = 'Alimentacion'
+                          AND LOWER(kcu.referenced_table_name) = 'usuario'
+                    ) THEN
+                        ALTER TABLE `Alimentacion` DROP FOREIGN KEY `FK_Alimentacion_Usuario_IdAutor`;
+                    END IF;
 
-                    OPEN cur;
-                    read_loop: LOOP
-                        FETCH cur INTO v_table_name, v_constraint_name;
-                        IF done THEN
-                            LEAVE read_loop;
-                        END IF;
-                        SET @sql = CONCAT(
-                            'ALTER TABLE `', REPLACE(v_table_name, '`', '``'),
-                            '` DROP FOREIGN KEY `', REPLACE(v_constraint_name, '`', '``'), '`;'
-                        );
-                        PREPARE stmt FROM @sql;
-                        EXECUTE stmt;
-                        DEALLOCATE PREPARE stmt;
-                    END LOOP;
-                    CLOSE cur;
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints tc
+                        INNER JOIN information_schema.key_column_usage kcu
+                            ON tc.constraint_schema = kcu.constraint_schema
+                           AND tc.table_name = kcu.table_name
+                           AND tc.constraint_name = kcu.constraint_name
+                        WHERE tc.constraint_schema = DATABASE()
+                          AND tc.constraint_type = 'FOREIGN KEY'
+                          AND tc.table_name = 'Animal'
+                          AND LOWER(kcu.referenced_table_name) = 'usuario'
+                    ) THEN
+                        ALTER TABLE `Animal` DROP FOREIGN KEY `FK_Animal_Usuario_IdAutor`;
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints tc
+                        INNER JOIN information_schema.key_column_usage kcu
+                            ON tc.constraint_schema = kcu.constraint_schema
+                           AND tc.table_name = kcu.table_name
+                           AND tc.constraint_name = kcu.constraint_name
+                        WHERE tc.constraint_schema = DATABASE()
+                          AND tc.constraint_type = 'FOREIGN KEY'
+                          AND tc.table_name = 'EventoSanitario'
+                          AND LOWER(kcu.referenced_table_name) = 'usuario'
+                    ) THEN
+                        ALTER TABLE `EventoSanitario` DROP FOREIGN KEY `FK_EventoSanitario_Usuario_IdAutor`;
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints tc
+                        INNER JOIN information_schema.key_column_usage kcu
+                            ON tc.constraint_schema = kcu.constraint_schema
+                           AND tc.table_name = kcu.table_name
+                           AND tc.constraint_name = kcu.constraint_name
+                        WHERE tc.constraint_schema = DATABASE()
+                          AND tc.constraint_type = 'FOREIGN KEY'
+                          AND tc.table_name = 'Lote'
+                          AND LOWER(kcu.referenced_table_name) = 'usuario'
+                    ) THEN
+                        ALTER TABLE `Lote` DROP FOREIGN KEY `FK_Lote_Usuario_IdAutor`;
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints tc
+                        INNER JOIN information_schema.key_column_usage kcu
+                            ON tc.constraint_schema = kcu.constraint_schema
+                           AND tc.table_name = kcu.table_name
+                           AND tc.constraint_name = kcu.constraint_name
+                        WHERE tc.constraint_schema = DATABASE()
+                          AND tc.constraint_type = 'FOREIGN KEY'
+                          AND tc.table_name = 'MovimientoAnimal'
+                          AND LOWER(kcu.referenced_table_name) = 'usuario'
+                    ) THEN
+                        ALTER TABLE `MovimientoAnimal` DROP FOREIGN KEY `FK_MovimientoAnimal_Usuario_IdAutor`;
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints tc
+                        INNER JOIN information_schema.key_column_usage kcu
+                            ON tc.constraint_schema = kcu.constraint_schema
+                           AND tc.table_name = kcu.table_name
+                           AND tc.constraint_name = kcu.constraint_name
+                        WHERE tc.constraint_schema = DATABASE()
+                          AND tc.constraint_type = 'FOREIGN KEY'
+                          AND tc.table_name = 'Rancho'
+                          AND LOWER(kcu.referenced_table_name) = 'usuario'
+                    ) THEN
+                        ALTER TABLE `Rancho` DROP FOREIGN KEY `FK_Rancho_Usuario_IdAutor`;
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints tc
+                        INNER JOIN information_schema.key_column_usage kcu
+                            ON tc.constraint_schema = kcu.constraint_schema
+                           AND tc.table_name = kcu.table_name
+                           AND tc.constraint_name = kcu.constraint_name
+                        WHERE tc.constraint_schema = DATABASE()
+                          AND tc.constraint_type = 'FOREIGN KEY'
+                          AND tc.table_name = 'Recordatorio'
+                          AND tc.constraint_name = 'FK_Recordatorio_Usuario_IdAutor'
+                          AND LOWER(kcu.referenced_table_name) = 'usuario'
+                    ) THEN
+                        ALTER TABLE `Recordatorio` DROP FOREIGN KEY `FK_Recordatorio_Usuario_IdAutor`;
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints tc
+                        INNER JOIN information_schema.key_column_usage kcu
+                            ON tc.constraint_schema = kcu.constraint_schema
+                           AND tc.table_name = kcu.table_name
+                           AND tc.constraint_name = kcu.constraint_name
+                        WHERE tc.constraint_schema = DATABASE()
+                          AND tc.constraint_type = 'FOREIGN KEY'
+                          AND tc.table_name = 'Recordatorio'
+                          AND tc.constraint_name = 'FK_Recordatorio_Usuario_IdResponsable'
+                          AND LOWER(kcu.referenced_table_name) = 'usuario'
+                    ) THEN
+                        ALTER TABLE `Recordatorio` DROP FOREIGN KEY `FK_Recordatorio_Usuario_IdResponsable`;
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints tc
+                        INNER JOIN information_schema.key_column_usage kcu
+                            ON tc.constraint_schema = kcu.constraint_schema
+                           AND tc.table_name = kcu.table_name
+                           AND tc.constraint_name = kcu.constraint_name
+                        WHERE tc.constraint_schema = DATABASE()
+                          AND tc.constraint_type = 'FOREIGN KEY'
+                          AND tc.table_name = 'RegistroSyncServidor'
+                          AND LOWER(kcu.referenced_table_name) = 'usuario'
+                    ) THEN
+                        ALTER TABLE `RegistroSyncServidor` DROP FOREIGN KEY `FK_RegistroSyncServidor_Usuario_IdUsuario`;
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints tc
+                        INNER JOIN information_schema.key_column_usage kcu
+                            ON tc.constraint_schema = kcu.constraint_schema
+                           AND tc.table_name = kcu.table_name
+                           AND tc.constraint_name = kcu.constraint_name
+                        WHERE tc.constraint_schema = DATABASE()
+                          AND tc.constraint_type = 'FOREIGN KEY'
+                          AND tc.table_name = 'Tratamiento'
+                          AND LOWER(kcu.referenced_table_name) = 'usuario'
+                    ) THEN
+                        ALTER TABLE `Tratamiento` DROP FOREIGN KEY `FK_Tratamiento_Usuario_IdAutor`;
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints tc
+                        INNER JOIN information_schema.key_column_usage kcu
+                            ON tc.constraint_schema = kcu.constraint_schema
+                           AND tc.table_name = kcu.table_name
+                           AND tc.constraint_name = kcu.constraint_name
+                        WHERE tc.constraint_schema = DATABASE()
+                          AND tc.constraint_type = 'FOREIGN KEY'
+                          AND tc.table_name = 'UsuarioRancho'
+                          AND LOWER(kcu.referenced_table_name) = 'usuario'
+                    ) THEN
+                        ALTER TABLE `UsuarioRancho` DROP FOREIGN KEY `FK_UsuarioRancho_Usuario_IdUsuario`;
+                    END IF;
                 END;
             ");
             migrationBuilder.Sql("CALL `_sp_drop_fks_usuario_seguro`();");
             migrationBuilder.Sql("DROP PROCEDURE IF EXISTS `_sp_drop_fks_usuario_seguro`;");
-
-            // Soltar FK de GenealogiaAnimal si existe la tabla y la restricción
-            migrationBuilder.Sql(@"
-                DROP PROCEDURE IF EXISTS `_sp_drop_fk_genealogia`;
-            ");
-            migrationBuilder.Sql(@"
-                CREATE PROCEDURE `_sp_drop_fk_genealogia`()
-                BEGIN
-                    IF EXISTS (
-                        SELECT 1
-                        FROM information_schema.tables t
-                        INNER JOIN information_schema.table_constraints tc
-                            ON tc.table_schema = t.table_schema
-                           AND tc.table_name = t.table_name
-                        WHERE t.table_schema = DATABASE()
-                          AND t.table_name = 'GenealogiaAnimal'
-                          AND tc.constraint_name = 'FK_GenealogiaAnimal_Usuario_IdAutor'
-                          AND tc.constraint_type = 'FOREIGN KEY'
-                    ) THEN
-                        ALTER TABLE `GenealogiaAnimal` DROP FOREIGN KEY `FK_GenealogiaAnimal_Usuario_IdAutor`;
-                    END IF;
-                END;
-            ");
-            migrationBuilder.Sql("CALL `_sp_drop_fk_genealogia`();");
-            migrationBuilder.Sql("DROP PROCEDURE IF EXISTS `_sp_drop_fk_genealogia`;");
-
             // 2. Transformar tabla Usuario/usuario -> usuario (int Id AUTO_INCREMENT)
             migrationBuilder.Sql(@"
                 DROP TEMPORARY TABLE IF EXISTS `_tmp_usuario_map`;
