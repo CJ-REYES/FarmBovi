@@ -180,7 +180,20 @@ namespace FarmBovi.Api.Migrations
                         .HasMaxLength(40)
                         .HasColumnType("varchar(40)");
 
+                    b.Property<string>("Estado")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("varchar(30)");
+
+                    b.Property<string>("Extension")
+                        .IsRequired()
+                        .HasMaxLength(15)
+                        .HasColumnType("varchar(15)");
+
                     b.Property<DateTime>("FechaCaptura")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("FechaCarga")
                         .HasColumnType("datetime(6)");
 
                     b.Property<Guid?>("IdAnimal")
@@ -205,6 +218,11 @@ namespace FarmBovi.Api.Migrations
                         .HasMaxLength(255)
                         .HasColumnType("varchar(255)");
 
+                    b.Property<string>("ProveedorAlmacenamiento")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("varchar(40)");
+
                     b.Property<string>("RutaArchivo")
                         .IsRequired()
                         .HasMaxLength(500)
@@ -224,13 +242,22 @@ namespace FarmBovi.Api.Migrations
 
                     b.HasKey("IdArchivo");
 
+                    b.HasIndex("Estado");
+
                     b.HasIndex("FechaCaptura");
+
+                    b.HasIndex("FechaCarga");
 
                     b.HasIndex("IdAnimal");
 
                     b.HasIndex("IdAutor");
 
                     b.HasIndex("IdRancho");
+
+                    b.HasIndex("RutaArchivo")
+                        .IsUnique();
+
+                    b.HasIndex("IdRancho", "IdAnimal", "Estado");
 
                     b.ToTable("ArchivoMultimedia", (string)null);
                 });
@@ -568,6 +595,10 @@ namespace FarmBovi.Api.Migrations
                     b.Property<Guid>("IdPesaje")
                         .HasColumnType("char(36)");
 
+                    b.Property<decimal?>("ConfianzaModelo")
+                        .HasPrecision(5, 4)
+                        .HasColumnType("decimal(5,4)");
+
                     b.Property<DateTime>("CreadoEn")
                         .HasColumnType("datetime(6)");
 
@@ -585,7 +616,13 @@ namespace FarmBovi.Api.Migrations
                     b.Property<Guid>("IdAnimal")
                         .HasColumnType("char(36)");
 
+                    b.Property<Guid?>("IdArchivoMultimedia")
+                        .HasColumnType("char(36)");
+
                     b.Property<Guid>("IdAutor")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("IdSolicitud")
                         .HasColumnType("char(36)");
 
                     b.Property<string>("Observaciones")
@@ -606,6 +643,10 @@ namespace FarmBovi.Api.Migrations
                         .HasMaxLength(180)
                         .HasColumnType("varchar(180)");
 
+                    b.Property<string>("VersionModelo")
+                        .HasMaxLength(80)
+                        .HasColumnType("varchar(80)");
+
                     b.Property<long>("VersionRegistro")
                         .IsConcurrencyToken()
                         .HasColumnType("bigint");
@@ -616,7 +657,12 @@ namespace FarmBovi.Api.Migrations
 
                     b.HasIndex("IdAnimal");
 
+                    b.HasIndex("IdArchivoMultimedia");
+
                     b.HasIndex("IdAutor");
+
+                    b.HasIndex("IdSolicitud")
+                        .IsUnique();
 
                     b.ToTable("Pesaje", (string)null);
                 });
@@ -1122,6 +1168,11 @@ namespace FarmBovi.Api.Migrations
                         .HasForeignKey("IdAnimal")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.HasOne("FarmBovi.Api.Models.ArchivoMultimedia", null)
+                        .WithMany()
+                        .HasForeignKey("IdArchivoMultimedia")
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("FarmBovi.Api.Models.Usuario", null)
                         .WithMany()

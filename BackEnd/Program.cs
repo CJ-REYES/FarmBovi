@@ -2,6 +2,8 @@ using System.Security.Claims;
 using System.Text;
 using FarmBovi.Api.Data;
 using FarmBovi.Api.Services;
+using FarmBovi.Api.Services.BoviScale;
+using FarmBovi.Api.Services.Storage;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
@@ -103,7 +105,19 @@ builder.Services.AddAuthorization(options =>
 builder.Services.AddScoped<FarmDomainValidationService>();
 builder.Services.AddScoped<RanchAccessService>();
 builder.Services.AddScoped<GenealogiaService>();
+builder.Services.Configure<MediaStorageOptions>(builder.Configuration.GetSection(MediaStorageOptions.SectionName));
+builder.Services.AddSingleton<MediaFileValidationService>();
+builder.Services.AddSingleton<IMediaStorageProvider, LocalFileMediaStorageProvider>();
 builder.Services.AddSingleton<ProfilePhotoStorageService>();
+builder.Services.Configure<BoviScalePythonOptions>(builder.Configuration.GetSection(BoviScalePythonOptions.SectionName));
+builder.Services.AddSingleton<BoviScaleIdempotencyCoordinator>();
+builder.Services.AddHttpClient<IBoviScalePythonClient, BoviScalePythonClient>(client =>
+{
+    // El timeout efectivo se controla por solicitud con CancellationTokenSource vinculado;
+    // InfiniteTimeSpan evita colisiones con cambios dinámicos de BoviScalePythonOptions.
+    client.Timeout = Timeout.InfiniteTimeSpan;
+});
+builder.Services.AddScoped<BoviScaleEstimationService>();
 
 var connectionString = builder.Configuration.GetConnectionString("FarmBovi");
 if (string.IsNullOrWhiteSpace(connectionString))

@@ -421,7 +421,7 @@ public sealed class RanchProtectionAndMigrationsTests : IAsyncLifetime
     [Fact]
     public void Migraciones_ConservanHistorialCompletoGuidSinCambiosPendientesYLockValido()
     {
-        // 1. Verificar que el historial incremental completo de 7 migraciones está intacto (sin borrados ni migraciones int)
+        // 1. Verificar que el historial incremental completo de 9 migraciones está intacto (sin borrados ni migraciones int)
         var migrationTypes = typeof(FarmDbContext).Assembly.GetTypes()
             .Where(t => typeof(Migration).IsAssignableFrom(t) && !t.IsAbstract)
             .Select(t => t.Name)
@@ -431,11 +431,13 @@ public sealed class RanchProtectionAndMigrationsTests : IAsyncLifetime
         Assert.Equal(
             [
                 "AddArchivoMultimedia",
+                "AddBoviScaleMetadataToPesaje",
                 "AddEventoReproductivo",
                 "AddGenealogiaAnimal",
                 "AddPesaje",
                 "AddSincronizacionYAuditoriaModels",
                 "AddUsuarioPerfilYConfiguracion",
+                "EnhanceArchivoMultimediaMetadata",
                 "InitialMySqlModels"
             ],
             migrationTypes);

@@ -4,7 +4,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace FarmBovi.Api.Models;
 
 /// <summary>
-/// Registro de pesaje de báscula oficial (o estimado confirmado) asociado a un bovino.
+/// Registro de pesaje de báscula oficial o estimado mediante BoviScale IA asociado a un bovino.
 /// Alineado a la Regla 14 (<see cref="Services.FarmDomainValidationService.ValidatePesaje"/>).
 /// </summary>
 [Table("Pesaje")]
@@ -36,6 +36,28 @@ public sealed class Pesaje
     [Required]
     [MaxLength(30)]
     public string OrigenPesaje { get; set; } = "manual";
+
+    /// <summary>
+    /// Identificador único de solicitud para garantizar idempotencia en integraciones (ej. BoviScale IA).
+    /// Nulo para pesajes manuales tradicionales.
+    /// </summary>
+    public Guid? IdSolicitud { get; set; }
+
+    /// <summary>
+    /// Referencia opcional a la fotografía (<see cref="ArchivoMultimedia"/>) utilizada para estimar el peso.
+    /// </summary>
+    public Guid? IdArchivoMultimedia { get; set; }
+
+    /// <summary>
+    /// Confianza reportada por el modelo de estimación (escala 0.0000 a 1.0000), cuando aplica.
+    /// </summary>
+    public decimal? ConfianzaModelo { get; set; }
+
+    /// <summary>
+    /// Versión del modelo de IA externo que produjo la estimación, cuando aplica.
+    /// </summary>
+    [MaxLength(80)]
+    public string? VersionModelo { get; set; }
 
     [Required]
     public Guid IdAutor { get; set; }
