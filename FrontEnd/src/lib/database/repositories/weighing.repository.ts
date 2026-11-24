@@ -3,6 +3,7 @@ import { computeStableNegativeId } from '../migrations';
 import { BaseTransactionalRepository } from './base-transactional.repository';
 import { OutboxRepository } from './outbox.repository';
 import type { LocalWeighing } from '../schema';
+import type { EstimacionPesoBoviScaleDto } from '../../../types/weighing';
 
 const inFlightConfirmationJobs = new Set<string>();
 
@@ -60,6 +61,59 @@ class WeighingTransactionalRepository extends BaseTransactionalRepository<LocalW
 
   async getByCattleId(cattleId: string): Promise<LocalWeighing[]> {
     return await this.getAllWithOptions({ cattleId, includeDeleted: false, order: 'desc' });
+  }
+
+  /**
+   * Registra o actualiza de forma idempotente en IndexedDB un pesaje ya validado y persistido
+   * en el backend .NET a partir de BoviScale IA, conservando intactos los pesajes anteriores
+   * del bovino y evitando duplicados por `idPesaje` o `idSolicitud`.
+   */
+  async upsertConfirmedFromBoviScale(dto: EstimacionPesoBoviScaleDto): Promise<LocalWeighing> {
+    if (!Number.isFinite(dto.pesoEstimadoKg) || dto.pesoEstimadoKg <= 0) {
+      throw new Error('El peso confirmado desde BoviScale debe ser mayor a 0 kg.');
+    }
+
+    return await db.transaction('rw', [db.weighings], async () => {
+      const now = new Date().toISOString();
+
+      // Protección idempotente contra respuestas duplicadas por idPesaje o idSolicitud
+      const existingById = await db.weighings.get(dto.idPesaje);
+      const existingByRequest =
+        !existingById && dto.idSolicitud
+          ? await db.weighings
+              .where('sourceAnalysisJobId')
+              .equals(dto.idSolicitud)
+              .filter((w) => !w.deletedAt)
+              .first()
+          : undefined;
+
+      const existing = existingById ?? existingByRequest;
+      const targetId = existing?.id ?? dto.idPesaje;
+
+      const record: LocalWeighing = {
+        id: targetId,
+        localNumericId: existing?.localNumericId ?? computeStableNegativeId(targetId),
+        remoteId: dto.idPesaje,
+        ranchId: dto.idRancho,
+        cattleId: dto.idAnimal,
+        peso: Number(dto.pesoEstimadoKg.toFixed(3)),
+        fecha: dto.fechaPesaje || now,
+        fuenteBascula: dto.fuenteBascula || 'BoviScale IA',
+        responsable: dto.responsable || 'Operador de campo',
+        observaciones: dto.observaciones ?? undefined,
+        origenPesaje: 'boviscale_ia',
+        sourceAnalysisJobId: dto.idSolicitud || existing?.sourceAnalysisJobId || null,
+        sourceMediaId: dto.idArchivoMultimedia ?? existing?.sourceMediaId ?? null,
+        createdAt: dto.creadoEn || existing?.createdAt || now,
+        updatedAt: now,
+        syncStatus: 'synced',
+        serverVersion: dto.versionRegistro ?? existing?.serverVersion ?? 1,
+        deletedAt: null
+      };
+
+      await db.weighings.put(record);
+      return record;
+    });
   }
 
   /**

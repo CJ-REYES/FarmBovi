@@ -39,6 +39,10 @@ import type {
 } from '../types/reproduction';
 import type { BackendArchivoMultimediaDto } from '../types/media';
 import type {
+  EstimacionPesoBoviScaleDto,
+  SolicitarEstimacionPesoPayload
+} from '../types/weighing';
+import type {
   BackendRanchoPayload,
   ChangePasswordRequestDto,
   CreateUsuarioRanchoPayload,
@@ -67,6 +71,7 @@ export const BACKEND_ROUTES = {
   AUTH_SESSION: '/auth/session',
   AUTH_LOGOUT: '/auth/logout',
   MEDIA: '/media',
+  BOVISCALE: '/boviscale',
   ANIMALES: '/animales',
   GENEALOGIA: '/genealogia',
   LOTES: '/lotes',
@@ -863,11 +868,17 @@ export const remindersApi = {
 
 export const mediaApi = {
   async list(options?: {
+    idRancho?: string;
     idAnimal?: string;
+    tipo?: string;
+    estado?: string;
     incluirEliminados?: boolean;
   }): Promise<BackendArchivoMultimediaDto[]> {
     const params = new URLSearchParams();
+    if (options?.idRancho) params.set('idRancho', options.idRancho);
     if (options?.idAnimal) params.set('idAnimal', options.idAnimal);
+    if (options?.tipo) params.set('tipo', options.tipo);
+    if (options?.estado) params.set('estado', options.estado);
     if (options?.incluirEliminados) params.set('incluirEliminados', 'true');
     const qs = params.toString();
     const res = await apiRequest<BackendArchivoMultimediaDto[]>(
@@ -875,6 +886,14 @@ export const mediaApi = {
       { method: 'GET' }
     );
     return Array.isArray(res.data) ? res.data : [];
+  },
+
+  async getById(id: string): Promise<BackendArchivoMultimediaDto> {
+    const res = await apiRequest<BackendArchivoMultimediaDto>(
+      `${BACKEND_ROUTES.MEDIA}/archivos/${id}`,
+      { method: 'GET' }
+    );
+    return res.data;
   },
 
   async upload(formData: FormData): Promise<BackendArchivoMultimediaDto> {
@@ -891,6 +910,33 @@ export const mediaApi = {
       method: 'DELETE',
       allowEmptyResponse: true
     });
+  }
+};
+
+export const boviScaleApi = {
+  async requestEstimation(
+    input: SolicitarEstimacionPesoPayload
+  ): Promise<EstimacionPesoBoviScaleDto> {
+    const res = await apiRequest<EstimacionPesoBoviScaleDto>(
+      `${BACKEND_ROUTES.BOVISCALE}/estimaciones`,
+      {
+        method: 'POST',
+        body: input,
+        headers: {
+          'X-Idempotency-Key': input.idSolicitud
+        },
+        timeoutMs: 40000
+      }
+    );
+    return res.data;
+  },
+
+  async getEstimationByRequestId(idSolicitud: string): Promise<EstimacionPesoBoviScaleDto> {
+    const res = await apiRequest<EstimacionPesoBoviScaleDto>(
+      `${BACKEND_ROUTES.BOVISCALE}/estimaciones/${encodeURIComponent(idSolicitud)}`,
+      { method: 'GET' }
+    );
+    return res.data;
   }
 };
 

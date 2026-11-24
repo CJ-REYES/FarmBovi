@@ -168,11 +168,12 @@ export default function WeighingPage() {
       const relevantPullApplied =
         Boolean(nextCycleFinishedAt && nextCycleFinishedAt !== previousCycleFinishedAt) &&
         Boolean(
-          nextCycle?.pull.some(
-            (item) =>
-              (item.entidad === 'weighings' || item.entidad === 'cattle') &&
-              (item.appliedCount > 0 || item.deletedCount > 0 || item.conflictCount > 0)
-          )
+          nextCycle?.hasDataChanges ||
+            nextCycle?.pull.some(
+              (item) =>
+                (item.entidad === 'weighings' || item.entidad === 'cattle') &&
+                (item.appliedCount > 0 || item.deletedCount > 0 || item.conflictCount > 0)
+            )
         );
 
       if (fullSyncAdvanced || relevantPullApplied) {
@@ -344,10 +345,21 @@ export default function WeighingPage() {
     },
     {
       key: 'fuente',
-      header: 'Báscula / Responsable',
+      header: 'Báscula / Origen',
       renderCell: (w) => (
-        <div className="text-[12px]">
-          <p className="font-medium text-brand-slate truncate max-w-[200px]">{w.fuenteBascula}</p>
+        <div className="text-[12px] space-y-0.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <p className="font-medium text-brand-slate truncate max-w-[180px]">{w.fuenteBascula}</p>
+            <span
+              className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
+                w.origenPesaje === 'boviscale_ia'
+                  ? 'bg-brand-primary/15 text-brand-primary'
+                  : 'bg-surface-secondary text-brand-slate/75'
+              }`}
+            >
+              {w.origenPesaje === 'boviscale_ia' ? 'BoviScale IA' : 'Manual'}
+            </span>
+          </div>
           <p className="text-[11px] text-brand-slate/60 truncate max-w-[200px]">{w.responsable}</p>
         </div>
       )

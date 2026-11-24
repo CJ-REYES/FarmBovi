@@ -75,3 +75,54 @@ export interface AnimalLastWeightSummary {
   gdpKgDay: number | null;
   totalWeighings: number;
 }
+
+/**
+ * Contrato JSON de solicitud hacia `POST /api/boviscale/estimaciones` (.NET 10).
+ */
+export interface SolicitarEstimacionPesoPayload {
+  idSolicitud: string;
+  idAnimal: string;
+  idRancho?: string;
+  idArchivo: string;
+  fechaPesaje?: string;
+  responsable?: string;
+  anguloCaptura?: string;
+  distanciaEstimadaCm?: number;
+  observaciones?: string;
+}
+
+/**
+ * Contrato JSON de respuesta desde `POST /api/boviscale/estimaciones` (.NET 10).
+ */
+export interface EstimacionPesoBoviScaleDto {
+  idPesaje: string;
+  idSolicitud: string;
+  idRancho: string;
+  idAnimal: string;
+  idArchivoMultimedia: string | null;
+  pesoEstimadoKg: number;
+  unidadPeso: string;
+  confianzaModelo: number | null;
+  versionModelo: string | null;
+  observaciones: string | null;
+  origenPesaje: string;
+  fuenteBascula: string;
+  responsable: string;
+  fechaPesaje: string;
+  creadoEn: string;
+  versionRegistro: number;
+  duplicadoIgnorado: boolean;
+  tiempoProcesamientoMs: number | null;
+}
+
+/**
+ * Estados visibles del flujo de estimación BoviScale en la interfaz de usuario.
+ */
+export type BoviScaleEstimationStep =
+  | 'fotografia_pendiente'
+  | 'fotografia_validada'
+  | 'solicitud_enviada'
+  | 'procesando_estimacion'
+  | 'estimacion_recibida'
+  | 'pesaje_registrado'
+  | 'error_procesamiento';
