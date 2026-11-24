@@ -136,4 +136,10 @@ public sealed class RanchAccessService(FarmDbContext db)
          join a in db.Animales.AsNoTracking() on e.IdAnimal equals a.IdAnimal
          where e.IdEventoReproductivo == id
          select (Guid?)a.IdRancho).FirstOrDefaultAsync(ct);
+
+    public Task<Guid?> RanchOfArchivoMultimediaAsync(Guid id, CancellationToken ct) =>
+        db.ArchivosMultimedia.AsNoTracking()
+            .Where(m => m.IdArchivo == id)
+            .Select(m => (Guid?)m.IdRancho)
+            .FirstOrDefaultAsync(ct);
 }

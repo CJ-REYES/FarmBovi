@@ -17,7 +17,8 @@ public enum RanchResource
     Alimentacion,
     MovimientoAnimal,
     UsuarioRancho,
-    Pesaje
+    Pesaje,
+    ArchivoMultimedia
 }
 
 /// <summary>
@@ -140,6 +141,7 @@ public sealed class RanchScopeFilter(RanchScopeAttribute options, RanchAccessSer
         RanchResource.MovimientoAnimal => access.RanchOfMovimientoAsync(id, ct),
         RanchResource.UsuarioRancho => access.RanchOfUsuarioRanchoAsync(id, ct),
         RanchResource.Pesaje => access.RanchOfPesajeAsync(id, ct),
+        RanchResource.ArchivoMultimedia => access.RanchOfArchivoMultimediaAsync(id, ct),
         _ => Task.FromResult<Guid?>(Guid.Empty)
     };
 
@@ -169,5 +171,6 @@ public sealed class RanchScopeFilter(RanchScopeAttribute options, RanchAccessSer
         await AddAsync("IdMovimiento", access.RanchOfMovimientoAsync);
         await AddAsync("IdUsuarioRancho", access.RanchOfUsuarioRanchoAsync);
         await AddAsync("IdPesaje", access.RanchOfPesajeAsync);
+        await AddAsync("IdArchivo", access.RanchOfArchivoMultimediaAsync);
     }
 }
