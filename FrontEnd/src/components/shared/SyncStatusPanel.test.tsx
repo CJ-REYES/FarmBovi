@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { db } from '../../lib/database/db';
 import { OutboxRepository } from '../../lib/database/repositories/outbox.repository';
+import { SyncMetadataRepository } from '../../lib/database/repositories/sync-metadata.repository';
 import { SyncScheduler } from '../../services/sync/sync-scheduler';
 import SyncStatusPanel from './SyncStatusPanel';
 
@@ -15,6 +16,7 @@ describe('SyncStatusPanel (FE-05) — Estado de sincronización, métricas y rei
     await db.outbox.clear();
     await db.syncConflicts.clear();
     await db.syncCheckpoints.clear();
+    await db.syncMetadata.clear();
     await db.media.clear();
     await db.cattle.clear();
   });
@@ -77,5 +79,22 @@ describe('SyncStatusPanel (FE-05) — Estado de sincronización, métricas y rei
     await waitFor(() => {
       expect(retrySpy).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it('muestra el registro persistente de errores por entidad desde syncMetadata', async () => {
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+    await SyncMetadataRepository.recordError('reproductionRecords', {
+      phase: 'pull',
+      message: 'Error 503 descargando eventos reproductivos',
+      code: 503,
+      ranchId: RANCH_ID
+    });
+
+    await SyncScheduler.refreshState(true);
+    render(<SyncStatusPanel />);
+
+    expect(await screen.findByText(/Errores Registrados por Entidad \(1\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/Error 503 descargando eventos reproductivos/i)).toBeInTheDocument();
+    expect(screen.getByText(/HTTP 503/i)).toBeInTheDocument();
   });
 });

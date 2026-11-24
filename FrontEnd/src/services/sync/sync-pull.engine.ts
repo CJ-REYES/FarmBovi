@@ -2,6 +2,7 @@ import type { Table, UpdateSpec } from 'dexie';
 import { ApiError } from '../../lib/api';
 import { db } from '../../lib/database/db';
 import { CheckpointRepository } from '../../lib/database/repositories/checkpoint.repository';
+import { SyncMetadataRepository } from '../../lib/database/repositories/sync-metadata.repository';
 import type {
   BaseLocalEntity,
   ConflictType,
@@ -18,12 +19,14 @@ export type PullEntityStatus =
   | 'completed'
   | 'already_running'
   | 'offline'
+  | 'auth_required'
   | 'endpoint_not_configured'
   | 'pagination_stalled'
   | 'transaction_failed';
 
 export interface PullEntitySummary {
   entidad: SyncEntityName;
+  ranchId?: string;
   status: PullEntityStatus;
   pagesProcessed: number;
   appliedCount: number;
@@ -33,6 +36,7 @@ export interface PullEntitySummary {
   retriesPerformed?: number;
   previousCursor: string | null;
   currentCursor: string | null;
+  httpStatus?: number;
   errorMessage?: string;
 }
 
@@ -103,6 +107,7 @@ export const SyncPullEngine = {
    */
   async applyBatchAtomically(params: {
     entidad: SyncEntityName;
+    ranchId?: string;
     response: SyncPullResponseDto<Record<string, unknown>>;
     currentCheckpoint?: LocalSyncCheckpoint;
   }): Promise<BatchApplyMetrics> {
@@ -209,9 +214,10 @@ export const SyncPullEngine = {
         appliedCount++;
       }
 
-      // Paso final dentro de la misma transacción: avanzar el cursor opaco
+      // Paso final dentro de la misma transacción: avanzar el cursor opaco por rancho
       const nextCheckpoint = CheckpointRepository.buildNextCheckpoint({
         entidad: params.entidad,
+        ranchId: params.ranchId,
         currentCheckpoint: params.currentCheckpoint,
         siguienteCursorOpaco: params.response.siguienteCursorOpaco,
         fechaServidor: params.response.fechaServidor
@@ -421,10 +427,14 @@ export const SyncPullEngine = {
     options: PullOptions = {}
   ): Promise<PullEntitySummary> {
     const initialCheckpoint = await CheckpointRepository.getByEntity(entidad);
-    const previousCursor = initialCheckpoint?.cursorOpaco ?? null;
+    const previousCursor = CheckpointRepository.extractCursorForRanch(
+      initialCheckpoint,
+      options.ranchId
+    );
 
     const summary: PullEntitySummary = {
       entidad,
+      ranchId: options.ranchId,
       status: 'completed',
       pagesProcessed: 0,
       appliedCount: 0,
@@ -461,7 +471,7 @@ export const SyncPullEngine = {
 
     try {
       let activeCheckpoint = initialCheckpoint;
-      let requestCursor = activeCheckpoint?.cursorOpaco ?? null;
+      let requestCursor = previousCursor;
       let hasMorePages = true;
 
       while (hasMorePages && summary.pagesProcessed < maxPagesPerPass) {
@@ -502,9 +512,10 @@ export const SyncPullEngine = {
           }
         }
 
-        // 2. Aplicar cambios y actualizar checkpoint en la misma transacción Dexie
+        // 2. Aplicar cambios y actualizar checkpoint por rancho en la misma transacción Dexie
         const batchMetrics = await this.applyBatchAtomically({
           entidad,
+          ranchId: options.ranchId,
           response,
           currentCheckpoint: activeCheckpoint
         });
@@ -516,7 +527,10 @@ export const SyncPullEngine = {
         summary.skippedPendingCount += batchMetrics.skippedPendingCount;
 
         activeCheckpoint = batchMetrics.committedCheckpoint;
-        const nextCursor = activeCheckpoint.cursorOpaco;
+        const nextCursor = CheckpointRepository.extractCursorForRanch(
+          activeCheckpoint,
+          options.ranchId
+        );
         summary.currentCursor = nextCursor;
 
         // Protección contra paginación estancada del servidor
@@ -524,6 +538,11 @@ export const SyncPullEngine = {
           summary.status = 'pagination_stalled';
           summary.errorMessage =
             'El servidor indicó hayMasPaginas=true sin avanzar siguienteCursorOpaco.';
+          await SyncMetadataRepository.recordError(entidad, {
+            phase: 'pull',
+            message: summary.errorMessage,
+            ranchId: options.ranchId
+          });
           break;
         }
 
@@ -531,14 +550,72 @@ export const SyncPullEngine = {
         hasMorePages = response.hayMasPaginas;
       }
 
+      if (summary.status === 'completed') {
+        await SyncMetadataRepository.recordSuccess(entidad, 'pull', options.ranchId);
+      }
+
       return summary;
     } catch (err) {
-      // Si la transacción falló, activeCheckpoint conserva el último cursor comprometido
+      // Si la transacción o la red falló, activeCheckpoint conserva el último cursor comprometido
       const persistedAfterFailure = await CheckpointRepository.getByEntity(entidad);
-      summary.status = 'transaction_failed';
-      summary.currentCursor = persistedAfterFailure?.cursorOpaco ?? previousCursor;
-      summary.errorMessage =
+      summary.currentCursor =
+        CheckpointRepository.extractCursorForRanch(persistedAfterFailure, options.ranchId) ??
+        previousCursor;
+
+      const message =
         err instanceof Error ? err.message : 'Error al procesar lote incremental.';
+      summary.errorMessage = message;
+
+      if (err instanceof ApiError) {
+        summary.httpStatus = err.status;
+        if (err.status === 401) {
+          summary.status = 'auth_required';
+          await SyncMetadataRepository.recordError(entidad, {
+            phase: 'pull',
+            message:
+              'Sesión expirada (401). Inicia sesión nuevamente para descargar cambios.',
+            code: 401,
+            ranchId: options.ranchId
+          });
+          return summary;
+        }
+        if (err.status === 0 || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+          summary.status = 'offline';
+          await SyncMetadataRepository.recordError(entidad, {
+            phase: 'pull',
+            message: 'Conexión perdida durante la descarga incremental.',
+            code: 0,
+            ranchId: options.ranchId
+          });
+          return summary;
+        }
+        summary.status = 'transaction_failed';
+        await SyncMetadataRepository.recordError(entidad, {
+          phase: 'pull',
+          message,
+          code: err.status,
+          ranchId: options.ranchId
+        });
+        return summary;
+      }
+
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        summary.status = 'offline';
+        await SyncMetadataRepository.recordError(entidad, {
+          phase: 'pull',
+          message: 'Conexión perdida durante la descarga incremental.',
+          code: 0,
+          ranchId: options.ranchId
+        });
+        return summary;
+      }
+
+      summary.status = 'transaction_failed';
+      await SyncMetadataRepository.recordError(entidad, {
+        phase: 'pull',
+        message,
+        ranchId: options.ranchId
+      });
       return summary;
     } finally {
       inFlightPullEntities.delete(entidad);
@@ -555,10 +632,13 @@ export const SyncPullEngine = {
       results.push(entityResult);
       if (
         entityResult.status === 'offline' ||
+        entityResult.status === 'auth_required' ||
         entityResult.status === 'endpoint_not_configured' ||
         (entityResult.status === 'transaction_failed' &&
-          entityResult.errorMessage &&
-          /401|403|permiso|membresía|autoriz|sesión/i.test(entityResult.errorMessage))
+          (entityResult.httpStatus === 401 ||
+            entityResult.httpStatus === 403 ||
+            (entityResult.errorMessage &&
+              /401|403|permiso|membresía|autoriz|sesión/i.test(entityResult.errorMessage))))
       ) {
         break;
       }

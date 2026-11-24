@@ -10,8 +10,9 @@ import {
   MAX_PUSH_RETRY_ATTEMPTS,
   OutboxRepository
 } from '../../lib/database/repositories/outbox.repository';
+import { SyncMetadataRepository } from '../../lib/database/repositories/sync-metadata.repository';
 import { isValidGuid } from '../cattle.validation';
-import { SyncHttpClient } from './sync-http.client';
+import { SyncHttpClient, getOrCreateDeviceId } from './sync-http.client';
 import type {
   SyncOperationRequestDto,
   SyncOperationResultDto
@@ -21,6 +22,7 @@ export interface PushCycleSummary {
   status:
     | 'completed'
     | 'offline'
+    | 'auth_required'
     | 'already_running'
     | 'backend_pending'
     | 'nothing_to_push';
@@ -30,6 +32,8 @@ export interface PushCycleSummary {
   validationErrorCount: number;
   transientErrorCount: number;
   skippedBlockedByOrderCount: number;
+  authErrorCount?: number;
+  skippedForeignRanchCount?: number;
 }
 
 /**
@@ -219,6 +223,53 @@ async function resolveOperationRanchId(
   return null;
 }
 
+/**
+ * Lee el conjunto de ranchos autorizados para la sesión activa si existe.
+ * Devuelve `null` si no hay sesión persistida (p. ej. entornos de pruebas unitarias sin auth).
+ */
+function readAuthorizedSessionRanchIds(): Set<string> | null {
+  if (typeof window === 'undefined') return null;
+  const rawCandidates: Array<string | null> = [];
+  try {
+    if (window.sessionStorage) {
+      rawCandidates.push(window.sessionStorage.getItem('farmbovi_session_user'));
+    }
+  } catch {
+    // Ignorar
+  }
+  try {
+    if (window.localStorage) {
+      rawCandidates.push(window.localStorage.getItem('farmbovi_session_meta'));
+    }
+  } catch {
+    // Ignorar
+  }
+
+  for (const raw of rawCandidates) {
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw) as {
+        idUsuario?: unknown;
+        ranchos?: Array<{ idRancho?: string }>;
+      };
+      if (typeof parsed.idUsuario !== 'string') continue;
+      const set = new Set<string>();
+      if (Array.isArray(parsed.ranchos)) {
+        for (const r of parsed.ranchos) {
+          if (typeof r?.idRancho === 'string' && isValidGuid(r.idRancho.trim())) {
+            set.add(r.idRancho.trim());
+          }
+        }
+      }
+      return set;
+    } catch {
+      // Continuar con el siguiente origen
+    }
+  }
+
+  return null;
+}
+
 function formatValidationErrorMessage(result: SyncOperationResultDto): string {
   const baseMessage =
     result.mensaje?.trim() || 'El servidor rechazó la operación por validación de datos.';
@@ -285,7 +336,9 @@ export const PushSyncEngine = {
       conflictCount: 0,
       validationErrorCount: 0,
       transientErrorCount: 0,
-      skippedBlockedByOrderCount: 0
+      skippedBlockedByOrderCount: 0,
+      authErrorCount: 0,
+      skippedForeignRanchCount: 0
     };
 
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
@@ -308,6 +361,9 @@ export const PushSyncEngine = {
     if (!availability.pushDisponible) {
       return { ...summary, status: 'backend_pending' };
     }
+
+    // Leer ranchos autorizados de la sesión activa (si existe) para no enviar ops de otra cuenta
+    const authorizedRanchIds = readAuthorizedSessionRanchIds();
 
     // Agrupar por entidad exacta `${entidad}:${idEntidad}` conservando orden cronológico estricto
     const entityStreams = new Map<string, LocalOutboxQueue[]>();
@@ -368,7 +424,7 @@ export const PushSyncEngine = {
           return summary;
         }
 
-        const outcome = await this.processSingleOperation(op);
+        const outcome = await this.processSingleOperation(op, authorizedRanchIds);
 
         if (outcome === 'ACCEPTED') {
           summary.confirmedCount++;
@@ -379,6 +435,19 @@ export const PushSyncEngine = {
           summary.alreadyProcessedCount++;
           const idx = unconfirmedEntityOps.findIndex((item) => item.idOperacion === op.idOperacion);
           if (idx !== -1) unconfirmedEntityOps.splice(idx, 1);
+        } else if (outcome === 'AUTH_ERROR') {
+          summary.authErrorCount = (summary.authErrorCount ?? 0) + 1;
+          summary.status = 'auth_required';
+          return summary;
+        } else if (outcome === 'OFFLINE_INTERRUPTED') {
+          summary.status = 'offline';
+          return summary;
+        } else if (outcome === 'NETWORK_DOWN') {
+          summary.transientErrorCount++;
+          return summary;
+        } else if (outcome === 'FOREIGN_RANCH_SKIPPED') {
+          summary.skippedForeignRanchCount = (summary.skippedForeignRanchCount ?? 0) + 1;
+          blockedByEarlierUnconfirmed = true;
         } else if (outcome === 'CONFLICT') {
           summary.conflictCount++;
           blockedByEarlierUnconfirmed = true;
@@ -396,8 +465,19 @@ export const PushSyncEngine = {
   },
 
   async processSingleOperation(
-    op: LocalOutboxQueue
-  ): Promise<'ACCEPTED' | 'ALREADY_PROCESSED' | 'CONFLICT' | 'VALIDATION_ERROR' | 'TRANSIENT_ERROR'> {
+    op: LocalOutboxQueue,
+    authorizedRanchIds: ReadonlySet<string> | null = null
+  ): Promise<
+    | 'ACCEPTED'
+    | 'ALREADY_PROCESSED'
+    | 'CONFLICT'
+    | 'VALIDATION_ERROR'
+    | 'TRANSIENT_ERROR'
+    | 'AUTH_ERROR'
+    | 'OFFLINE_INTERRUPTED'
+    | 'NETWORK_DOWN'
+    | 'FOREIGN_RANCH_SKIPPED'
+  > {
     inFlightOperationIds.add(op.idOperacion);
 
     try {
@@ -424,39 +504,78 @@ export const PushSyncEngine = {
       }
 
       if (op.tipoOperacion === 'UPDATE' && effectiveVersionBase === null && !latestEntity?.remoteId) {
+        const message =
+          'Esta actualización pertenece a un registro local que nunca se creó en el servidor. Puedes descartarla desde el Centro de Sincronización.';
         await this.applyValidationErrorOutcome(op, {
           idOperacion: op.idOperacion,
           entidad: op.entidad,
           idEntidad: op.idEntidad,
           resultado: 'VALIDATION_ERROR',
-          mensaje:
-            'Esta actualización pertenece a un registro local que nunca se creó en el servidor. Puedes descartarla desde el Centro de Sincronización.'
+          mensaje: message
+        });
+        await SyncMetadataRepository.recordError(op.entidad, {
+          phase: 'push',
+          message,
+          code: 400,
+          ranchId: op.idRancho ?? null
         });
         return 'VALIDATION_ERROR';
       }
 
       const resolvedRanchId = await resolveOperationRanchId(op, latestEntity);
 
+      // Protección multi-usuario: si hay sesión activa con ranchos autorizados y la operación
+      // pertenece a un rancho ajeno (p. ej. cambio de cuenta), conservarla intacta sin enviarla ni quemar reintentos.
+      if (
+        authorizedRanchIds !== null &&
+        op.entidad !== 'ranches' &&
+        resolvedRanchId &&
+        !authorizedRanchIds.has(resolvedRanchId)
+      ) {
+        await db.outbox.update(op.idOperacion, {
+          estado: 'pendiente',
+          proximoIntento: null
+        });
+        return 'FOREIGN_RANCH_SKIPPED';
+      }
+
       if (op.entidad !== 'ranches' && !resolvedRanchId) {
+        const message =
+          'Registra o sincroniza un rancho en la sección Ranchos para poder subir esta operación.';
         await this.applyTransientErrorOutcome(op, {
           idOperacion: op.idOperacion,
           entidad: op.entidad,
           idEntidad: op.idEntidad,
           resultado: 'TRANSIENT_ERROR',
-          mensaje:
-            'Registra o sincroniza un rancho en la sección Ranchos para poder subir esta operación.'
+          mensaje: message
+        });
+        await SyncMetadataRepository.recordError(op.entidad, {
+          phase: 'push',
+          message,
+          ranchId: null
         });
         return 'TRANSIENT_ERROR';
       }
 
+      // Asegurar que `idDispositivo` y `idRancho` queden persistidos en el registro de Outbox
+      // antes del primer envío para garantizar el mismo hash de idempotencia entre reinicios.
+      const stableDeviceId = op.idDispositivo || getOrCreateDeviceId();
+      const outboxMetaPatch: Partial<LocalOutboxQueue> = {};
       if (resolvedRanchId && op.idRancho !== resolvedRanchId) {
-        await db.outbox.update(op.idOperacion, { idRancho: resolvedRanchId });
+        outboxMetaPatch.idRancho = resolvedRanchId;
+      }
+      if (!op.idDispositivo) {
+        outboxMetaPatch.idDispositivo = stableDeviceId;
+      }
+      if (Object.keys(outboxMetaPatch).length > 0) {
+        await db.outbox.update(op.idOperacion, outboxMetaPatch);
       }
 
       const effectiveOp: LocalOutboxQueue = {
         ...op,
         versionBase: effectiveVersionBase,
-        idRancho: resolvedRanchId ?? op.idRancho ?? null
+        idRancho: resolvedRanchId ?? op.idRancho ?? null,
+        idDispositivo: stableDeviceId
       };
 
       const dto: SyncOperationRequestDto = SyncHttpClient.serializeOperationDto(
@@ -467,36 +586,118 @@ export const PushSyncEngine = {
 
       const result = await SyncHttpClient.sendOperation(dto);
 
+      // 1. Expiración de JWT (401): pausar limpiamente sin quemar intentos ni borrar la operación
+      if (result.codigoHttp === 401) {
+        const authMessage =
+          result.mensaje?.trim() ||
+          'Sesión expirada (401). Inicia sesión nuevamente para continuar sincronizando.';
+        await db.outbox.update(op.idOperacion, {
+          estado: 'pendiente',
+          ultimoError: authMessage,
+          proximoIntento: null
+        });
+        await SyncMetadataRepository.recordError(op.entidad, {
+          phase: 'push',
+          message: authMessage,
+          code: 401,
+          ranchId: resolvedRanchId
+        });
+        return 'AUTH_ERROR';
+      }
+
+      // 2. Caída de conexión durante el envío Push: revertir a 'pendiente' intacta para reintentar al reconectar
+      if (
+        result.resultado === 'TRANSIENT_ERROR' &&
+        typeof navigator !== 'undefined' &&
+        !navigator.onLine
+      ) {
+        const offlineMessage =
+          'Conexión perdida durante el envío. La operación permanece intacta y se reintentará al reconectar.';
+        await db.outbox.update(op.idOperacion, {
+          estado: 'pendiente',
+          ultimoError: offlineMessage,
+          proximoIntento: null
+        });
+        await SyncMetadataRepository.recordError(op.entidad, {
+          phase: 'push',
+          message: offlineMessage,
+          code: 0,
+          ranchId: resolvedRanchId
+        });
+        return 'OFFLINE_INTERRUPTED';
+      }
+
       switch (result.resultado) {
         case 'ACCEPTED':
         case 'ALREADY_PROCESSED': {
           await this.applyConfirmedOutcome(effectiveOp, result);
+          await SyncMetadataRepository.recordSuccess(op.entidad, 'push', resolvedRanchId);
           return result.resultado;
         }
         case 'CONFLICT': {
           await this.applyConflictOutcome(effectiveOp, result);
+          await SyncMetadataRepository.recordError(op.entidad, {
+            phase: 'push',
+            message:
+              result.mensaje?.trim() ||
+              'Conflicto de versión: el registro fue modificado en el servidor.',
+            code: result.codigoHttp ?? 409,
+            ranchId: resolvedRanchId
+          });
           return 'CONFLICT';
         }
         case 'VALIDATION_ERROR': {
           await this.applyValidationErrorOutcome(effectiveOp, result);
+          await SyncMetadataRepository.recordError(op.entidad, {
+            phase: 'push',
+            message: formatValidationErrorMessage(result),
+            code: result.codigoHttp ?? 422,
+            ranchId: resolvedRanchId
+          });
           return 'VALIDATION_ERROR';
         }
         case 'TRANSIENT_ERROR':
         default: {
           await this.applyTransientErrorOutcome(effectiveOp, result);
+          await SyncMetadataRepository.recordError(op.entidad, {
+            phase: 'push',
+            message:
+              result.mensaje?.trim() || 'Error temporal de red o disponibilidad del servidor.',
+            code: result.codigoHttp ?? null,
+            ranchId: resolvedRanchId
+          });
+          // Si el servidor es inalcanzable (status 0), detener el resto del lote en este ciclo
+          // para no consumir reintentos en cascada sobre operaciones independientes.
+          if (result.codigoHttp === 0) {
+            return 'NETWORK_DOWN';
+          }
           return 'TRANSIENT_ERROR';
         }
       }
     } catch (err) {
+      const errorMessage =
+        err instanceof Error
+          ? err.message
+          : 'Error inesperado durante el envío de la operación.';
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        await db.outbox.update(op.idOperacion, {
+          estado: 'pendiente',
+          ultimoError: 'Conexión perdida durante el envío.',
+          proximoIntento: null
+        });
+        return 'OFFLINE_INTERRUPTED';
+      }
       await this.applyTransientErrorOutcome(op, {
         idOperacion: op.idOperacion,
         entidad: op.entidad,
         idEntidad: op.idEntidad,
         resultado: 'TRANSIENT_ERROR',
-        mensaje:
-          err instanceof Error
-            ? err.message
-            : 'Error inesperado durante el envío de la operación.'
+        mensaje: errorMessage
+      });
+      await SyncMetadataRepository.recordError(op.entidad, {
+        phase: 'push',
+        message: errorMessage,
+        ranchId: op.idRancho ?? null
       });
       return 'TRANSIENT_ERROR';
     } finally {

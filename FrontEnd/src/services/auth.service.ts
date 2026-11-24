@@ -20,6 +20,7 @@ import {
   type UserConfig,
   type UsuarioResponseDto
 } from '../types/auth';
+import { SyncCrossTabLock } from './sync/sync-lock';
 import { SyncScheduler } from './sync/sync-scheduler';
 
 const TOKEN_STORAGE_KEY = 'farmbovi_access_token';
@@ -329,7 +330,24 @@ async function reconcileLocalCacheForUser(
 
   await db.transaction(
     'rw',
-    [db.ranches, db.lots, db.cattle, db.alerts, db.syncCheckpoints],
+    [
+      db.ranches,
+      db.lots,
+      db.cattle,
+      db.weighings,
+      db.healthRecords,
+      db.treatments,
+      db.feedingRecords,
+      db.reproductionRecords,
+      db.movements,
+      db.genealogy,
+      db.alerts,
+      db.media,
+      db.weighingAnalysisJobs,
+      db.syncCheckpoints,
+      db.syncMetadata,
+      db.outbox
+    ],
     async () => {
       const cachedRanches = await db.ranches.toArray();
       const unauthorizedRanchIds = cachedRanches
@@ -342,23 +360,90 @@ async function reconcileLocalCacheForUser(
 
       if (switchedAccount || unauthorizedRanchIds.length > 0) {
         await db.syncCheckpoints.clear();
+        await db.syncMetadata.clear();
+        SyncCrossTabLock.forceReleaseLocalLease();
 
         const unauthorizedSet = new Set(unauthorizedRanchIds);
-        const shouldPruneRow = (row: { syncStatus: string; ranchId?: string }) =>
-          row.syncStatus === 'synced' &&
-          (switchedAccount
-            ? !row.ranchId || !authorizedIds.has(row.ranchId)
-            : Boolean(row.ranchId && unauthorizedSet.has(row.ranchId)));
+        const cattleRanchLookup = new Map<string, string | undefined>();
+        const allCattle = await db.cattle.toArray();
+        for (const animal of allCattle) {
+          cattleRanchLookup.set(animal.id, animal.ranchId);
+        }
 
-        const [staleLots, staleCattle, staleAlerts] = await Promise.all([
+        const shouldPruneRow = (row: {
+          syncStatus: string;
+          ranchId?: string | null;
+          cattleId?: string | null;
+        }): boolean => {
+          // Nunca perder datos locales pendientes, en conflicto o con error sin confirmar
+          if (row.syncStatus !== 'synced') return false;
+          const effectiveRanchId =
+            row.ranchId || (row.cattleId ? cattleRanchLookup.get(row.cattleId) : undefined);
+          return switchedAccount
+            ? !effectiveRanchId || !authorizedIds.has(effectiveRanchId)
+            : Boolean(effectiveRanchId && unauthorizedSet.has(effectiveRanchId));
+        };
+
+        const [
+          staleLots,
+          staleCattle,
+          staleWeighings,
+          staleHealth,
+          staleTreatments,
+          staleFeeding,
+          staleReproduction,
+          staleMovements,
+          staleGenealogy,
+          staleAlerts,
+          staleMedia,
+          staleJobs
+        ] = await Promise.all([
           db.lots.filter((x) => shouldPruneRow(x)).primaryKeys(),
           db.cattle.filter((x) => shouldPruneRow(x)).primaryKeys(),
-          db.alerts.filter((x) => shouldPruneRow(x)).primaryKeys()
+          db.weighings.filter((x) => shouldPruneRow(x)).primaryKeys(),
+          db.healthRecords.filter((x) => shouldPruneRow(x)).primaryKeys(),
+          db.treatments.filter((x) => shouldPruneRow(x)).primaryKeys(),
+          db.feedingRecords.filter((x) => shouldPruneRow(x)).primaryKeys(),
+          db.reproductionRecords.filter((x) => shouldPruneRow(x)).primaryKeys(),
+          db.movements.filter((x) => shouldPruneRow(x)).primaryKeys(),
+          db.genealogy.filter((x) => shouldPruneRow(x)).primaryKeys(),
+          db.alerts.filter((x) => shouldPruneRow(x)).primaryKeys(),
+          db.media.filter((x) => shouldPruneRow(x)).primaryKeys(),
+          db.weighingAnalysisJobs
+            .filter(
+              (j) =>
+                (j.estado === 'confirmado' || j.estado === 'cancelado') &&
+                (switchedAccount
+                  ? !j.ranchId || !authorizedIds.has(j.ranchId)
+                  : Boolean(j.ranchId && unauthorizedSet.has(j.ranchId)))
+            )
+            .primaryKeys()
         ]);
 
         if (staleLots.length > 0) await db.lots.bulkDelete(staleLots);
         if (staleCattle.length > 0) await db.cattle.bulkDelete(staleCattle);
+        if (staleWeighings.length > 0) await db.weighings.bulkDelete(staleWeighings);
+        if (staleHealth.length > 0) await db.healthRecords.bulkDelete(staleHealth);
+        if (staleTreatments.length > 0) await db.treatments.bulkDelete(staleTreatments);
+        if (staleFeeding.length > 0) await db.feedingRecords.bulkDelete(staleFeeding);
+        if (staleReproduction.length > 0) await db.reproductionRecords.bulkDelete(staleReproduction);
+        if (staleMovements.length > 0) await db.movements.bulkDelete(staleMovements);
+        if (staleGenealogy.length > 0) await db.genealogy.bulkDelete(staleGenealogy);
         if (staleAlerts.length > 0) await db.alerts.bulkDelete(staleAlerts);
+        if (staleMedia.length > 0) await db.media.bulkDelete(staleMedia);
+        if (staleJobs.length > 0) await db.weighingAnalysisJobs.bulkDelete(staleJobs);
+
+        // Al cambiar de cuenta, limpiar solo el historial de operaciones ya confirmadas;
+        // conservar intactas las pendientes/fallidas/en conflicto para jamás perder datos.
+        if (switchedAccount) {
+          const confirmedOps = await db.outbox
+            .where('estado')
+            .equals('confirmado')
+            .primaryKeys();
+          if (confirmedOps.length > 0) {
+            await db.outbox.bulkDelete(confirmedOps);
+          }
+        }
       }
     }
   );
@@ -597,6 +682,12 @@ export const AuthService = {
 
     const hasRanch = await this.verifyHasRanchFromBackend();
     void SyncScheduler.refreshState(true);
+    if (
+      SyncScheduler.isStarted() &&
+      (typeof navigator === 'undefined' || navigator.onLine)
+    ) {
+      void SyncScheduler.triggerSync('startup');
+    }
 
     return {
       session: currentSession ?? session,
@@ -643,8 +734,19 @@ export const AuthService = {
   },
 
   async updateConfig(input: UserConfig): Promise<UsuarioResponseDto> {
+    const previousDefaultRanch = currentSession?.configuracion?.ranchoPredeterminadoId ?? null;
     const profile = await usuariosApi.updateMyConfig(input);
     mergeProfileIntoSession(profile);
+    const nextDefaultRanch = profile.configuracion?.ranchoPredeterminadoId ?? null;
+    if (previousDefaultRanch !== nextDefaultRanch) {
+      void SyncScheduler.refreshState();
+      if (
+        SyncScheduler.isStarted() &&
+        (typeof navigator === 'undefined' || navigator.onLine)
+      ) {
+        void SyncScheduler.triggerSync('app_resumed');
+      }
+    }
     return profile;
   },
 
@@ -665,6 +767,7 @@ export const AuthService = {
       !options?.skipServerCall &&
       typeof navigator !== 'undefined' &&
       navigator.onLine;
+    SyncCrossTabLock.forceReleaseLocalLease();
     emit(null);
     if (shouldNotifyServer) {
       void authApi.logout().catch(() => undefined);

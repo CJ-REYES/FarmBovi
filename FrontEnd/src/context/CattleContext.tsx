@@ -77,13 +77,8 @@ export function CattleProvider({ children }: { children: ReactNode }) {
       }
     })();
 
-    let previousSyncAt = SyncScheduler.getSnapshot().lastCompletedSyncAt;
-    const unsubscribe = SyncScheduler.subscribe(() => {
-      const nextSyncAt = SyncScheduler.getSnapshot().lastCompletedSyncAt;
-      if (nextSyncAt && nextSyncAt !== previousSyncAt) {
-        previousSyncAt = nextSyncAt;
-        void loadCattle();
-      }
+    const unsubscribe = SyncScheduler.subscribeToDataUpdates(['cattle', 'lots', 'ranches'], () => {
+      void loadCattle();
     });
 
     return () => {

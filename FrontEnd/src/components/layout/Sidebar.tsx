@@ -4,6 +4,7 @@ import {
   Beef, Wheat, Scale, Syringe, HeartPulse, Dna, Camera,
   Bell, FileText, Settings, UserCircle, X, type LucideIcon
 } from 'lucide-react';
+import { useUnreadAlerts } from '../../hooks/useUnreadAlerts';
 
 interface MenuItem {
   id: string;
@@ -11,7 +12,6 @@ interface MenuItem {
   label: string;
   icon: LucideIcon;
   count?: number | null;
-  alert?: boolean;
 }
 
 interface MenuGroup {
@@ -49,13 +49,15 @@ const MENU_GROUPS: MenuGroup[] = [
   {
     category: "SEGUIMIENTO",
     items: [
-      { id: 'alertas', path: '/alerts', label: 'Alertas', icon: Bell, alert: true },
+      { id: 'alertas', path: '/alerts', label: 'Alertas', icon: Bell },
       { id: 'reportes', path: '/reports', label: 'Reportes', icon: FileText }
     ]
   }
 ];
 
 export default function Sidebar({ onCloseMobile }: { onCloseMobile: () => void }) {
+  const { hasUnread, unreadCount } = useUnreadAlerts();
+
   return (
     <aside className="flex flex-col w-[260px] h-full bg-surface-white border-r border-border-light shadow-[1px_0_4px_rgba(0,0,0,0.02)]">
       <div className="h-[64px] min-h-[64px] flex items-center justify-between px-6 border-b border-border-light">
@@ -102,7 +104,14 @@ export default function Sidebar({ onCloseMobile }: { onCloseMobile: () => void }
                               {item.label}
                             </span>
                           </div>
-                          {item.alert && <span className="w-2 h-2 rounded-full bg-status-error"></span>}
+                          {item.id === 'alertas' && hasUnread && (
+                            <span
+                              data-testid="sidebar-alerts-dot"
+                              title={`${unreadCount} aviso(s) o notificación(es) por ver`}
+                              aria-label={`${unreadCount} aviso(s) o notificación(es) por ver`}
+                              className="w-2 h-2 rounded-full bg-status-error"
+                            />
+                          )}
                         </>
                       )}
                     </NavLink>

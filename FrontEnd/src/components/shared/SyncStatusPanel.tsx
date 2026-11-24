@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { SyncHttpClient } from '../../services/sync/sync-http.client';
 import { OutboxRepository } from '../../lib/database/repositories/outbox.repository';
+import { SyncMetadataRepository } from '../../lib/database/repositories/sync-metadata.repository';
 import { db } from '../../lib/database/db';
 import { useSyncStatus } from '../../hooks/useSyncStatus';
 import { usePwaUpdate } from '../../hooks/usePwaUpdate';
@@ -11,6 +12,7 @@ import {
 import type {
   LocalOutboxQueue,
   LocalSyncCheckpoint,
+  LocalSyncMetadata,
   OutboxOperationState
 } from '../../lib/database/schema';
 import {
@@ -66,6 +68,7 @@ export default function SyncStatusPanel() {
 
   const [pendingOps, setPendingOps] = useState<LocalOutboxQueue[]>([]);
   const [checkpoints, setCheckpoints] = useState<LocalSyncCheckpoint[]>([]);
+  const [entityErrors, setEntityErrors] = useState<LocalSyncMetadata[]>([]);
   const [inventory, setInventory] = useState<OfflineInventorySnapshot | null>(null);
   const [retryingOpId, setRetryingOpId] = useState<string | null>(null);
   const [discardingOpId, setDiscardingOpId] = useState<string | null>(null);
@@ -76,15 +79,17 @@ export default function SyncStatusPanel() {
 
   const reloadPending = useCallback(async () => {
     try {
-      const [allOps, allCheckpoints, inv] = await Promise.all([
+      const [allOps, allCheckpoints, inv, errors] = await Promise.all([
         db.outbox.orderBy('fechaCreacion').toArray(),
         db.syncCheckpoints.toArray(),
-        OfflineInventoryService.getSnapshot()
+        OfflineInventoryService.getSnapshot(),
+        SyncMetadataRepository.getEntitiesWithErrors()
       ]);
 
       setPendingOps(allOps.filter((op) => op.estado !== 'confirmado'));
       setCheckpoints(allCheckpoints);
       setInventory(inv);
+      setEntityErrors(errors);
       await refreshStatus();
     } catch (err) {
       console.error('Error cargando estado de sincronización:', err);
@@ -96,16 +101,18 @@ export default function SyncStatusPanel() {
 
     const syncView = async () => {
       try {
-        const [allOps, allCheckpoints, inv] = await Promise.all([
+        const [allOps, allCheckpoints, inv, errors] = await Promise.all([
           db.outbox.orderBy('fechaCreacion').toArray(),
           db.syncCheckpoints.toArray(),
-          OfflineInventoryService.getSnapshot()
+          OfflineInventoryService.getSnapshot(),
+          SyncMetadataRepository.getEntitiesWithErrors()
         ]);
 
         if (!active) return;
         setPendingOps(allOps.filter((op) => op.estado !== 'confirmado'));
         setCheckpoints(allCheckpoints);
         setInventory(inv);
+        setEntityErrors(errors);
       } catch (err) {
         console.error('Error cargando estado de sincronización:', err);
       }
@@ -430,15 +437,54 @@ export default function SyncStatusPanel() {
             <Database size={13} /> Checkpoints de Descarga ({checkpoints.length})
           </h4>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {checkpoints.map((cp) => (
+            {checkpoints.map((cp) => {
+              const ranchCount = cp.cursorsByRanch ? Object.keys(cp.cursorsByRanch).length : 0;
+              return (
+                <div
+                  key={cp.entidad}
+                  className="px-3 py-2 rounded-lg bg-surface-secondary/40 border border-border-light text-[11px] flex items-center justify-between gap-2"
+                >
+                  <span className="font-semibold text-brand-slate uppercase">
+                    {cp.entidad}
+                    {ranchCount > 1 ? ` (${ranchCount} ranchos)` : ''}
+                  </span>
+                  <span className="font-mono text-brand-slate/65 truncate max-w-[160px]">
+                    {cp.cursorOpaco ? `cursor:${cp.cursorOpaco.slice(0, 14)}…` : 'cursor: inicial'}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {entityErrors.length > 0 && (
+        <div className="space-y-1.5">
+          <h4 className="text-[12px] font-bold text-status-error uppercase tracking-wider flex items-center gap-1.5">
+            <AlertTriangle size={13} /> Errores Registrados por Entidad ({entityErrors.length})
+          </h4>
+          <div className="space-y-1.5">
+            {entityErrors.map((meta) => (
               <div
-                key={cp.entidad}
-                className="px-3 py-2 rounded-lg bg-surface-secondary/40 border border-border-light text-[11px] flex items-center justify-between gap-2"
+                key={meta.entityName}
+                className="px-3 py-2 rounded-lg bg-status-error/5 border border-status-error/25 text-[11px] flex flex-col sm:flex-row sm:items-center justify-between gap-1"
               >
-                <span className="font-semibold text-brand-slate uppercase">{cp.entidad}</span>
-                <span className="font-mono text-brand-slate/65 truncate max-w-[160px]">
-                  {cp.cursorOpaco ? `cursor:${cp.cursorOpaco.slice(0, 14)}…` : 'cursor: inicial'}
-                </span>
+                <div className="min-w-0">
+                  <span className="font-bold text-status-error uppercase">
+                    {meta.entityName}
+                    {meta.lastErrorPhase ? ` · ${meta.lastErrorPhase}` : ''}
+                    {meta.lastErrorCode !== null && meta.lastErrorCode !== undefined
+                      ? ` (HTTP ${meta.lastErrorCode})`
+                      : ''}
+                  </span>
+                  <p className="text-brand-slate/80 break-words">{meta.lastError}</p>
+                </div>
+                <div className="text-[10px] text-brand-slate/60 shrink-0">
+                  {meta.consecutiveFailures ? `${meta.consecutiveFailures} fallo(s)` : ''}
+                  {meta.lastErrorAt
+                    ? ` · ${new Date(meta.lastErrorAt).toLocaleTimeString()}`
+                    : ''}
+                </div>
               </div>
             ))}
           </div>

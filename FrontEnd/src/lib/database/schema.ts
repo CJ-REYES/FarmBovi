@@ -230,14 +230,21 @@ export interface LocalMedia extends BaseLocalEntity {
   tipo: 'FotoPerfil' | 'BoviScaleVision' | 'Documento';
   nombreArchivo: string;
   mimeType: string;
+  extension?: string | null;
   tamanoBytes: number;
   checksumSha256?: string | null;
   blobData?: Blob;
   urlRemota?: string | null;
+  rutaArchivoRemota?: string | null;
+  proveedorAlmacenamiento?: string | null;
+  estadoRemoto?: string | null;
+  fechaCarga?: string | null;
   idOperacionSubida?: string | null;
   estadoArchivo: MediaSyncState;
   intentosSubida: number;
   ultimoErrorSubida?: string | null;
+  proximoIntentoSubida?: string | null;
+  errorSubidaPermanente?: boolean;
   fechaCaptura: string;
 }
 
@@ -307,15 +314,31 @@ export interface LocalSyncConflict {
   notasResolucion?: string | null;
   datosResueltos?: Record<string, unknown> | null;
 }
-export interface LocalSyncCheckpoint {
-  entidad: SyncEntityName;
+export interface RanchCheckpointCursor {
   cursorOpaco: string | null;
   ultimaFechaServidor?: string | null;
   actualizadoEn: string;
 }
 
+export interface LocalSyncCheckpoint {
+  entidad: SyncEntityName;
+  ranchId?: string | null;
+  cursorOpaco: string | null;
+  ultimaFechaServidor?: string | null;
+  actualizadoEn: string;
+  cursorsByRanch?: Record<string, RanchCheckpointCursor>;
+}
+
 export interface LocalSyncMetadata {
   entityName: string;
   lastSyncedAt?: string;
+  lastPushAt?: string | null;
+  lastPullAt?: string | null;
   lastServerVersion?: number;
+  lastRanchId?: string | null;
+  lastError?: string | null;
+  lastErrorCode?: number | string | null;
+  lastErrorPhase?: 'push' | 'pull' | 'media' | null;
+  lastErrorAt?: string | null;
+  consecutiveFailures?: number;
 }
