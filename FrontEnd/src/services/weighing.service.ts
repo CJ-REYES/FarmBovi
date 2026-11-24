@@ -7,6 +7,7 @@ import type { LocalWeighing } from '../lib/database/schema';
 import type { Cattle } from '../types/cattle';
 import type {
   BackendPesajePayload,
+  EstimacionPesoBoviScaleDto,
   Weighing,
   WeighingInput
 } from '../types/weighing';
@@ -134,6 +135,17 @@ export const WeighingService = {
   async getById(id: string): Promise<Weighing | undefined> {
     const local = await WeighingRepository.getByIdIncludingDeleted(id);
     return local ? this.toWeighing(local) : undefined;
+  },
+
+  /**
+   * Reutiliza el repositorio de pesajes para registrar en el historial local un pesaje
+   * ya persistido en el backend .NET por el flujo de BoviScale IA.
+   */
+  async recordConfirmedBoviScaleWeighing(
+    dto: EstimacionPesoBoviScaleDto
+  ): Promise<{ local: LocalWeighing; weighing: Weighing }> {
+    const local = await WeighingRepository.upsertConfirmedFromBoviScale(dto);
+    return { local, weighing: this.toWeighing(local) };
   },
 
   /**

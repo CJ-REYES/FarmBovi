@@ -195,6 +195,8 @@ export const ReportsService = {
       reproductionRes.status === 'fulfilled' ? reproductionRes.value.data : [];
     if (reproductionRes.status === 'rejected') {
       registerRejection('Reproducción', reproductionRes.reason);
+    } else if (reproductionRes.value.warning) {
+      warnings.push(reproductionRes.value.warning);
     }
 
     const movements = movementsRes.status === 'fulfilled' ? movementsRes.value.data : [];
@@ -206,6 +208,7 @@ export const ReportsService = {
       lotsRes.status === 'fulfilled' ? lotsRes.value.source : 'cache',
       healthRes.status === 'fulfilled' ? healthRes.value.source : 'cache',
       feedingRes.status === 'fulfilled' ? feedingRes.value.source : 'cache',
+      reproductionRes.status === 'fulfilled' ? reproductionRes.value.source : 'cache',
       movementsRes.status === 'fulfilled' ? movementsRes.value.source : 'cache'
     ];
 

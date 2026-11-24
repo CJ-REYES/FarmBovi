@@ -1,10 +1,12 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { db } from '../../lib/database/db';
 import { RanchRepository } from '../../lib/database/repositories/ranch.repository';
 import { CattleRepository } from '../../lib/database/repositories/cattle.repository';
+import { ConnectivityService } from '../../services/connectivity.service';
+import { SyncScheduler } from '../../services/sync/sync-scheduler';
 import WeighingPage from './WeighingPage';
 
 const RANCH_A = '11111111-1111-4111-8111-111111111111';
@@ -286,5 +288,84 @@ describe('WeighingPage — Registro de pesajes, gráfica real, último peso, rec
       await within(dialogWithBovi).findByText(/BoviScale vs Báscula: 432\.5 kg/i)
     ).toBeInTheDocument();
     expect(within(dialogWithBovi).getByLabelText(/Peso Real de Báscula/i)).toHaveValue(432.5);
+  });
+
+  it('refresca automáticamente el historial de pesajes cuando finaliza un Pull con cambios remotos', async () => {
+    renderWeighingPage();
+    expect(await screen.findByText(/Sin pesajes registrados/i)).toBeInTheDocument();
+
+    setOnlineStatus(true);
+    const pulledWeighingId = '44444444-4444-4444-8444-444444444441';
+    const connectivitySpy = vi
+      .spyOn(ConnectivityService, 'checkBackendAvailability')
+      .mockResolvedValue({
+        isOnline: true,
+        backendReachable: true,
+        checkedEndpoint: 'http://localhost:5000/api/animales',
+        httpStatus: 200,
+        checkedAt: new Date().toISOString()
+      });
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const url = new URL(rawUrl, 'http://localhost:5173');
+      const entidad = url.searchParams.get('entidad') || '';
+
+      if (url.pathname.endsWith('/sync/cambios') && entidad === 'weighings') {
+        return new Response(
+          JSON.stringify({
+            entidad: 'weighings',
+            cambios: [
+              {
+                remoteId: pulledWeighingId,
+                clientUuid: null,
+                operacion: 'UPSERT',
+                versionServidor: 1,
+                datos: {
+                  ranchId: RANCH_A,
+                  idAnimal: ANIMAL_1,
+                  cattleId: ANIMAL_1,
+                  pesoRealKg: 488.5,
+                  peso: 488.5,
+                  fecha: '2026-11-22T15:00:00Z',
+                  fuenteBascula: 'Báscula Remota',
+                  responsable: 'Supervisor Remoto',
+                  observaciones: 'Llegó por Pull',
+                  origenPesaje: 'manual'
+                },
+                eliminado: false,
+                actualizadoEnServidor: '2026-11-22T15:00:00Z'
+              }
+            ],
+            siguienteCursorOpaco: 'Y3Vyc29yLXB1bGwtMQ',
+            hayMasPaginas: false,
+            fechaServidor: '2026-11-22T15:00:01Z'
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({
+          entidad,
+          cambios: [],
+          siguienteCursorOpaco: null,
+          hayMasPaginas: false,
+          fechaServidor: '2026-11-22T15:00:01Z'
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    });
+
+    try {
+      await SyncScheduler.triggerManualSync();
+
+      expect((await screen.findAllByText(/488\.5 kg/i)).length).toBeGreaterThanOrEqual(1);
+      expect(await screen.findByText(/Báscula Remota/i)).toBeInTheDocument();
+      expect(await screen.findByText(/Supervisor Remoto/i)).toBeInTheDocument();
+    } finally {
+      fetchSpy.mockRestore();
+      connectivitySpy.mockRestore();
+    }
   });
 });

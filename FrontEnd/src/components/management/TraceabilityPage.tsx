@@ -217,14 +217,12 @@ export default function TraceabilityPage() {
       }
     })();
 
-    let previousSyncAt = SyncScheduler.getSnapshot().lastCompletedSyncAt;
-    const unsubscribe = SyncScheduler.subscribe(() => {
-      const nextSyncAt = SyncScheduler.getSnapshot().lastCompletedSyncAt;
-      if (nextSyncAt && nextSyncAt !== previousSyncAt) {
-        previousSyncAt = nextSyncAt;
+    const unsubscribe = SyncScheduler.subscribeToDataUpdates(
+      ['movements', 'cattle', 'lots'],
+      () => {
         void loadData(includeDeleted, sortOrder);
       }
-    });
+    );
 
     return () => {
       active = false;

@@ -15,6 +15,7 @@ import {
 import { useSharedCattle } from '../../hooks/useCattle';
 import { useSyncStatus } from '../../hooks/useSyncStatus';
 import { useAuth } from '../../hooks/useAuth';
+import { useUnreadAlerts } from '../../hooks/useUnreadAlerts';
 import { resolveMediaUrl } from '../../lib/api';
 import { getUserInitials } from '../../services/auth.service';
 
@@ -34,6 +35,7 @@ export default function Topbar({ onMenuClick, onOpenSyncPanel }: TopbarProps) {
     triggerManualSync
   } = useSyncStatus();
   const { session, isAuthenticated } = useAuth();
+  const { hasUnread: hasUnreadAlerts, unreadCount: unreadAlertsCount } = useUnreadAlerts();
   const [failedPhotoUrl, setFailedPhotoUrl] = useState<string | null>(null);
   const resolvedAvatarUrl = resolveMediaUrl(session?.fotoPerfilUrl);
   const showAvatarImage = Boolean(resolvedAvatarUrl && failedPhotoUrl !== resolvedAvatarUrl);
@@ -211,10 +213,20 @@ export default function Topbar({ onMenuClick, onOpenSyncPanel }: TopbarProps) {
           type="button"
           onClick={() => navigate('/alerts')}
           aria-label="Ir a alertas y recordatorios"
+          title={
+            hasUnreadAlerts
+              ? `Tienes ${unreadAlertsCount} aviso(s) o notificación(es) por ver`
+              : 'Alertas y recordatorios (sin avisos nuevos)'
+          }
           className="relative text-brand-slate/70 hover:text-brand-primary transition-colors cursor-pointer"
         >
           <Bell size={20} />
-          <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-status-error border-2 border-white rounded-full" />
+          {hasUnreadAlerts && (
+            <span
+              data-testid="topbar-alerts-dot"
+              className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-status-error border-2 border-white rounded-full"
+            />
+          )}
         </button>
 
         {isAuthenticated && session ? (

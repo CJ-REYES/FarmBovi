@@ -1,4 +1,5 @@
 using FarmBovi.Api.Data;
+using FarmBovi.Api.DTOs;
 using FarmBovi.Api.Models;
 using FarmBovi.Api.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -10,94 +11,100 @@ namespace FarmBovi.Api.Controllers;
 [Authorize]
 [ApiController]
 [Route("api/animales")]
-public sealed class AnimalsController(
-    FarmDbContext db,
-    FarmDomainValidationService validator,
-    RanchAccessService access) : ControllerBase
+[RanchScope(RanchResource.Animal)]
+public sealed class AnimalsController(FarmDbContext db, FarmDomainValidationService validator) : ControllerBase
 {
     [HttpGet]
-    public async Task<ActionResult<List<Animal>>> GetAll(
-        [FromQuery] Guid? idRancho,
+    [ProducesResponseType(typeof(List<AnimalResponseDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    public async Task<ActionResult<List<AnimalResponseDto>>> GetAll(
+        [FromServices] RanchAccessService access,
+        [FromQuery] Guid? idRancho = null,
         [FromQuery] bool incluirEliminados = false,
         CancellationToken ct = default)
     {
         var userId = RanchAccessService.GetUserId(User);
         if (userId is null) return Unauthorized();
 
-        var ranchosAutorizadosIds = await access.ActiveRanchIds(userId.Value).Distinct().ToListAsync(ct);
+        var ranchIds = await access.ActiveRanchIds(userId.Value).Distinct().ToListAsync(ct);
 
         var query = db.Animales.AsNoTracking()
-            .Where(a => ranchosAutorizadosIds.Contains(a.IdRancho));
+            .Where(a => ranchIds.Contains(a.IdRancho));
 
         if (!incluirEliminados)
             query = query.Where(a => a.EliminadoEn == null);
 
-        if (idRancho.HasValue && idRancho.Value != Guid.Empty)
-        {
-            if (!ranchosAutorizadosIds.Contains(idRancho.Value))
-                return Forbid();
+        if (idRancho is { } targetRanch && targetRanch != Guid.Empty)
+            query = query.Where(x => x.IdRancho == targetRanch);
 
-            query = query.Where(a => a.IdRancho == idRancho.Value);
-        }
-
-        var lista = await query.ToListAsync(ct);
-        return Ok(lista);
+        var items = await query.ToListAsync(ct);
+        return Ok(items.Select(ToResponseDto).ToList());
     }
 
     [HttpGet("{id:guid}")]
-    public async Task<ActionResult<Animal>> Get(Guid id, CancellationToken ct)
-    {
-        var userId = RanchAccessService.GetUserId(User);
-        if (userId is null) return Unauthorized();
-
-        var item = await db.Animales.AsNoTracking().FirstOrDefaultAsync(a => a.IdAnimal == id, ct);
-        if (item is null) return NotFound();
-
-        if (!await access.CanAccessAsync(userId.Value, item.IdRancho, ct))
-            return Forbid();
-
-        return Ok(item);
-    }
+    [ProducesResponseType(typeof(AnimalResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<AnimalResponseDto>> Get(Guid id, CancellationToken ct) =>
+        await db.Animales.AsNoTracking().FirstOrDefaultAsync(a => a.IdAnimal == id, ct) is { } item
+            ? Ok(ToResponseDto(item))
+            : this.NotFoundProblem("El animal solicitado no existe.");
 
     [HttpPost]
-    public async Task<ActionResult<Animal>> Create(Animal item, CancellationToken ct)
+    [ProducesResponseType(typeof(AnimalResponseDto), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(AnimalResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<AnimalResponseDto>> Create(
+        [FromServices] RanchAccessService access,
+        AnimalCreateDto dto,
+        CancellationToken ct)
     {
-        var userId = RanchAccessService.GetUserId(User);
-        if (userId is null) return Unauthorized();
+        var id = dto.IdAnimal ?? Guid.NewGuid();
 
-        if (item.IdRancho == Guid.Empty)
-            return BadRequest("El campo idRancho es obligatorio.");
-
-        if (!await access.CanAccessAsync(userId.Value, item.IdRancho, ct))
-            return Forbid();
-
-        if (item.IdAnimal == Guid.Empty)
-            item.IdAnimal = Guid.NewGuid();
-
-        var existing = await db.Animales.AsNoTracking().FirstOrDefaultAsync(a => a.IdAnimal == item.IdAnimal, ct);
+        var existing = await db.Animales.AsNoTracking().FirstOrDefaultAsync(a => a.IdAnimal == id, ct);
         if (existing is not null)
-            return Ok(existing);
+        {
+            return existing.EliminadoEn is null && MatchesAnimal(existing, dto)
+                ? Ok(ToResponseDto(existing))
+                : this.ConflictProblem("Ya existe un animal con el identificador proporcionado y contenido diferente o eliminado.");
+        }
 
-        int authorId = userId.Value;
-        item.IdAutor = authorId;
-
-        item.Arete = item.Arete.Trim();
-        item.Raza = item.Raza.Trim();
-        item.Sexo = item.Sexo.Trim();
-        item.Procedencia = item.Procedencia.Trim();
-        item.Estado = item.Estado.Trim();
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? 0, ct);
+        if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
+        var item = new Animal
+        {
+            IdAnimal = id,
+            IdRancho = dto.IdRancho,
+            IdLote = dto.IdLote,
+            Arete = dto.Arete.Trim(),
+            Raza = dto.Raza.Trim(),
+            Sexo = dto.Sexo.Trim(),
+            FechaNacimiento = ApiProblemResults.EnsureUtcDate(dto.FechaNacimiento),
+            FechaIngreso = ApiProblemResults.EnsureUtcDate(dto.FechaIngreso),
+            Procedencia = dto.Procedencia.Trim(),
+            Estado = dto.Estado.Trim(),
+            FechaSalida = ApiProblemResults.EnsureUtcDate(dto.FechaSalida),
+            Observaciones = dto.Observaciones?.Trim(),
+            IdAutor = authorId,
+            CreadoEn = DateTime.UtcNow,
+            VersionRegistro = 1
+        };
 
         var validationError = await validator.ValidateAnimalAsync(item, excludeAnimalId: null, ct);
-        if (validationError is not null) return BadRequest(validationError);
+        if (validationError is not null) return this.ValidationError(validationError);
 
-        if (item.VersionRegistro <= 0) item.VersionRegistro = 1;
-        if (item.FechaIngreso == default) item.FechaIngreso = DateTime.UtcNow.Date;
-        if (item.CreadoEn == default) item.CreadoEn = DateTime.UtcNow;
-
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await using var tx = db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(ct)
+            : null;
         db.Animales.Add(item);
 
-        var altaMovimiento = new MovimientoAnimal
+        // Regla 06: Registrar el alta inicial en MovimientoAnimal para mantener trazabilidad completa.
+        db.MovimientosAnimales.Add(new MovimientoAnimal
         {
             IdMovimiento = Guid.NewGuid(),
             IdAnimal = item.IdAnimal,
@@ -106,76 +113,131 @@ public sealed class AnimalsController(
             Tipo = "Alta",
             Fecha = item.FechaIngreso,
             OrigenExterno = item.Procedencia,
-            Motivo = "Alta inicial de expediente",
+            Motivo = "Registro inicial del animal",
             IdAutor = authorId,
             VersionRegistro = 1
-        };
-        db.MovimientosAnimales.Add(altaMovimiento);
+        });
 
         try
         {
             await db.SaveChangesAsync(ct);
-            await tx.CommitAsync(ct);
+            if (tx is not null) await tx.CommitAsync(ct);
         }
         catch (DbUpdateException)
         {
-            await tx.RollbackAsync(ct);
-            return Conflict("El arete ya existe en este rancho o las referencias no son válidas.");
+            if (tx is not null) await tx.RollbackAsync(ct);
+
+            var collision = await db.Animales.AsNoTracking().FirstOrDefaultAsync(a => a.IdAnimal == id, ct);
+            if (collision is not null)
+            {
+                var userId = RanchAccessService.GetUserId(User);
+                if (userId is { } uid && await access.CanAccessAsync(uid, collision.IdRancho, ct))
+                {
+                    return collision.EliminadoEn is null && MatchesAnimal(collision, dto)
+                        ? Ok(ToResponseDto(collision))
+                        : this.ConflictProblem("Ya existe un animal con el identificador proporcionado y contenido diferente o eliminado.");
+                }
+
+                return this.ConflictProblem("Conflicto con un recurso existente.");
+            }
+
+            return this.ConflictProblem("El arete ya existe en este rancho o las referencias no son válidas.");
         }
 
-        return CreatedAtAction(nameof(Get), new { id = item.IdAnimal }, item);
+        return CreatedAtAction(nameof(Get), new { id = item.IdAnimal }, ToResponseDto(item));
     }
 
     [HttpPut("{id:guid}")]
-    public async Task<IActionResult> Update(Guid id, Animal input, CancellationToken ct)
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Update(Guid id, AnimalUpdateDto dto, CancellationToken ct)
     {
-        var userId = RanchAccessService.GetUserId(User);
-        if (userId is null) return Unauthorized();
-
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
-
         var item = await db.Animales.FindAsync([id], ct);
-        if (item is null)
+        if (item is null) return this.NotFoundProblem("El animal solicitado no existe.");
+
+        if (item.EliminadoEn is not null)
+            return this.ConflictProblem("No se puede actualizar un animal eliminado.");
+
+        if (dto.EliminadoEn.HasValue)
+            return this.ValidationError("Para eliminar un animal utiliza el endpoint DELETE.", nameof(dto.EliminadoEn));
+
+        if (dto.IdRancho.HasValue && dto.IdRancho.Value != item.IdRancho)
         {
-            await tx.RollbackAsync(ct);
-            return NotFound();
+            return this.ValidationError(
+                "No se permite transferir un animal a otro rancho mediante actualización directa; use el flujo de movimientos.",
+                nameof(dto.IdRancho));
         }
 
-        if (!await access.CanAccessAsync(userId.Value, item.IdRancho, ct))
-        {
-            await tx.RollbackAsync(ct);
-            return Forbid();
-        }
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? 0, ct);
+        if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
 
-        int authorId = userId.Value;
-
-        input.IdRancho = item.IdRancho;
-        input.Arete = input.Arete.Trim();
-        var validationError = await validator.ValidateAnimalAsync(input, excludeAnimalId: id, ct);
-        if (validationError is not null)
+        var candidate = new Animal
         {
-            await tx.RollbackAsync(ct);
-            return BadRequest(validationError);
-        }
+            IdAnimal = item.IdAnimal,
+            IdRancho = item.IdRancho,
+            IdLote = dto.IdLote,
+            Arete = dto.Arete.Trim(),
+            Raza = dto.Raza.Trim(),
+            Sexo = dto.Sexo.Trim(),
+            FechaNacimiento = ApiProblemResults.EnsureUtcDate(dto.FechaNacimiento),
+            FechaIngreso = ApiProblemResults.EnsureUtcDate(dto.FechaIngreso),
+            Procedencia = dto.Procedencia.Trim(),
+            Estado = dto.Estado.Trim(),
+            FechaSalida = ApiProblemResults.EnsureUtcDate(dto.FechaSalida),
+            Observaciones = dto.Observaciones?.Trim(),
+            IdAutor = authorId
+        };
+        var validationError = await validator.ValidateAnimalAsync(candidate, excludeAnimalId: id, ct);
+        if (validationError is not null) return this.ValidationError(validationError);
+
+        await using var tx = db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(ct)
+            : null;
 
         var loteAnterior = item.IdLote;
         var estadoAnterior = item.Estado;
 
-        item.IdLote = input.IdLote;
-        item.Arete = input.Arete;
-        item.Raza = input.Raza.Trim();
-        item.Sexo = input.Sexo.Trim();
-        item.FechaNacimiento = input.FechaNacimiento;
-        item.FechaIngreso = input.FechaIngreso;
-        item.Procedencia = input.Procedencia.Trim();
-        item.Estado = input.Estado.Trim();
-        item.FechaSalida = input.FechaSalida;
-        item.Observaciones = input.Observaciones;
+        item.IdLote = candidate.IdLote;
+        item.Arete = candidate.Arete;
+        item.Raza = candidate.Raza;
+        item.Sexo = candidate.Sexo;
+        item.FechaNacimiento = candidate.FechaNacimiento;
+        item.FechaIngreso = candidate.FechaIngreso;
+        item.Procedencia = candidate.Procedencia;
+        item.Estado = candidate.Estado;
+        item.FechaSalida = candidate.FechaSalida;
+        item.Observaciones = candidate.Observaciones;
         item.IdAutor = authorId;
-        item.EliminadoEn = input.EliminadoEn;
         item.VersionRegistro++;
 
-        if (loteAnterior != item.IdLote)
+        var esSalida = !string.Equals(estadoAnterior, item.Estado, StringComparison.OrdinalIgnoreCase) &&
+                       (item.Estado.Equals("Vendido", StringComparison.OrdinalIgnoreCase) ||
+                        item.Estado.Equals("Venta", StringComparison.OrdinalIgnoreCase) ||
+                        item.Estado.Equals("Baja", StringComparison.OrdinalIgnoreCase));
+
+        // Regla 06 y 08: Registrar cambio de lote o salida en MovimientoAnimal sin perder historial.
+        if (esSalida)
+        {
+            item.FechaSalida ??= ApiProblemResults.EnsureUtcDate(DateTime.UtcNow);
+            db.MovimientosAnimales.Add(new MovimientoAnimal
+            {
+                IdMovimiento = Guid.NewGuid(),
+                IdAnimal = item.IdAnimal,
+                IdLoteOrigen = loteAnterior,
+                IdLoteDestino = null,
+                Tipo = item.Estado.StartsWith("Ven", StringComparison.OrdinalIgnoreCase) ? "Venta" : "Baja",
+                Fecha = item.FechaSalida.Value,
+                Motivo = "Salida registrada en expediente",
+                IdAutor = authorId,
+                CreadoEn = DateTime.UtcNow,
+                VersionRegistro = 1
+            });
+        }
+        else if (loteAnterior != item.IdLote)
         {
             db.MovimientosAnimales.Add(new MovimientoAnimal
             {
@@ -190,48 +252,36 @@ public sealed class AnimalsController(
                 VersionRegistro = 1
             });
         }
-        else if (!string.Equals(estadoAnterior, item.Estado, StringComparison.OrdinalIgnoreCase) &&
-                 (item.Estado.Equals("Vendido", StringComparison.OrdinalIgnoreCase) ||
-                  item.Estado.Equals("Venta", StringComparison.OrdinalIgnoreCase) ||
-                  item.Estado.Equals("Baja", StringComparison.OrdinalIgnoreCase)))
-        {
-            item.FechaSalida ??= DateTime.UtcNow.Date;
-            db.MovimientosAnimales.Add(new MovimientoAnimal
-            {
-                IdMovimiento = Guid.NewGuid(),
-                IdAnimal = item.IdAnimal,
-                IdLoteOrigen = item.IdLote,
-                IdLoteDestino = null,
-                Tipo = item.Estado.StartsWith("Ven", StringComparison.OrdinalIgnoreCase) ? "Venta" : "Baja",
-                Fecha = item.FechaSalida.Value,
-                Motivo = "Salida registrada en expediente",
-                IdAutor = authorId,
-                VersionRegistro = 1
-            });
-        }
 
         try
         {
             await db.SaveChangesAsync(ct);
-            await tx.CommitAsync(ct);
+            if (tx is not null) await tx.CommitAsync(ct);
         }
         catch (DbUpdateException)
         {
-            await tx.RollbackAsync(ct);
-            return Conflict("El arete ya existe en este rancho o las referencias no son válidas.");
+            if (tx is not null) await tx.RollbackAsync(ct);
+            return this.ConflictProblem("El arete ya existe en este rancho o las referencias no son válidas.");
         }
 
         return NoContent();
     }
 
     [HttpDelete("{id:guid}")]
-    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Delete(
+        [FromServices] RanchAccessService access,
+        Guid id,
+        CancellationToken ct)
     {
         var userId = RanchAccessService.GetUserId(User);
         if (userId is null) return Unauthorized();
 
         var item = await db.Animales.FindAsync([id], ct);
-        if (item is null) return NotFound();
+        if (item is null) return this.NotFoundProblem("El animal solicitado no existe.");
 
         if (!await access.CanAccessAsync(userId.Value, item.IdRancho, ct))
             return Forbid();
@@ -245,4 +295,37 @@ public sealed class AnimalsController(
 
         return NoContent();
     }
+
+    private static bool MatchesAnimal(Animal existing, AnimalCreateDto dto) =>
+        existing.IdRancho == dto.IdRancho &&
+        existing.IdLote == dto.IdLote &&
+        ApiProblemResults.SameText(existing.Arete, dto.Arete) &&
+        ApiProblemResults.SameText(existing.Raza, dto.Raza) &&
+        ApiProblemResults.SameText(existing.Sexo, dto.Sexo) &&
+        ApiProblemResults.SameUtcDate(existing.FechaNacimiento, dto.FechaNacimiento) &&
+        ApiProblemResults.SameUtcDate(existing.FechaIngreso, dto.FechaIngreso) &&
+        ApiProblemResults.SameText(existing.Procedencia, dto.Procedencia) &&
+        ApiProblemResults.SameText(existing.Estado, dto.Estado) &&
+        ApiProblemResults.SameUtcDate(existing.FechaSalida, dto.FechaSalida) &&
+        ApiProblemResults.SameText(existing.Observaciones, dto.Observaciones);
+
+    internal static AnimalResponseDto ToResponseDto(Animal a) => new()
+    {
+        IdAnimal = a.IdAnimal,
+        IdRancho = a.IdRancho,
+        IdLote = a.IdLote,
+        Arete = a.Arete,
+        Raza = a.Raza,
+        Sexo = a.Sexo,
+        FechaNacimiento = a.FechaNacimiento,
+        FechaIngreso = a.FechaIngreso,
+        Procedencia = a.Procedencia,
+        Estado = a.Estado,
+        FechaSalida = a.FechaSalida,
+        Observaciones = a.Observaciones,
+        IdAutor = a.IdAutor,
+        CreadoEn = a.CreadoEn,
+        VersionRegistro = a.VersionRegistro,
+        EliminadoEn = a.EliminadoEn
+    };
 }

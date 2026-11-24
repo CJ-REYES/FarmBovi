@@ -4,26 +4,23 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace FarmBovi.Api.Models;
 
 /// <summary>
-/// Registro de pesaje de báscula oficial (o estimado confirmado) asociado a un bovino.
+/// Registro de pesaje de báscula oficial o estimado mediante BoviScale IA asociado a un bovino.
 /// Alineado a la Regla 14 (<see cref="Services.FarmDomainValidationService.ValidatePesaje"/>).
 /// </summary>
 [Table("Pesaje")]
 public sealed class Pesaje
 {
     [Key]
-    [Column(TypeName = "char(36)")]
     public Guid IdPesaje { get; set; } = Guid.NewGuid();
 
     [Required]
-    [Column(TypeName = "char(36)")]
     public Guid IdAnimal { get; set; }
 
     [Required]
-    [Column(TypeName = "decimal(10,2)")]
     public decimal PesoRealKg { get; set; }
 
     [Required]
-    public DateTime Fecha { get; set; } = DateTime.UtcNow;
+    public DateTime Fecha { get; set; }
 
     [Required]
     [MaxLength(150)]
@@ -40,7 +37,28 @@ public sealed class Pesaje
     [MaxLength(30)]
     public string OrigenPesaje { get; set; } = "manual";
 
-    // Cambiado de Guid a int para que coincida con el usuario autenticado
+    /// <summary>
+    /// Identificador único de solicitud para garantizar idempotencia en integraciones (ej. BoviScale IA).
+    /// Nulo para pesajes manuales tradicionales.
+    /// </summary>
+    public Guid? IdSolicitud { get; set; }
+
+    /// <summary>
+    /// Referencia opcional a la fotografía (<see cref="ArchivoMultimedia"/>) utilizada para estimar el peso.
+    /// </summary>
+    public Guid? IdArchivoMultimedia { get; set; }
+
+    /// <summary>
+    /// Confianza reportada por el modelo de estimación (escala 0.0000 a 1.0000), cuando aplica.
+    /// </summary>
+    public decimal? ConfianzaModelo { get; set; }
+
+    /// <summary>
+    /// Versión del modelo de IA externo que produjo la estimación, cuando aplica.
+    /// </summary>
+    [MaxLength(80)]
+    public string? VersionModelo { get; set; }
+
     [Required]
     public int IdAutor { get; set; }
 

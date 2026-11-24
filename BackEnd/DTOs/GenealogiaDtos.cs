@@ -41,7 +41,9 @@ public sealed record PadresAnimalResponse(
     AnimalResumenGenealogiaDto? Padre,
     AnimalResumenGenealogiaDto? Madre,
     string? Observaciones,
-    IReadOnlyList<AncestroGenealogicoDto> Ancestros);
+    IReadOnlyList<AncestroGenealogicoDto> Ancestros,
+    Guid? IdGenealogia = null,
+    long? VersionRegistro = null);
 
 public sealed record AncestroGenealogicoDto(
     int Generacion,

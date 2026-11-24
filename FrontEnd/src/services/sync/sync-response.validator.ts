@@ -61,6 +61,8 @@ const SERVER_ENTITY_TO_CLIENT: Record<string, SyncEntityName> = {
   'eventos-reproductivos': 'reproductionRecords',
   reproductionrecords: 'reproductionRecords',
   genealogia: 'genealogy',
+  genealogias: 'genealogy',
+  genealogiaanimal: 'genealogy',
   genealogy: 'genealogy',
   movimientoanimal: 'movements',
   'movimientos-animales': 'movements',

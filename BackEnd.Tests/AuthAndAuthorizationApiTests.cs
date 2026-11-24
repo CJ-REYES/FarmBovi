@@ -8,6 +8,7 @@ using System.Text.Json;
 using FarmBovi.Api.Data;
 using FarmBovi.Api.Models;
 using FarmBovi.Api.Services;
+using FarmBovi.Api.Services.Storage;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -41,6 +42,7 @@ public sealed class FarmBoviApiFactory : WebApplicationFactory<Program>
         builder.UseSetting("Jwt:SigningKey", SigningKey);
         builder.UseSetting("Jwt:Issuer", Issuer);
         builder.UseSetting("Jwt:Audience", Audience);
+        builder.UseSetting("MediaStorage:PrivateRootPath", Path.Combine(_tempStorageRoot, "private-media"));
         builder.ConfigureTestServices(services =>
         {
             var toRemove = services.Where(d =>

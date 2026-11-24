@@ -154,10 +154,12 @@ public sealed class FarmDomainValidationService(FarmDbContext db)
 
         if (movimiento.IdLoteOrigen.HasValue)
         {
-            var origenExists = await db.Lotes.AsNoTracking()
-                .AnyAsync(l => l.IdLote == movimiento.IdLoteOrigen.Value && l.EliminadoEn == null, ct);
-            if (!origenExists)
+            var origen = await db.Lotes.AsNoTracking()
+                .FirstOrDefaultAsync(l => l.IdLote == movimiento.IdLoteOrigen.Value && l.EliminadoEn == null, ct);
+            if (origen is null)
                 return (null, "El lote de origen especificado no existe o está eliminado.");
+            if (origen.IdRancho != animal.IdRancho)
+                return (null, "El lote de origen debe pertenecer al mismo rancho del animal.");
         }
 
         if (movimiento.IdLoteDestino.HasValue)
@@ -257,11 +259,16 @@ public sealed class FarmDomainValidationService(FarmDbContext db)
 
         if (item.IdResponsable.HasValue)
         {
-            // Línea 265 corregida a u.Id
-            var respExists = await db.Usuarios.AsNoTracking()
-                .AnyAsync(u => u.Id == item.IdResponsable.Value, ct);
-            if (!respExists)
-                return "El usuario responsable especificado no existe.";
+            var respBelongsToRanch = await (from ur in db.UsuarioRanchos.AsNoTracking()
+                                join u in db.Usuarios.AsNoTracking() on ur.IdUsuario equals u.Id
+                                where ur.IdUsuario == item.IdResponsable.Value &&
+                                      ur.IdRancho == item.IdRancho &&
+                                      ur.FechaBaja == null &&
+                                      ur.Estado.ToLower() == "activo" &&
+                                      u.Estado.ToLower() == "activo"
+                                select ur.IdUsuarioRancho).AnyAsync(ct);
+            if (!respBelongsToRanch)
+                return "El usuario responsable especificado no existe, está inactivo o no pertenece al rancho indicado.";
         }
 
         if (item.IdTratamiento.HasValue)
@@ -284,7 +291,9 @@ public sealed class FarmDomainValidationService(FarmDbContext db)
 
             var animalEvento = await db.Animales.AsNoTracking()
                 .FirstOrDefaultAsync(a => a.IdAnimal == evento.IdAnimal && a.EliminadoEn == null, ct);
-            if (animalEvento is not null && animalEvento.IdRancho != item.IdRancho)
+            if (animalEvento is null)
+                return "El animal del tratamiento vinculado no existe o está eliminado.";
+            if (animalEvento.IdRancho != item.IdRancho)
                 return "El tratamiento vinculado pertenece a un animal de otro rancho.";
         }
 
@@ -295,4 +304,162 @@ public sealed class FarmDomainValidationService(FarmDbContext db)
         pesoRealKg <= 0
             ? "El peso real de báscula (pesoRealKg) debe ser mayor que cero."
             : null;
+
+    private static readonly HashSet<string> SexosMachoRepro = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "macho", "masculino", "m", "male"
+    };
+
+    private static readonly HashSet<string> SexosHembraRepro = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "hembra", "femenino", "h", "f", "female"
+    };
+
+    private static readonly HashSet<string> SexosDesconocidosRepro = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "desconocido", "desconocida", "unknown", "nd", "n/a", "indefinido", "indeterminado", "sin especificar"
+    };
+
+    private static bool IsMaleSex(string? sexo) =>
+        !string.IsNullOrWhiteSpace(sexo) && SexosMachoRepro.Contains(sexo.Trim());
+
+    private static bool IsFemaleSex(string? sexo) =>
+        !string.IsNullOrWhiteSpace(sexo) && SexosHembraRepro.Contains(sexo.Trim());
+
+    private static bool IsUnknownSex(string? sexo) =>
+        string.IsNullOrWhiteSpace(sexo) || SexosDesconocidosRepro.Contains(sexo.Trim());
+
+    /// <summary>
+    /// Identifica eventos reproductivos que biológicamente corresponden de forma exclusiva a hembras
+    /// (detección de celo, inseminación, diagnóstico/confirmación de gestación, parto, pérdida gestacional, secado).
+    /// </summary>
+    public static bool IsFemaleOnlyReproductionEvent(string? tipo)
+    {
+        if (string.IsNullOrWhiteSpace(tipo)) return false;
+        var t = tipo.Trim().ToLowerInvariant();
+        return t.Contains("celo", StringComparison.Ordinal) ||
+               t.Contains("inseminaci", StringComparison.Ordinal) ||
+               t.Contains("palpaci", StringComparison.Ordinal) ||
+               t.Contains("diagnóstico de gestaci", StringComparison.Ordinal) ||
+               t.Contains("diagnostico de gestaci", StringComparison.Ordinal) ||
+               t.Contains("gestaci", StringComparison.Ordinal) ||
+               t.Contains("preñez", StringComparison.Ordinal) ||
+               t.Contains("prenez", StringComparison.Ordinal) ||
+               t.Contains("parto", StringComparison.Ordinal) ||
+               t.Contains("aborto", StringComparison.Ordinal) ||
+               t.Contains("pérdida gestacional", StringComparison.Ordinal) ||
+               t.Contains("perdida gestacional", StringComparison.Ordinal) ||
+               t.Contains("secado", StringComparison.Ordinal);
+    }
+
+    public static bool IsCalvingEvent(string? tipo)
+    {
+        if (string.IsNullOrWhiteSpace(tipo)) return false;
+        var t = tipo.Trim().ToLowerInvariant();
+        return t.Equals("parto", StringComparison.Ordinal) ||
+               t.StartsWith("parto ", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Valida un evento reproductivo asegurando coherencia biológica (sexo/tipo), pertenencia de
+    /// animales al mismo rancho, validez del semental y coherencia cronológica de fechas.
+    /// </summary>
+    public async Task<string?> ValidateEventoReproductivoAsync(
+        EventoReproductivo item,
+        Guid? excludeEventId,
+        CancellationToken ct)
+    {
+        if (item.IdAnimal == Guid.Empty)
+            return "El identificador del animal (idAnimal) es obligatorio.";
+
+        if (string.IsNullOrWhiteSpace(item.Tipo))
+            return "El tipo de evento reproductivo (tipo) es obligatorio.";
+
+        var normalizedTipo = item.Tipo.Trim();
+        if (normalizedTipo.Length > 60)
+            return "El tipo de evento reproductivo no puede exceder 60 caracteres.";
+
+        if (item.Resultado is not null && item.Resultado.Trim().Length > 120)
+            return "El resultado del evento reproductivo no puede exceder 120 caracteres.";
+
+        if (item.Observaciones is not null && item.Observaciones.Trim().Length > 1000)
+            return "Las observaciones del evento reproductivo no pueden exceder 1000 caracteres.";
+
+        if (item.Fecha == default)
+            return "La fecha del evento reproductivo es obligatoria.";
+
+        var fechaUtc = item.Fecha.Kind switch
+        {
+            DateTimeKind.Utc => item.Fecha,
+            DateTimeKind.Local => item.Fecha.ToUniversalTime(),
+            _ => DateTime.SpecifyKind(item.Fecha, DateTimeKind.Utc)
+        };
+
+        if (fechaUtc > DateTime.UtcNow.AddMinutes(10))
+            return "La fecha del evento reproductivo no puede estar en el futuro.";
+
+        var animal = await db.Animales.AsNoTracking()
+            .FirstOrDefaultAsync(a => a.IdAnimal == item.IdAnimal && a.EliminadoEn == null, ct);
+        if (animal is null)
+            return "El animal especificado no existe o está eliminado.";
+
+        if (IsFemaleOnlyReproductionEvent(normalizedTipo) && IsMaleSex(animal.Sexo))
+            return $"El evento reproductivo '{normalizedTipo}' aplica únicamente a hembras; el animal seleccionado es de sexo {animal.Sexo}.";
+
+        if (animal.FechaNacimiento.HasValue && fechaUtc.Date < animal.FechaNacimiento.Value.Date)
+            return "La fecha del evento reproductivo no puede ser anterior a la fecha de nacimiento del animal.";
+
+        if (animal.FechaSalida.HasValue && fechaUtc.Date > animal.FechaSalida.Value.Date)
+            return "La fecha del evento reproductivo no puede ser posterior a la fecha de salida del animal.";
+
+        if (item.IdSemental.HasValue)
+        {
+            if (item.IdSemental.Value == Guid.Empty)
+                return "El identificador del semental (idSemental) no es válido.";
+
+            if (item.IdSemental.Value == item.IdAnimal)
+                return "Un animal no puede asociarse como su propio semental.";
+
+            if (IsMaleSex(animal.Sexo))
+                return "Cuando se asocia un semental (idSemental), el animal receptor debe ser hembra.";
+
+            var semental = await db.Animales.AsNoTracking()
+                .FirstOrDefaultAsync(a => a.IdAnimal == item.IdSemental.Value && a.EliminadoEn == null, ct);
+            if (semental is null)
+                return "El semental especificado no existe o está eliminado.";
+
+            if (semental.IdRancho != animal.IdRancho)
+                return "El semental debe pertenecer al mismo rancho del animal.";
+
+            if (!IsUnknownSex(semental.Sexo) && !IsMaleSex(semental.Sexo))
+                return "El semental especificado debe ser de sexo macho.";
+
+            if (semental.FechaNacimiento.HasValue && fechaUtc.Date < semental.FechaNacimiento.Value.Date)
+                return "La fecha del evento reproductivo no puede ser anterior a la fecha de nacimiento del semental.";
+        }
+
+        // Coherencia biológica entre partos de una misma hembra (gestación bovina ~283 días; mínimo fisiológico viable 240 días)
+        if (IsCalvingEvent(normalizedTipo))
+        {
+            var previousCalvingDates = await db.EventosReproductivos.AsNoTracking()
+                .Where(e => e.IdAnimal == item.IdAnimal
+                            && e.EliminadoEn == null
+                            && (!excludeEventId.HasValue || e.IdEventoReproductivo != excludeEventId.Value))
+                .Select(e => new { e.Tipo, e.Fecha })
+                .ToListAsync(ct);
+
+            foreach (var prev in previousCalvingDates)
+            {
+                if (!IsCalvingEvent(prev.Tipo)) continue;
+                var prevUtc = prev.Fecha.Kind == DateTimeKind.Utc ? prev.Fecha : prev.Fecha.ToUniversalTime();
+                var daysDiff = Math.Abs((fechaUtc.Date - prevUtc.Date).TotalDays);
+                if (daysDiff < 240)
+                {
+                    return "Incoherencia cronológica: ya existe otro parto registrado para esta hembra a menos de 240 días de diferencia.";
+                }
+            }
+        }
+
+        return null;
+    }
 }

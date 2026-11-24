@@ -514,7 +514,7 @@ public sealed class UserProfileAndRegistrationTests : IClassFixture<FarmBoviApiF
             estado = "Activo"
         })).StatusCode);
 
-        // 1. Subir foto de perfil de ganado -> public/imagenes/perfil-ganado/...
+        // 1. Subir foto de perfil de ganado -> almacenamiento privado y acceso autenticado por rancho
         var profileMediaId = Guid.NewGuid();
         using (var form = new MultipartFormDataContent())
         {
@@ -530,12 +530,20 @@ public sealed class UserProfileAndRegistrationTests : IClassFixture<FarmBoviApiF
             Assert.Equal(HttpStatusCode.Created, uploadRes.StatusCode);
             var uploaded = (await uploadRes.Content.ReadFromJsonAsync<ArchivoMultimediaDto>())!;
             Assert.Equal(profileMediaId, uploaded.IdArchivo);
-            Assert.StartsWith("public/imagenes/perfil-ganado/", uploaded.RutaArchivo);
-            Assert.StartsWith("/api/media/public/imagenes/perfil-ganado/", uploaded.UrlPublica);
+            Assert.Contains("/perfil-ganado/", uploaded.RutaArchivo);
+            Assert.DoesNotContain("public/imagenes/", uploaded.RutaArchivo);
+            Assert.Equal($"/api/media/archivos/{profileMediaId}/contenido", uploaded.UrlContenido);
+            Assert.Equal(uploaded.UrlContenido, uploaded.UrlPublica);
+            Assert.Equal("Disponible", uploaded.Estado);
+            Assert.Equal("LocalFileSystem", uploaded.ProveedorAlmacenamiento);
 
-            // Verificar que la imagen se sirve correctamente desde su URL pública
+            // Verificar que un cliente anónimo NO puede acceder al archivo privado
             var anonClient = _factory.CreateClient();
-            var imgRes = await anonClient.GetAsync(uploaded.UrlPublica);
+            var anonRes = await anonClient.GetAsync(uploaded.UrlContenido);
+            Assert.Equal(HttpStatusCode.Unauthorized, anonRes.StatusCode);
+
+            // Verificar que el cliente autorizado SÍ descarga la imagen correctamente
+            var imgRes = await client.GetAsync(uploaded.UrlContenido);
             Assert.Equal(HttpStatusCode.OK, imgRes.StatusCode);
             Assert.Equal(ValidPngBytes, await imgRes.Content.ReadAsByteArrayAsync());
         }
@@ -554,7 +562,7 @@ public sealed class UserProfileAndRegistrationTests : IClassFixture<FarmBoviApiF
             Assert.Equal(HttpStatusCode.OK, retryRes.StatusCode);
         }
 
-        // 3. Subir foto de pesaje BoviScale -> public/imagenes/pesaje-ganado/...
+        // 3. Subir foto de pesaje BoviScale -> almacenamiento privado bajo pesaje-ganado
         var weighMediaId = Guid.NewGuid();
         string weighUrl;
         using (var weighForm = new MultipartFormDataContent())
@@ -569,9 +577,9 @@ public sealed class UserProfileAndRegistrationTests : IClassFixture<FarmBoviApiF
             var weighRes = await client.PostAsync("/api/media/archivos", weighForm);
             Assert.Equal(HttpStatusCode.Created, weighRes.StatusCode);
             var weighDto = (await weighRes.Content.ReadFromJsonAsync<ArchivoMultimediaDto>())!;
-            Assert.StartsWith("public/imagenes/pesaje-ganado/", weighDto.RutaArchivo);
-            Assert.StartsWith("/api/media/public/imagenes/pesaje-ganado/", weighDto.UrlPublica);
-            weighUrl = weighDto.UrlPublica;
+            Assert.Contains("/pesaje-ganado/", weighDto.RutaArchivo);
+            Assert.Equal($"/api/media/archivos/{weighMediaId}/contenido", weighDto.UrlContenido);
+            weighUrl = weighDto.UrlContenido;
         }
 
         // 4. Listar archivos sincronizados -> devuelve ambos registros con sus rutas y URLs
@@ -584,8 +592,7 @@ public sealed class UserProfileAndRegistrationTests : IClassFixture<FarmBoviApiF
         var delRes = await client.DeleteAsync($"/api/media/archivos/{weighMediaId}");
         Assert.Equal(HttpStatusCode.NoContent, delRes.StatusCode);
 
-        var anonAfterDel = _factory.CreateClient();
-        var goneImgRes = await anonAfterDel.GetAsync(weighUrl);
+        var goneImgRes = await client.GetAsync(weighUrl);
         Assert.Equal(HttpStatusCode.NotFound, goneImgRes.StatusCode);
 
         // Limpiar el otro archivo de prueba

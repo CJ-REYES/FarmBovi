@@ -19,8 +19,10 @@ import {
   WifiOff,
   X
 } from 'lucide-react';
+import { useAuth } from '../../hooks/useAuth';
 import { useSyncStatus } from '../../hooks/useSyncStatus';
 import { usePwaUpdate } from '../../hooks/usePwaUpdate';
+import { markAlertsAsSeen } from '../../hooks/useUnreadAlerts';
 import {
   ALERT_ESTADOS,
   ALERT_SUGGESTED_TYPES,
@@ -127,6 +129,7 @@ function renderSyncBadge(syncStatus: AlertRecord['syncStatus']) {
 
 export default function AlertsPage() {
   const [searchParams] = useSearchParams();
+  const { session } = useAuth();
   const { isOnline, counts } = useSyncStatus();
   const { updateAvailable, swVersion, applyUpdate } = usePwaUpdate();
 
@@ -166,6 +169,25 @@ export default function AlertsPage() {
     };
     return SystemNotificationsService.subscribe(syncHistory);
   }, []);
+
+  // Marcar alertas y notificaciones como vistas mientras el usuario está en la página de Alertas
+  useEffect(() => {
+    if (loading) return;
+    void markAlertsAsSeen({
+      upcomingWindowDays: session?.configuracion?.diasAvisoAlertas,
+      pendingConflictsCount: counts.pendingConflictsCount,
+      updateAvailable,
+      swVersion
+    });
+  }, [
+    loading,
+    alerts,
+    systemHistory,
+    counts.pendingConflictsCount,
+    updateAvailable,
+    swVersion,
+    session?.configuracion?.diasAvisoAlertas
+  ]);
 
   const loadData = useCallback(async (withDeleted: boolean) => {
     setLoading(true);
@@ -220,14 +242,12 @@ export default function AlertsPage() {
       }
     })();
 
-    let previousSyncAt = SyncScheduler.getSnapshot().lastCompletedSyncAt;
-    const unsubscribe = SyncScheduler.subscribe(() => {
-      const nextSyncAt = SyncScheduler.getSnapshot().lastCompletedSyncAt;
-      if (nextSyncAt && nextSyncAt !== previousSyncAt) {
-        previousSyncAt = nextSyncAt;
+    const unsubscribe = SyncScheduler.subscribeToDataUpdates(
+      ['alerts', 'cattle', 'lots', 'treatments'],
+      () => {
         void loadData(includeDeleted);
       }
-    });
+    );
 
     return () => {
       active = false;
@@ -569,12 +589,6 @@ export default function AlertsPage() {
       renderCell: (a) => (
         <span className="text-[12px] font-semibold text-brand-slate">{a.estado}</span>
       )
-    },
-    {
-      key: 'acciones',
-      header: 'Acciones',
-      hideOnCard: true,
-      renderCell: (a) => renderAlertActions(a)
     }
   ];
 

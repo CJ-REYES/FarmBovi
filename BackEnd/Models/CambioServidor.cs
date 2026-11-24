@@ -26,11 +26,7 @@ public sealed class CambioServidor
     public string? Despues
     {
         get => _despues ?? _datos;
-        set
-        {
-            _despues = value;
-            _datos ??= value;
-        }
+        set => _despues = value;
     }
 
     /// <summary>

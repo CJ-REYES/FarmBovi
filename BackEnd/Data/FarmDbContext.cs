@@ -39,6 +39,7 @@ public sealed class FarmDbContext(
     public DbSet<Pesaje> Pesajes => Set<Pesaje>();
     public DbSet<Alimentacion> Alimentaciones => Set<Alimentacion>();
     public DbSet<EventoSanitario> EventosSanitarios => Set<EventoSanitario>();
+    public DbSet<EventoReproductivo> EventosReproductivos => Set<EventoReproductivo>();
     public DbSet<Tratamiento> Tratamientos => Set<Tratamiento>();
     public DbSet<Reproduccion> Reproduccion => Set<Reproduccion>();
     public DbSet<Recordatorio> Recordatorios => Set<Recordatorio>();
@@ -186,6 +187,7 @@ public sealed class FarmDbContext(
         || entity is Alimentacion
         || entity is MovimientoAnimal
         || entity is EventoSanitario
+        || entity is EventoReproductivo
         || entity is Tratamiento
         || entity is Reproduccion
         || entity is Recordatorio
@@ -673,8 +675,13 @@ public sealed class FarmDbContext(
             e.Property(x => x.Tipo).HasMaxLength(30).IsRequired();
             e.Property(x => x.NombreArchivo).HasMaxLength(255).IsRequired();
             e.Property(x => x.MimeType).HasMaxLength(60).IsRequired();
+            e.Property(x => x.Extension).HasMaxLength(15).IsRequired();
             e.Property(x => x.ChecksumSha256).HasMaxLength(64);
+            e.Property(x => x.ProveedorAlmacenamiento).HasMaxLength(40).IsRequired();
             e.Property(x => x.RutaArchivo).HasMaxLength(500).IsRequired();
+            e.Property(x => x.Estado).HasMaxLength(30).IsRequired();
+            e.Property(x => x.FechaCaptura).IsRequired();
+            e.Property(x => x.FechaCarga).IsRequired();
             e.Property(x => x.IdAutor).IsRequired();
             e.Property(x => x.VersionRegistro).IsConcurrencyToken();
             e.HasIndex(x => x.IdRancho);
@@ -697,12 +704,40 @@ public sealed class FarmDbContext(
             e.Property(x => x.Responsable).HasMaxLength(180).IsRequired();
             e.Property(x => x.Observaciones).HasMaxLength(500);
             e.Property(x => x.OrigenPesaje).HasMaxLength(30).IsRequired();
+            e.Property(x => x.IdSolicitud).HasColumnType("char(36)");
+            e.Property(x => x.IdArchivoMultimedia).HasColumnType("char(36)");
+            e.Property(x => x.ConfianzaModelo).HasPrecision(5, 4);
+            e.Property(x => x.VersionModelo).HasMaxLength(80);
             e.Property(x => x.IdAutor).IsRequired();
             e.Property(x => x.VersionRegistro).IsConcurrencyToken();
             e.HasIndex(x => x.IdAnimal);
             e.HasIndex(x => x.Fecha);
+            e.HasIndex(x => x.IdSolicitud).IsUnique();
+            e.HasIndex(x => x.IdArchivoMultimedia);
+            e.HasOne<Animal>().WithMany().HasForeignKey(x => x.IdAnimal).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<ArchivoMultimedia>().WithMany().HasForeignKey(x => x.IdArchivoMultimedia).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Usuario>().WithMany().HasForeignKey(x => x.IdAutor).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<EventoReproductivo>(e =>
+        {
+            e.ToTable("EventoReproductivo");
+            e.HasKey(x => x.IdEventoReproductivo);
+            e.Property(x => x.IdEventoReproductivo).HasColumnType("char(36)").ValueGeneratedNever();
+            e.Property(x => x.IdAnimal).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.IdSemental).HasColumnType("char(36)");
+            e.Property(x => x.Tipo).HasMaxLength(60).IsRequired();
+            e.Property(x => x.Fecha).IsRequired();
+            e.Property(x => x.Resultado).HasMaxLength(120);
+            e.Property(x => x.Observaciones).HasMaxLength(1000);
+            e.Property(x => x.IdAutor).IsRequired();
+            e.Property(x => x.CreadoEn).IsRequired();
+            e.Property(x => x.VersionRegistro).IsConcurrencyToken();
+            e.HasIndex(x => x.IdAnimal);
+            e.HasIndex(x => x.IdSemental);
             e.HasOne<Animal>().WithMany().HasForeignKey(x => x.IdAnimal).OnDelete(DeleteBehavior.Restrict);
             e.HasOne<Usuario>().WithMany().HasForeignKey(x => x.IdAutor).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Animal>().WithMany().HasForeignKey(x => x.IdSemental).OnDelete(DeleteBehavior.Restrict);
         });
     }
 }

@@ -189,7 +189,7 @@ public sealed class ProfilePhotoStorageService
         if (stream.CanSeek)
             stream.Position = 0;
 
-        await using (var target = new FileStream(physicalPath, FileMode.Create, FileAccess.Write, FileShare.None))
+        await using (var target = new FileStream(physicalPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
         {
             if (stream.CanSeek)
             {
@@ -238,6 +238,25 @@ public sealed class ProfilePhotoStorageService
         {
             // Ignorar si el archivo o directorio está temporalmente bloqueado
         }
+    }
+
+    /// <summary>
+    /// Resuelve únicamente avatares públicos de perfil de usuario (<c>public/imagenes/perfil-usuario/...</c>
+    /// y legado <c>uploads/usuarios/...</c>). Jamás expone fotografías privadas de ganado o ranchos.
+    /// </summary>
+    public (string FullPath, string ContentType)? ResolvePublicUserProfileFile(string? relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+            return null;
+
+        var normalized = relativePath.Trim().Replace('\\', '/').TrimStart('/');
+        if (!normalized.StartsWith("public/imagenes/perfil-usuario/", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.StartsWith("uploads/usuarios/", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return ResolvePhysicalFile(normalized);
     }
 
     public (string FullPath, string ContentType)? ResolvePhysicalFile(string? relativePath)

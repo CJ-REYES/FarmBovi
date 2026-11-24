@@ -2,28 +2,81 @@ import type { SyncStatus } from '../lib/database/schema';
 import type { Cattle } from './cattle';
 
 /**
- * Dependencia explícita con el Backend (ver `docs/08-contrato-sincronizacion.md` §Alcance real de Pull
- * y `BackEnd/Data/FarmDbContext.cs`).
- * No existe aún la entidad `Genealogia` ni columnas `IdPadre`/`IdMadre` en `Animal`,
- * ni endpoints REST o Sync Push/Pull habilitados para genealogía.
+ * DTOs reales del Backend (`BackEnd/DTOs/GenealogiaDtos.cs` y `BackEnd/Controllers/GenealogiaController.cs`).
  */
-export const GENEALOGY_BACKEND_DEPENDENCY = {
-  entityName: 'Genealogia',
-  missingRestEndpoint: '/api/genealogia',
-  syncPushEnabled: false,
-  syncPullEnabled: false,
-  requiredBackendFields: [
-    'IdGenealogia',
-    'IdAnimal',
-    'IdPadre',
-    'IdMadre',
-    'VersionRegistro',
-    'EliminadoEn'
-  ],
-  summaryMessage:
-    'Dependencia de Backend pendiente: el servidor aún no implementa el modelo Genealogia ni sus endpoints REST o de sincronización Push/Pull (tampoco expone IdPadre/IdMadre en Animal). Los parentescos registrados manualmente se guardan localmente en IndexedDB y permanecen en cola pendiente sin simular sincronización remota ni generar relaciones automáticas.'
-} as const;
+export interface RegistrarGenealogiaRequest {
+  idAnimal: string;
+  idPadre: string | null;
+  idMadre: string | null;
+  observaciones?: string | null;
+}
 
+export interface ActualizarGenealogiaRequest {
+  idPadre: string | null;
+  idMadre: string | null;
+  observaciones?: string | null;
+  versionRegistro: number;
+}
+
+export interface AnimalResumenGenealogiaDto {
+  idAnimal: string;
+  idRancho: string;
+  arete: string;
+  raza: string;
+  sexo: string;
+  fechaNacimiento: string | null;
+  estado: string;
+}
+
+export interface GenealogiaRegistroDto {
+  idGenealogia: string;
+  idAnimal: string;
+  idPadre: string | null;
+  idMadre: string | null;
+  observaciones: string | null;
+  idAutor: string;
+  creadoEn: string;
+  versionRegistro: number;
+}
+
+export interface AncestroGenealogicoDto {
+  generacion: number;
+  vinculo: string;
+  idHijo: string;
+  animal: AnimalResumenGenealogiaDto;
+}
+
+export interface PadresAnimalResponse {
+  animal: AnimalResumenGenealogiaDto;
+  padre: AnimalResumenGenealogiaDto | null;
+  madre: AnimalResumenGenealogiaDto | null;
+  observaciones: string | null;
+  ancestros: AncestroGenealogicoDto[];
+  idGenealogia?: string | null;
+  versionRegistro?: number | null;
+}
+
+export interface AnimalResumenGenealogicoDetalleDto extends AnimalResumenGenealogiaDto {
+  idPadre: string | null;
+  idMadre: string | null;
+}
+
+export interface DescendienteGenealogicoDto {
+  generacion: number;
+  rolProgenitor: string;
+  idPadreOMadreDirecto: string;
+  descendiente: AnimalResumenGenealogicoDetalleDto;
+}
+
+export interface DescendientesAnimalResponse {
+  animal: AnimalResumenGenealogiaDto;
+  totalDescendientes: number;
+  descendientes: DescendienteGenealogicoDto[];
+}
+
+/**
+ * Modelo de dominio en UI/caché local alineado con `GenealogiaRegistroDto`.
+ */
 export interface GenealogyRecord {
   id: string;
   idGenealogia: string;
@@ -32,6 +85,7 @@ export interface GenealogyRecord {
   idAnimal: string;
   idPadre: string | null;
   idMadre: string | null;
+  observaciones: string | null;
   versionRegistro: number;
   createdAt: string;
   updatedAt: string;
@@ -43,30 +97,29 @@ export interface GenealogyInput {
   idAnimal: string;
   idPadre: string | null;
   idMadre: string | null;
-}
-
-export interface BackendGenealogiaPayload {
-  idGenealogia: string;
-  idAnimal: string;
-  idPadre: string | null;
-  idMadre: string | null;
+  observaciones?: string | null;
 }
 
 export interface DescendantLink {
   animal: Cattle;
   recordId: string;
   role: 'padre' | 'madre' | 'ambos';
+  generacion?: number;
 }
 
 export interface AnimalGenealogyProfile {
   animal: Cattle;
   record: GenealogyRecord | null;
+  observaciones: string | null;
   padre: Cattle | null;
   madre: Cattle | null;
   abueloPaterno: Cattle | null;
   abuelaPaterna: Cattle | null;
   abueloMaterno: Cattle | null;
   abuelaMaterna: Cattle | null;
+  ancestros: AncestroGenealogicoDto[];
   descendientes: DescendantLink[];
+  descendientesMultigeneracion: DescendienteGenealogicoDto[];
+  totalDescendientes: number;
   hasAnyGenealogyData: boolean;
 }

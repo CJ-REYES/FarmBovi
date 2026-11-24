@@ -49,9 +49,11 @@ public sealed class SyncController(FarmDbContext db) : ControllerBase
         {
             ["cattle"] = [nameof(Animal)],
             ["lots"] = [nameof(Lote)],
+            ["genealogy"] = [nameof(GenealogiaAnimal)],
             ["weighings"] = [nameof(Pesaje)],
             ["healthRecords"] = [nameof(EventoSanitario), nameof(Tratamiento)],
             ["feedingRecords"] = [nameof(Alimentacion)],
+            ["reproductionRecords"] = [nameof(EventoReproductivo)],
             ["movements"] = [nameof(MovimientoAnimal)],
             ["alerts"] = [nameof(Recordatorio)]
         };
@@ -192,14 +194,84 @@ public sealed class SyncController(FarmDbContext db) : ControllerBase
             return (null, ("OPERACION_DESCONOCIDA", $"La operación '{change.Operacion}' no se puede sincronizar."));
 
         JsonElement? data = null;
-        if (!deleted)
+        if (deleted)
+        {
+            if (string.Equals(change.Entidad, nameof(Pesaje), StringComparison.OrdinalIgnoreCase))
+            {
+                var weighingAnimal = await (from pesaje in db.Pesajes.AsNoTracking()
+                                            join animal in db.Animales.AsNoTracking()
+                                                on pesaje.IdAnimal equals animal.IdAnimal into animalGroup
+                                            from animal in animalGroup.DefaultIfEmpty()
+                                            where pesaje.IdPesaje == change.IdRegistro
+                                            select new
+                                            {
+                                                pesaje.IdAnimal,
+                                                AnimalRanchId = animal != null ? (Guid?)animal.IdRancho : null
+                                            }).FirstOrDefaultAsync(ct);
+
+                if (weighingAnimal is not null && weighingAnimal.AnimalRanchId != ranchId)
+                {
+                    return (null, ("REFERENCIA_INEXISTENTE",
+                        $"El animal {weighingAnimal.IdAnimal} del pesaje no pertenece al rancho solicitado."));
+                }
+            }
+            else if (string.Equals(change.Entidad, nameof(GenealogiaAnimal), StringComparison.OrdinalIgnoreCase))
+            {
+                var genealogyAnimal = await (from gen in db.GenealogiasAnimales.AsNoTracking()
+                                             join animal in db.Animales.AsNoTracking()
+                                                 on gen.IdAnimal equals animal.IdAnimal into animalGroup
+                                             from animal in animalGroup.DefaultIfEmpty()
+                                             where gen.IdGenealogia == change.IdRegistro
+                                             select new
+                                             {
+                                                 gen.IdAnimal,
+                                                 AnimalRanchId = animal != null ? (Guid?)animal.IdRancho : null
+                                             }).FirstOrDefaultAsync(ct);
+
+                if (genealogyAnimal is not null && genealogyAnimal.AnimalRanchId != ranchId)
+                {
+                    return (null, ("REFERENCIA_INEXISTENTE",
+                        $"El animal {genealogyAnimal.IdAnimal} de la genealogía no pertenece al rancho solicitado."));
+                }
+            }
+            else if (string.Equals(change.Entidad, nameof(EventoReproductivo), StringComparison.OrdinalIgnoreCase))
+            {
+                var reproAnimal = await (from er in db.EventosReproductivos.AsNoTracking()
+                                         join animal in db.Animales.AsNoTracking()
+                                             on er.IdAnimal equals animal.IdAnimal into animalGroup
+                                         from animal in animalGroup.DefaultIfEmpty()
+                                         where er.IdEventoReproductivo == change.IdRegistro
+                                         select new
+                                         {
+                                             er.IdAnimal,
+                                             AnimalRanchId = animal != null ? (Guid?)animal.IdRancho : null
+                                         }).FirstOrDefaultAsync(ct);
+
+                if (reproAnimal is not null && reproAnimal.AnimalRanchId != ranchId)
+                {
+                    return (null, ("REFERENCIA_INEXISTENTE",
+                        $"El animal {reproAnimal.IdAnimal} del evento reproductivo no pertenece al rancho solicitado."));
+                }
+            }
+        }
+        else
         {
             try
             {
-                var (mapped, error) = string.Equals(clientEntity, "healthRecords", StringComparison.OrdinalIgnoreCase) &&
-                                      string.Equals(change.Entidad, nameof(Tratamiento), StringComparison.OrdinalIgnoreCase)
-                    ? await MapTreatmentDataAsync(change.Datos, ranchId, ct)
-                    : MapData(clientEntity, change.Datos);
+                (JsonElement? mapped, (string Codigo, string Mensaje)? error) =
+                    string.Equals(clientEntity, "healthRecords", StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(change.Entidad, nameof(Tratamiento), StringComparison.OrdinalIgnoreCase)
+                        ? await MapTreatmentDataAsync(change.Datos, ranchId, ct)
+                        : string.Equals(clientEntity, "weighings", StringComparison.OrdinalIgnoreCase) ||
+                          string.Equals(change.Entidad, nameof(Pesaje), StringComparison.OrdinalIgnoreCase)
+                            ? await MapWeighingDataAsync(change.Datos, ranchId, ct)
+                            : string.Equals(clientEntity, "genealogy", StringComparison.OrdinalIgnoreCase) ||
+                              string.Equals(change.Entidad, nameof(GenealogiaAnimal), StringComparison.OrdinalIgnoreCase)
+                                ? await MapGenealogyDataAsync(change.Datos, ranchId, ct)
+                                : string.Equals(clientEntity, "reproductionRecords", StringComparison.OrdinalIgnoreCase) ||
+                                  string.Equals(change.Entidad, nameof(EventoReproductivo), StringComparison.OrdinalIgnoreCase)
+                                    ? await MapReproductionDataAsync(change.Datos, ranchId, ct)
+                                    : MapData(clientEntity, change.Datos);
                 if (error is not null)
                     return (null, error);
                 data = mapped;
@@ -269,6 +341,251 @@ public sealed class SyncController(FarmDbContext db) : ControllerBase
         }), null);
     }
 
+    /// <summary>
+    /// Valida y proyecta un pesaje remoto para Pull. Verifica que el animal asociado exista y
+    /// pertenezca al rancho autorizado, valida peso positivo y fecha, e incluye <c>ranchId</c>
+    /// explícitamente para mantener aislamiento por rancho en el cliente offline.
+    /// </summary>
+    private async Task<(JsonElement? Data, (string Codigo, string Mensaje)? Error)> MapWeighingDataAsync(
+        string? rawJson, Guid ranchId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(rawJson))
+            return (null, ("DATOS_INCOMPLETOS", "El pesaje no tiene instantánea de datos."));
+
+        using var document = JsonDocument.Parse(rawJson);
+        var source = document.RootElement;
+        if (source.ValueKind != JsonValueKind.Object)
+            return (null, ("DATOS_INVALIDOS", "La instantánea del pesaje debe ser un objeto JSON."));
+
+        var rawAnimalId = TryGetStringAny(source, "IdAnimal", "idAnimal", "cattleId", "animalId");
+        if (!Guid.TryParse(rawAnimalId, out var animalId) || animalId == Guid.Empty)
+            return (null, ("DATOS_INCOMPLETOS", "El pesaje no indica un idAnimal válido."));
+
+        // Se acepta el animal aunque esté eliminado lógicamente dentro del mismo rancho para preservar historial.
+        var animalBelongsToRanch = await db.Animales.AsNoTracking()
+            .AnyAsync(a => a.IdAnimal == animalId && a.IdRancho == ranchId, ct);
+        if (!animalBelongsToRanch)
+            return (null, ("REFERENCIA_INEXISTENTE",
+                $"El animal {animalId} del pesaje no existe en el rancho solicitado."));
+
+        if (!TryGetDecimalAny(source, out var pesoRealKg, "PesoRealKg", "pesoRealKg", "peso"))
+            return (null, ("DATOS_INCOMPLETOS", "El pesaje no indica un pesoRealKg válido."));
+
+        if (pesoRealKg <= 0m)
+            return (null, ("DATOS_INVALIDOS", "El peso real de báscula (pesoRealKg) debe ser mayor que cero."));
+
+        var fecha = TryGetStringAny(source, "Fecha", "fecha", "date");
+        if (string.IsNullOrWhiteSpace(fecha))
+            return (null, ("DATOS_INCOMPLETOS", "El pesaje no tiene fecha."));
+
+        var payload = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["ranchId"] = ranchId,
+            ["idAnimal"] = animalId,
+            ["cattleId"] = animalId,
+            ["pesoRealKg"] = pesoRealKg,
+            ["peso"] = pesoRealKg,
+            ["fecha"] = fecha,
+            ["origenPesaje"] = TryGetStringAny(source, "OrigenPesaje", "origenPesaje") ?? "manual"
+        };
+
+        var fuenteBascula = TryGetStringAny(source, "FuenteBascula", "fuenteBascula");
+        if (!string.IsNullOrWhiteSpace(fuenteBascula))
+            payload["fuenteBascula"] = fuenteBascula;
+
+        var responsable = TryGetStringAny(source, "Responsable", "responsable");
+        if (!string.IsNullOrWhiteSpace(responsable))
+            payload["responsable"] = responsable;
+
+        if (TryGetPropertyAny(source, out var obsProp, "Observaciones", "observaciones"))
+        {
+            payload["observaciones"] = obsProp.ValueKind == JsonValueKind.Null
+                ? null
+                : obsProp.ValueKind == JsonValueKind.String
+                    ? obsProp.GetString()
+                    : obsProp.ToString();
+        }
+
+        var createdAt = TryGetStringAny(source, "CreadoEn", "createdAt", "fechaCreacion");
+        if (!string.IsNullOrWhiteSpace(createdAt))
+            payload["createdAt"] = createdAt;
+
+        return (JsonSerializer.SerializeToElement(payload), null);
+    }
+
+    /// <summary>
+    /// Valida y proyecta una relación genealógica remota para Pull. Comprueba que el animal y
+    /// los progenitores informados pertenezcan al rancho autorizado, rechaza auto-parentesco o
+    /// duplicidad padre=madre y conserva valores nulos explícitos al limpiar progenitores u observaciones.
+    /// </summary>
+    private async Task<(JsonElement? Data, (string Codigo, string Mensaje)? Error)> MapGenealogyDataAsync(
+        string? rawJson, Guid ranchId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(rawJson))
+            return (null, ("DATOS_INCOMPLETOS", "La genealogía no tiene instantánea de datos."));
+
+        using var document = JsonDocument.Parse(rawJson);
+        var source = document.RootElement;
+        if (source.ValueKind != JsonValueKind.Object)
+            return (null, ("DATOS_INVALIDOS", "La instantánea de genealogía debe ser un objeto JSON."));
+
+        var rawAnimalId = TryGetStringAny(source, "IdAnimal", "idAnimal", "cattleId", "animalId");
+        if (!Guid.TryParse(rawAnimalId, out var animalId) || animalId == Guid.Empty)
+            return (null, ("DATOS_INCOMPLETOS", "La genealogía no indica un idAnimal válido."));
+
+        var animalBelongsToRanch = await db.Animales.AsNoTracking()
+            .AnyAsync(a => a.IdAnimal == animalId && a.IdRancho == ranchId, ct);
+        if (!animalBelongsToRanch)
+            return (null, ("REFERENCIA_INEXISTENTE",
+                $"El animal {animalId} de la genealogía no existe en el rancho solicitado."));
+
+        Guid? padreId = null;
+        var rawPadreId = TryGetStringAny(source, "IdPadre", "idPadre", "padreId", "fatherId");
+        if (!string.IsNullOrWhiteSpace(rawPadreId))
+        {
+            if (!Guid.TryParse(rawPadreId, out var parsedPadre) || parsedPadre == Guid.Empty)
+                return (null, ("DATOS_INVALIDOS", "El identificador idPadre de la genealogía no es válido."));
+            padreId = parsedPadre;
+        }
+
+        Guid? madreId = null;
+        var rawMadreId = TryGetStringAny(source, "IdMadre", "idMadre", "madreId", "motherId");
+        if (!string.IsNullOrWhiteSpace(rawMadreId))
+        {
+            if (!Guid.TryParse(rawMadreId, out var parsedMadre) || parsedMadre == Guid.Empty)
+                return (null, ("DATOS_INVALIDOS", "El identificador idMadre de la genealogía no es válido."));
+            madreId = parsedMadre;
+        }
+
+        if (!padreId.HasValue && !madreId.HasValue)
+            return (null, ("DATOS_INCOMPLETOS", "La genealogía debe indicar al menos idPadre o idMadre."));
+
+        if (padreId == animalId || madreId == animalId)
+            return (null, ("DATOS_INVALIDOS", "Un animal no puede ser su propio padre o madre."));
+
+        if (padreId.HasValue && padreId == madreId)
+            return (null, ("DATOS_INVALIDOS", "El padre y la madre no pueden ser el mismo animal."));
+
+        if (padreId is { } pId)
+        {
+            var padreBelongsToRanch = await db.Animales.AsNoTracking()
+                .AnyAsync(a => a.IdAnimal == pId && a.IdRancho == ranchId, ct);
+            if (!padreBelongsToRanch)
+                return (null, ("REFERENCIA_INEXISTENTE",
+                    $"El padre {pId} de la genealogía no existe en el rancho solicitado."));
+        }
+
+        if (madreId is { } mId)
+        {
+            var madreBelongsToRanch = await db.Animales.AsNoTracking()
+                .AnyAsync(a => a.IdAnimal == mId && a.IdRancho == ranchId, ct);
+            if (!madreBelongsToRanch)
+                return (null, ("REFERENCIA_INEXISTENTE",
+                    $"La madre {mId} de la genealogía no existe en el rancho solicitado."));
+        }
+
+        var payload = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["ranchId"] = ranchId,
+            ["idAnimal"] = animalId,
+            ["cattleId"] = animalId,
+            ["idPadre"] = padreId,
+            ["padreId"] = padreId,
+            ["idMadre"] = madreId,
+            ["madreId"] = madreId
+        };
+
+        if (TryGetPropertyAny(source, out var obsProp, "Observaciones", "observaciones"))
+        {
+            payload["observaciones"] = obsProp.ValueKind == JsonValueKind.Null
+                ? null
+                : obsProp.ValueKind == JsonValueKind.String
+                    ? obsProp.GetString()
+                    : obsProp.ToString();
+        }
+        else
+        {
+            payload["observaciones"] = null;
+        }
+
+        var createdAt = TryGetStringAny(source, "CreadoEn", "createdAt", "fechaCreacion");
+        if (!string.IsNullOrWhiteSpace(createdAt))
+            payload["createdAt"] = createdAt;
+
+        return (JsonSerializer.SerializeToElement(payload), null);
+    }
+
+    private async Task<(JsonElement? Data, (string Codigo, string Mensaje)? Error)> MapReproductionDataAsync(
+        string? rawJson, Guid ranchId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(rawJson))
+            return (null, ("DATOS_INCOMPLETOS", "El evento reproductivo no tiene instantánea de datos."));
+
+        using var document = JsonDocument.Parse(rawJson);
+        var source = document.RootElement;
+        if (source.ValueKind != JsonValueKind.Object)
+            return (null, ("DATOS_INVALIDOS", "La instantánea del evento reproductivo debe ser un objeto JSON."));
+
+        var rawAnimalId = TryGetStringAny(source, "IdAnimal", "idAnimal", "cattleId", "animalId");
+        if (!Guid.TryParse(rawAnimalId, out var animalId) || animalId == Guid.Empty)
+            return (null, ("DATOS_INCOMPLETOS", "El evento reproductivo no indica un idAnimal válido."));
+
+        var animalBelongsToRanch = await db.Animales.AsNoTracking()
+            .AnyAsync(a => a.IdAnimal == animalId && a.IdRancho == ranchId, ct);
+        if (!animalBelongsToRanch)
+            return (null, ("REFERENCIA_INEXISTENTE",
+                $"El animal {animalId} del evento reproductivo no existe en el rancho solicitado."));
+
+        Guid? sementalId = null;
+        var rawSementalId = TryGetStringAny(source, "IdSemental", "idSemental", "sireId");
+        if (!string.IsNullOrWhiteSpace(rawSementalId))
+        {
+            if (!Guid.TryParse(rawSementalId, out var parsedSemental) || parsedSemental == Guid.Empty)
+                return (null, ("DATOS_INVALIDOS", "El identificador idSemental no es válido."));
+            var sementalBelongs = await db.Animales.AsNoTracking()
+                .AnyAsync(a => a.IdAnimal == parsedSemental && a.IdRancho == ranchId, ct);
+            if (!sementalBelongs)
+                return (null, ("REFERENCIA_INEXISTENTE",
+                    $"El semental {parsedSemental} del evento reproductivo no existe en el rancho solicitado."));
+            sementalId = parsedSemental;
+        }
+
+        var tipo = TryGetStringAny(source, "Tipo", "tipo", "evento", "event");
+        if (string.IsNullOrWhiteSpace(tipo))
+            return (null, ("DATOS_INCOMPLETOS", "El evento reproductivo no indica tipo."));
+
+        var fecha = TryGetStringAny(source, "Fecha", "fecha", "date");
+        if (string.IsNullOrWhiteSpace(fecha))
+            return (null, ("DATOS_INCOMPLETOS", "El evento reproductivo no indica fecha."));
+
+        var payload = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["ranchId"] = ranchId,
+            ["idAnimal"] = animalId,
+            ["cattleId"] = animalId,
+            ["idSemental"] = sementalId,
+            ["tipo"] = tipo,
+            ["evento"] = tipo,
+            ["fecha"] = fecha
+        };
+
+        payload["resultado"] = TryGetPropertyAny(source, out var resProp, "Resultado", "resultado") &&
+                               resProp.ValueKind != JsonValueKind.Null
+            ? (resProp.ValueKind == JsonValueKind.String ? resProp.GetString() : resProp.ToString())
+            : null;
+
+        payload["observaciones"] = TryGetPropertyAny(source, out var obsProp, "Observaciones", "observaciones") &&
+                                   obsProp.ValueKind != JsonValueKind.Null
+            ? (obsProp.ValueKind == JsonValueKind.String ? obsProp.GetString() : obsProp.ToString())
+            : null;
+
+        var createdAt = TryGetStringAny(source, "CreadoEn", "createdAt", "fechaCreacion");
+        if (!string.IsNullOrWhiteSpace(createdAt))
+            payload["createdAt"] = createdAt;
+
+        return (JsonSerializer.SerializeToElement(payload), null);
+    }
+
     private static (JsonElement? Data, (string Codigo, string Mensaje)? Error) MapData(string clientEntity, string? rawJson)
     {
         if (string.IsNullOrWhiteSpace(rawJson))
@@ -322,16 +639,6 @@ public sealed class SyncController(FarmDbContext db) : ControllerBase
                 Copy("nombre", "Nombre", "nombre", "name");
                 Copy("capacidad", "Capacidad", "capacidad", "capacity");
                 Copy("ubicacion", "Ubicacion", "ubicacion", "location");
-                break;
-            case "weighings":
-                Copy("cattleId", "IdAnimal", "cattleId", "animalId");
-                Copy("pesoRealKg", "PesoRealKg", "pesoRealKg", "peso");
-                Copy("peso", "PesoRealKg", "pesoRealKg", "peso");
-                Copy("fecha", "Fecha", "fecha", "date");
-                Copy("fuenteBascula", "FuenteBascula", "fuenteBascula");
-                Copy("responsable", "Responsable", "responsable");
-                Copy("observaciones", "Observaciones", "observaciones");
-                Copy("origenPesaje", "OrigenPesaje", "origenPesaje");
                 break;
             case "healthrecords":
                 Copy("cattleId", "IdAnimal", "cattleId", "animalId");
@@ -387,6 +694,44 @@ public sealed class SyncController(FarmDbContext db) : ControllerBase
         TryGetProperty(source, name, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+
+    private static bool TryGetPropertyAny(JsonElement source, out JsonElement value, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (TryGetProperty(source, name, out value))
+                return true;
+        }
+        value = default;
+        return false;
+    }
+
+    private static string? TryGetStringAny(JsonElement source, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            var value = TryGetString(source, name);
+            if (!string.IsNullOrWhiteSpace(value))
+                return value;
+        }
+        return null;
+    }
+
+    private static bool TryGetDecimalAny(JsonElement source, out decimal result, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!TryGetProperty(source, name, out var prop))
+                continue;
+            if (prop.ValueKind == JsonValueKind.Number && prop.TryGetDecimal(out result))
+                return true;
+            if (prop.ValueKind == JsonValueKind.String &&
+                decimal.TryParse(prop.GetString(), NumberStyles.Number, CultureInfo.InvariantCulture, out result))
+                return true;
+        }
+        result = 0m;
+        return false;
+    }
 
     private static string EncodeCursor(DateTime date, Guid id)
     {

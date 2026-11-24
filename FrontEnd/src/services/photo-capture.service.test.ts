@@ -47,7 +47,7 @@ describe('PhotoCaptureService — Validaciones, Blob en IndexedDB y cola pendien
     await seedAnimal();
   });
 
-  it('valida formato (JPEG/PNG/WebP) y tamaño (> 0 B y <= 20 MB)', () => {
+  it('valida formato (JPEG/PNG/WebP) y tamaño (> 0 B y <= 10 MB)', () => {
     const emptyBlob = new Blob([], { type: 'image/jpeg' });
     expect(validatePhotoBlob(emptyBlob).valid).toBe(false);
 
@@ -58,10 +58,10 @@ describe('PhotoCaptureService — Validaciones, Blob en IndexedDB y cola pendien
     const gifBlob = new Blob(['GIF89a'], { type: 'image/gif' });
     expect(validatePhotoBlob(gifBlob).valid).toBe(false);
 
-    // Simular archivo > 20 MB sin asignar 21 MB reales en RAM
-    const oversized = { size: 21 * 1024 * 1024, type: 'image/jpeg' } as Blob;
+    // Simular archivo > 10 MB sin asignar 11 MB reales en RAM
+    const oversized = { size: 11 * 1024 * 1024, type: 'image/jpeg' } as Blob;
     expect(validatePhotoBlob(oversized).valid).toBe(false);
-    expect(validatePhotoBlob(oversized).error).toMatch(/20 MB/i);
+    expect(validatePhotoBlob(oversized).error).toMatch(/10 MB/i);
 
     const validJpeg = new Blob([new Uint8Array([0xff, 0xd8, 0xff, 0xe0])], {
       type: 'image/jpeg'

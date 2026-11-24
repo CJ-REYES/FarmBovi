@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, type FormEvent } from 'react';
-import { AlertCircle, Info, Loader2, Save, WifiOff, X } from 'lucide-react';
+import { AlertCircle, Loader2, Save, WifiOff, X } from 'lucide-react';
 import type { Cattle } from '../../types/cattle';
 import {
   REPRODUCTION_EVENT_SUGGESTED_TYPES,
@@ -9,6 +9,8 @@ import {
 } from '../../types/reproduction';
 import {
   REPRODUCTION_FIELD_LIMITS,
+  isFemaleAnimal,
+  isMaleAnimal,
   validateReproductionInput,
   type ReproductionValidationErrors
 } from '../../services/reproduction.validation';
@@ -23,6 +25,7 @@ export interface ReproductionFormModalProps {
   initialEvent?: ReproductionEvent;
   defaultTipo?: string;
   animals: Cattle[];
+  existingEvents?: ReproductionEvent[];
   isOnline: boolean;
   onClose: () => void;
   onSubmit: (input: ReproductionEventInput) => Promise<ReproductionMutationResult>;
@@ -45,6 +48,7 @@ export default function ReproductionFormModal({
   initialEvent,
   defaultTipo,
   animals,
+  existingEvents,
   isOnline,
   onClose,
   onSubmit
@@ -67,6 +71,7 @@ export default function ReproductionFormModal({
     if (initialEvent) {
       return {
         idAnimal: initialEvent.idAnimal,
+        idSemental: initialEvent.idSemental ?? null,
         tipo: initialEvent.tipo,
         fecha: toDatetimeLocalValue(initialEvent.fecha),
         resultado: initialEvent.resultado,
@@ -76,12 +81,36 @@ export default function ReproductionFormModal({
 
     return {
       idAnimal: '',
+      idSemental: null,
       tipo: defaultTipo || '',
       fecha: nowDatetimeLocal(),
       resultado: null,
       observaciones: null
     };
   });
+
+  const selectedAnimal = useMemo(
+    () => animals.find((a) => a.id === formData.idAnimal),
+    [animals, formData.idAnimal]
+  );
+
+  const sireOptions = useMemo(
+    () =>
+      animals
+        .filter((animal) => {
+          if (animal.deletedAt) return false;
+          if (animal.id === formData.idAnimal) return false;
+          if (selectedAnimal && animal.idRancho !== selectedAnimal.idRancho) return false;
+          return !isFemaleAnimal(animal.sexo);
+        })
+        .map((bull) => ({
+          id: bull.id,
+          arete: bull.arete,
+          raza: bull.raza,
+          extraLabel: `(${bull.sexo} · ${bull.estado})`
+        })),
+    [animals, formData.idAnimal, selectedAnimal]
+  );
 
   const [fieldErrors, setFieldErrors] = useState<ReproductionValidationErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
@@ -102,7 +131,11 @@ export default function ReproductionFormModal({
 
     setFormError(null);
 
-    const validationErrors = validateReproductionInput(formData, { animals });
+    const validationErrors = validateReproductionInput(formData, {
+      animals,
+      existingEvents,
+      excludeEventId: initialEvent?.id
+    });
     if (Object.keys(validationErrors).length > 0) {
       setFieldErrors(validationErrors);
       setFormError('Revisa los campos marcados antes de guardar el evento reproductivo.');
@@ -130,6 +163,8 @@ export default function ReproductionFormModal({
       setIsSubmitting(false);
     }
   };
+
+  const disableSireSelect = Boolean(selectedAnimal && isMaleAnimal(selectedAnimal.sexo));
 
   return (
     <div
@@ -169,21 +204,12 @@ export default function ReproductionFormModal({
         </div>
 
         <form onSubmit={handleSubmit} noValidate className="p-6 space-y-5">
-          {!isOnline ? (
+          {!isOnline && (
             <div className="p-3 rounded-lg bg-status-warning/15 border border-status-warning/40 text-brand-dark text-[12px] flex items-center gap-2">
               <WifiOff size={15} className="text-status-warning shrink-0" />
               <span>
-                Modo sin conexión: el evento reproductivo se almacenará en IndexedDB y quedará en
-                cola pendiente.
-              </span>
-            </div>
-          ) : (
-            <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-brand-slate text-[12px] flex items-center gap-2">
-              <Info size={15} className="text-amber-700 shrink-0" />
-              <span>
-                Persistencia local offline-first activa: el Backend aún no habilita endpoints para{' '}
-                <strong>EventoReproductivo</strong>; el registro se guardará en IndexedDB con estado
-                pendiente de sincronización.
+                Modo sin conexión: el evento reproductivo se almacenará en IndexedDB y se
+                sincronizará automáticamente al recuperar Internet.
               </span>
             </div>
           )}
@@ -208,8 +234,15 @@ export default function ReproductionFormModal({
               value={formData.idAnimal}
               disabled={isEditMode}
               onChange={(animalId) => {
-                setFormData((prev) => ({ ...prev, idAnimal: animalId }));
+                const nextAnimal = animals.find((a) => a.id === animalId);
+                setFormData((prev) => ({
+                  ...prev,
+                  idAnimal: animalId,
+                  idSemental:
+                    nextAnimal && isMaleAnimal(nextAnimal.sexo) ? null : prev.idSemental
+                }));
                 clearFieldError('idAnimal');
+                clearFieldError('idSemental');
               }}
               error={fieldErrors.idAnimal}
               placeholder="Selecciona un animal por arete"
@@ -237,7 +270,7 @@ export default function ReproductionFormModal({
                 list="repro-tipo-suggestions"
                 required
                 maxLength={REPRODUCTION_FIELD_LIMITS.tipoMax}
-                placeholder="Ej. Celo, Inseminación Artificial, Palpación, Parto..."
+                placeholder="Ej. Detección de celo, Servicio o monta, Inseminación, Parto..."
                 value={formData.tipo}
                 onChange={(e) => {
                   setFormData((prev) => ({ ...prev, tipo: e.target.value }));
@@ -294,7 +327,30 @@ export default function ReproductionFormModal({
             </div>
           </div>
 
-          {/* Resultado (campo documentado en contrato de sincronización) */}
+          {/* Semental opcional */}
+          <div>
+            <AnimalSelectField
+              id="repro-semental"
+              name="idSemental"
+              label="Semental asociado (Opcional)"
+              options={sireOptions}
+              value={formData.idSemental ?? ''}
+              disabled={disableSireSelect}
+              onChange={(sementalId) => {
+                setFormData((prev) => ({
+                  ...prev,
+                  idSemental: sementalId ? sementalId : null
+                }));
+                clearFieldError('idSemental');
+              }}
+              error={fieldErrors.idSemental}
+              placeholder="Sin semental registrado / Pajilla externa"
+              searchPlaceholder="Buscar semental por arete o raza..."
+              helperText="Solo machos activos del mismo rancho."
+            />
+          </div>
+
+          {/* Resultado */}
           <div>
             <label
               htmlFor="repro-resultado"

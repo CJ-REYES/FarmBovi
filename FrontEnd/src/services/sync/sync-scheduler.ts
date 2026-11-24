@@ -1,8 +1,13 @@
 import { hasActiveAuthSession } from '../../lib/api';
 import { db } from '../../lib/database/db';
-import { OutboxRepository } from '../../lib/database/repositories/outbox.repository';
+import {
+  MAX_PUSH_RETRY_ATTEMPTS,
+  OutboxRepository
+} from '../../lib/database/repositories/outbox.repository';
+import type { SyncEntityName } from '../../lib/database/schema';
 import { StorageMonitor } from '../../lib/database/storage-monitor';
 import { ConnectivityService } from '../connectivity.service';
+import { MediaSyncEngine } from './media-sync.engine';
 import { SyncHttpClient } from './sync-http.client';
 import { SyncEngine, type FullSyncCycleResult } from './sync-engine';
 
@@ -37,6 +42,7 @@ export interface SyncSchedulerSnapshot {
   statusDetail: string;
   isOnline: boolean;
   isSyncing: boolean;
+  authRequired: boolean;
   counts: SyncQueueCounts;
   totalPendingWork: number;
   pushEndpointReady: boolean;
@@ -44,6 +50,7 @@ export interface SyncSchedulerSnapshot {
   lastTrigger: SyncTriggerReason | null;
   lastAttemptAt: string | null;
   lastCompletedSyncAt: string | null;
+  lastDataChangeAt: string | null;
   lastCycleResult: FullSyncCycleResult | null;
   lastErrorMessage: string | null;
 }
@@ -75,6 +82,7 @@ function createInitialSnapshot(): SyncSchedulerSnapshot {
       : 'Trabajando sin conexión. Los cambios se guardan localmente.',
     isOnline: initialOnline,
     isSyncing: false,
+    authRequired: false,
     counts: {
       pendingOperationsCount: 0,
       confirmedOperationsCount: 0,
@@ -89,6 +97,7 @@ function createInitialSnapshot(): SyncSchedulerSnapshot {
     lastTrigger: null,
     lastAttemptAt: null,
     lastCompletedSyncAt: null,
+    lastDataChangeAt: null,
     lastCycleResult: null,
     lastErrorMessage: null
   };
@@ -103,8 +112,51 @@ let queuedFollowUpTrigger: SyncTriggerReason | null = null;
 let lastResumeTimestamp = 0;
 
 let pollTimerId: number | null = null;
+let retryTimerId: number | null = null;
 let mutationDebounceTimerId: number | null = null;
 let cleanupLifecycleListeners: (() => void) | null = null;
+
+function clearRetryTimer(): void {
+  if (retryTimerId !== null && typeof window !== 'undefined') {
+    window.clearTimeout(retryTimerId);
+    retryTimerId = null;
+  }
+}
+
+async function scheduleNextBackoffRetry(): Promise<void> {
+  clearRetryTimer();
+  if (!started || typeof window === 'undefined' || !snapshot.isOnline || !hasActiveAuthSession()) {
+    return;
+  }
+
+  try {
+    const failedOps = await db.outbox.where('estado').equals('fallido').toArray();
+    let earliestRetryMs: number | null = null;
+
+    for (const op of failedOps) {
+      if (op.proximoIntento && op.intentos < MAX_PUSH_RETRY_ATTEMPTS) {
+        const parsedMs = Date.parse(op.proximoIntento);
+        if (!Number.isNaN(parsedMs) && (earliestRetryMs === null || parsedMs < earliestRetryMs)) {
+          earliestRetryMs = parsedMs;
+        }
+      }
+    }
+
+    if (earliestRetryMs === null) {
+      return;
+    }
+
+    const delayMs = Math.max(500, Math.min(earliestRetryMs - Date.now() + 250, 10 * 60 * 1000));
+    retryTimerId = window.setTimeout(() => {
+      retryTimerId = null;
+      if (started && hasActiveAuthSession() && (typeof navigator === 'undefined' || navigator.onLine)) {
+        void SyncScheduler.triggerSync('periodic_poll');
+      }
+    }, delayMs);
+  } catch {
+    // Ignorar errores de lectura durante cierre o reinicio de IndexedDB
+  }
+}
 
 function emitSnapshot(next: SyncSchedulerSnapshot): void {
   snapshot = next;
@@ -120,6 +172,7 @@ function emitSnapshot(next: SyncSchedulerSnapshot): void {
 function resolveStateAndDetail(params: {
   isOnline: boolean;
   isSyncing: boolean;
+  authRequired?: boolean;
   counts: SyncQueueCounts;
   pushEndpointReady: boolean;
   pullEndpointReady: boolean;
@@ -129,6 +182,7 @@ function resolveStateAndDetail(params: {
   const {
     isOnline,
     isSyncing,
+    authRequired,
     counts,
     pushEndpointReady,
     pullEndpointReady,
@@ -156,6 +210,15 @@ function resolveStateAndDetail(params: {
         totalPending > 0
           ? `Sin conexión. ${counts.pendingOperationsCount} operación(es) y ${counts.pendingFilesCount} archivo(s) en cola local.`
           : 'Sin conexión a Internet. Puedes seguir trabajando offline.'
+    };
+  }
+
+  if (authRequired) {
+    return {
+      state: 'error',
+      statusDetail:
+        lastErrorMessage ||
+        'Sesión expirada (401). Inicia sesión nuevamente para continuar sincronizando.'
     };
   }
 
@@ -289,6 +352,49 @@ export const SyncScheduler = {
     };
   },
 
+  /**
+   * Suscribe una vista/contexto a cambios reales de datos producidos por sincronización
+   * (tanto ciclos completos como descargas Pull parciales donde otra entidad tuvo error/conflicto).
+   */
+  subscribeToDataUpdates(
+    entities: readonly SyncEntityName[],
+    onDataUpdated: () => void
+  ): () => void {
+    const entitySet = new Set<SyncEntityName>(entities);
+    let previousSyncAt = snapshot.lastCompletedSyncAt;
+    let previousCycleFinishedAt = snapshot.lastCycleResult?.finishedAt ?? null;
+
+    return this.subscribe(() => {
+      const nextSyncAt = snapshot.lastCompletedSyncAt;
+      const cycle = snapshot.lastCycleResult;
+      const nextCycleFinishedAt = cycle?.finishedAt ?? null;
+
+      if (nextSyncAt && nextSyncAt !== previousSyncAt) {
+        previousSyncAt = nextSyncAt;
+        previousCycleFinishedAt = nextCycleFinishedAt;
+        onDataUpdated();
+        return;
+      }
+
+      if (cycle && nextCycleFinishedAt && nextCycleFinishedAt !== previousCycleFinishedAt) {
+        previousCycleFinishedAt = nextCycleFinishedAt;
+        const pullTouchedEntities = cycle.pull.some(
+          (item) =>
+            entitySet.has(item.entidad) &&
+            (item.appliedCount > 0 || item.deletedCount > 0 || item.conflictCount > 0)
+        );
+        const pushTouchedState =
+          cycle.push.confirmedCount > 0 ||
+          cycle.push.conflictCount > 0 ||
+          cycle.push.validationErrorCount > 0;
+
+        if (pullTouchedEntities || pushTouchedState) {
+          onDataUpdated();
+        }
+      }
+    });
+  },
+
   getSnapshot(): SyncSchedulerSnapshot {
     return snapshot;
   },
@@ -312,14 +418,19 @@ export const SyncScheduler = {
       snapshot.lastCompletedSyncAt ??
       (endpoints.pushDisponible && endpoints.pullDisponible ? latestServerTimestamp : null);
 
+    // Si el usuario volvió a autenticarse o pasó a offline, limpiar bandera transitoria de 401
+    const effectiveAuthRequired =
+      overrideOnline === true && hasActiveAuthSession() ? false : snapshot.authRequired;
+
     const { state, statusDetail } = resolveStateAndDetail({
       isOnline,
       isSyncing: activeRunPromise !== null,
+      authRequired: effectiveAuthRequired,
       counts,
       pushEndpointReady: endpoints.pushDisponible,
       pullEndpointReady: endpoints.pullDisponible,
       lastCompletedSyncAt,
-      lastErrorMessage: snapshot.lastErrorMessage
+      lastErrorMessage: effectiveAuthRequired ? snapshot.lastErrorMessage : snapshot.lastErrorMessage
     });
 
     const next: SyncSchedulerSnapshot = {
@@ -329,6 +440,7 @@ export const SyncScheduler = {
       statusDetail,
       isOnline,
       isSyncing: activeRunPromise !== null,
+      authRequired: effectiveAuthRequired,
       counts,
       totalPendingWork: counts.pendingOperationsCount + counts.pendingFilesCount,
       pushEndpointReady: endpoints.pushDisponible,
@@ -458,6 +570,7 @@ export const SyncScheduler = {
         window.clearInterval(pollTimerId);
         pollTimerId = null;
       }
+      clearRetryTimer();
       if (mutationDebounceTimerId !== null) {
         window.clearTimeout(mutationDebounceTimerId);
         mutationDebounceTimerId = null;
@@ -475,13 +588,18 @@ export const SyncScheduler = {
   stop(): void {
     if (!started) return;
     started = false;
+    clearRetryTimer();
     cleanupLifecycleListeners?.();
     cleanupLifecycleListeners = null;
   },
 
   async handleAppStartup(): Promise<void> {
-    // 1. Recuperar cualquier operación interrumpida en un cierre previo (incluso si reabrimos offline)
-    await OutboxRepository.recoverInterruptedOperations(new Set());
+    // 1. Recuperar cualquier operación Outbox o archivo multimedia interrumpido en un cierre previo
+    //    (incluso si la app reabre sin conexión)
+    await Promise.all([
+      OutboxRepository.recoverInterruptedOperations(new Set()),
+      MediaSyncEngine.recoverInterruptedUploads()
+    ]);
     // 2. Solicitar almacenamiento persistente del navegador para proteger IndexedDB
     void StorageMonitor.initPersistenceAndCheck();
 
@@ -500,6 +618,8 @@ export const SyncScheduler = {
         (current.pushEndpointReady && current.pullEndpointReady)
       ) {
         await this.triggerSync('startup');
+      } else {
+        void scheduleNextBackoffRetry();
       }
     } else if (current.totalPendingWork > 0) {
       await tryRegisterProgressiveBackgroundSync();
@@ -615,6 +735,7 @@ export const SyncScheduler = {
         statusDetail: syncingDetail.statusDetail,
         isOnline: true,
         isSyncing: true,
+        authRequired: false,
         counts: preCounts.counts,
         totalPendingWork:
           preCounts.counts.pendingOperationsCount + preCounts.counts.pendingFilesCount,
@@ -631,7 +752,15 @@ export const SyncScheduler = {
       try {
         cycleResult = await SyncEngine.sync();
         if (!cycleResult) {
-          cycleError = 'No fue posible completar el ciclo de sincronización.';
+          const isNowOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+          cycleError = isNowOffline
+            ? null
+            : 'No fue posible completar el ciclo de sincronización.';
+        } else if (cycleResult.authRequired || cycleResult.push.status === 'auth_required') {
+          cycleError =
+            'Sesión expirada (401). Inicia sesión nuevamente para continuar sincronizando.';
+        } else if (cycleResult.offlineInterrupted || cycleResult.push.status === 'offline') {
+          cycleError = null;
         } else if (!cycleResult.allTasksCompleted) {
           if (!endpoints.pushDisponible || !endpoints.pullDisponible) {
             cycleError = null; // Pendiente de endpoints en backend, no es error fatal
@@ -651,15 +780,38 @@ export const SyncScheduler = {
       const postData = await readCountsFromIndexedDb();
       const postEndpoints = SyncHttpClient.getEndpointAvailability();
 
+      const cycleWentOffline =
+        (typeof navigator !== 'undefined' && !navigator.onLine) ||
+        Boolean(cycleResult?.offlineInterrupted) ||
+        cycleResult?.push.status === 'offline' ||
+        Boolean(cycleResult?.pull.some((item) => item.status === 'offline'));
+
+      const cycleAuthRequired =
+        Boolean(cycleResult?.authRequired) ||
+        cycleResult?.push.status === 'auth_required' ||
+        Boolean(
+          cycleResult?.pull.some(
+            (item) => item.status === 'auth_required' || item.httpStatus === 401
+          )
+        );
+
+      const postOnline = !cycleWentOffline;
+
       // Solo actualizar lastCompletedSyncAt si Push y Pull completaron sus tareas correctamente
       const verifiedCompletedAt =
         cycleResult && cycleResult.allTasksCompleted
           ? cycleResult.finishedAt
           : snapshot.lastCompletedSyncAt;
 
+      const nextDataChangeAt =
+        cycleResult && (cycleResult.hasDataChanges || cycleResult.allTasksCompleted)
+          ? cycleResult.finishedAt
+          : snapshot.lastDataChangeAt;
+
       const resolved = resolveStateAndDetail({
-        isOnline: true,
+        isOnline: postOnline,
         isSyncing: false,
+        authRequired: cycleAuthRequired,
         counts: postData.counts,
         pushEndpointReady: postEndpoints.pushDisponible,
         pullEndpointReady: postEndpoints.pullDisponible,
@@ -672,8 +824,9 @@ export const SyncScheduler = {
         state: resolved.state,
         stateLabel: STATE_LABELS[resolved.state],
         statusDetail: resolved.statusDetail,
-        isOnline: true,
+        isOnline: postOnline,
         isSyncing: false,
+        authRequired: cycleAuthRequired,
         counts: postData.counts,
         totalPendingWork:
           postData.counts.pendingOperationsCount + postData.counts.pendingFilesCount,
@@ -681,8 +834,19 @@ export const SyncScheduler = {
         pullEndpointReady: postEndpoints.pullDisponible,
         lastCycleResult: cycleResult,
         lastCompletedSyncAt: verifiedCompletedAt,
+        lastDataChangeAt: nextDataChangeAt,
         lastErrorMessage: cycleError
       });
+
+      if (cycleAuthRequired) {
+        clearRetryTimer();
+        queuedFollowUpTrigger = null;
+      } else if (cycleWentOffline) {
+        clearRetryTimer();
+        await tryRegisterProgressiveBackgroundSync();
+      } else {
+        void scheduleNextBackoffRetry();
+      }
 
       return cycleResult;
     })();

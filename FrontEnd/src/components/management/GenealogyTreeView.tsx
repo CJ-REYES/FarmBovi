@@ -13,6 +13,8 @@ import type { AnimalGenealogyProfile } from '../../types/genealogy';
 
 export interface GenealogyTreeViewProps {
   profile: AnimalGenealogyProfile;
+  source?: 'server' | 'cache';
+  loading?: boolean;
   onSelectAnimal: (animalId: string) => void;
   onRegisterOrEdit: (animalId: string) => void;
 }
@@ -96,25 +98,33 @@ function AncestorCard({
 
 export default function GenealogyTreeView({
   profile,
+  source,
+  loading = false,
   onSelectAnimal,
   onRegisterOrEdit
 }: GenealogyTreeViewProps) {
   const {
     animal,
     record,
+    observaciones,
     padre,
     madre,
     abueloPaterno,
     abuelaPaterna,
     abueloMaterno,
     abuelaMaterna,
+    ancestros,
     descendientes,
+    descendientesMultigeneracion,
+    totalDescendientes,
     hasAnyGenealogyData
   } = profile;
 
   const hasGrandparents = Boolean(
     abueloPaterno || abuelaPaterna || abueloMaterno || abuelaMaterna
   );
+  const deeperAncestors = ancestros.filter((a) => a.generacion >= 3);
+  const deeperDescendants = descendientesMultigeneracion.filter((d) => d.generacion >= 2);
 
   return (
     <section
@@ -128,9 +138,27 @@ export default function GenealogyTreeView({
             <Dna size={18} />
           </div>
           <div>
-            <p className="text-[11px] font-bold uppercase tracking-widest text-brand-slate/55">
-              Árbol Genealógico Real
-            </p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <p className="text-[11px] font-bold uppercase tracking-widest text-brand-slate/55">
+                Árbol Genealógico Real
+              </p>
+              {source && (
+                <span
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                    source === 'server'
+                      ? 'bg-status-success/15 text-status-success'
+                      : 'bg-status-warning/20 text-brand-dark'
+                  }`}
+                >
+                  {source === 'server' ? 'Servidor' : 'Caché local'}
+                </span>
+              )}
+              {loading && (
+                <span className="text-[11px] text-brand-primary font-semibold">
+                  Actualizando...
+                </span>
+              )}
+            </div>
             <h2 className="text-lg font-condensed font-bold text-brand-forest">
               {animal.arete} — {animal.raza} ({animal.sexo})
             </h2>
@@ -182,6 +210,31 @@ export default function GenealogyTreeView({
             >
               <Plus size={14} /> Registrar Padre o Madre
             </button>
+          </div>
+        )}
+
+        {/* Generación +3 o superior (cuando la API devuelve ancestros adicionales) */}
+        {deeperAncestors.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-[11px] font-bold uppercase tracking-widest text-brand-slate/55 text-center">
+              Generaciones Anteriores (+3 o más)
+            </p>
+            <div className="flex flex-wrap justify-center gap-2">
+              {deeperAncestors.map((anc) => (
+                <button
+                  key={`${anc.generacion}-${anc.idHijo}-${anc.animal.idAnimal}`}
+                  type="button"
+                  onClick={() => onSelectAnimal(anc.animal.idAnimal)}
+                  className="px-3 py-1.5 rounded-lg border border-border-light bg-surface-white hover:border-brand-primary text-left text-[12px] transition-colors cursor-pointer"
+                >
+                  <span className="text-[10px] font-bold uppercase text-brand-slate/60 mr-1.5">
+                    Gen +{anc.generacion} ({anc.vinculo})
+                  </span>
+                  <span className="font-bold text-brand-forest">{anc.animal.arete}</span>
+                  <span className="text-brand-slate/70 ml-1">· {anc.animal.raza}</span>
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
@@ -279,6 +332,11 @@ export default function GenealogyTreeView({
             <p className="text-[12px] text-brand-slate/65">
               Nacimiento: {formatBirthDate(animal.fechaNacimiento)}
             </p>
+            {observaciones && (
+              <p className="text-[12px] text-brand-slate/80 pt-1 italic">
+                “{observaciones}”
+              </p>
+            )}
           </div>
         </div>
 
@@ -294,6 +352,9 @@ export default function GenealogyTreeView({
             <Baby size={15} className="text-emerald-600" />
             <p className="text-[11px] font-bold uppercase tracking-widest text-brand-slate/60">
               Generación -1 · Descendientes Directos ({descendientes.length})
+              {totalDescendientes > descendientes.length
+                ? ` · Total multigeneración: ${totalDescendientes}`
+                : ''}
             </p>
           </div>
 
@@ -336,6 +397,32 @@ export default function GenealogyTreeView({
                   </span>
                 </button>
               ))}
+            </div>
+          )}
+
+          {deeperDescendants.length > 0 && (
+            <div className="pt-2 space-y-2 max-w-4xl mx-auto">
+              <p className="text-[11px] font-bold uppercase tracking-widest text-brand-slate/55 text-center">
+                Descendencia Extendida (Nietos y siguientes generaciones)
+              </p>
+              <div className="flex flex-wrap justify-center gap-2">
+                {deeperDescendants.map((desc) => (
+                  <button
+                    key={`${desc.generacion}-${desc.descendiente.idAnimal}`}
+                    type="button"
+                    onClick={() => onSelectAnimal(desc.descendiente.idAnimal)}
+                    className="px-3 py-1.5 rounded-lg border border-border-light bg-surface-white hover:border-emerald-600 text-left text-[12px] transition-colors cursor-pointer"
+                  >
+                    <span className="text-[10px] font-bold uppercase text-emerald-700 mr-1.5">
+                      Gen -{desc.generacion}
+                    </span>
+                    <span className="font-bold text-brand-forest">{desc.descendiente.arete}</span>
+                    <span className="text-brand-slate/70 ml-1">
+                      · {desc.descendiente.raza} ({desc.descendiente.sexo})
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
           )}
         </div>

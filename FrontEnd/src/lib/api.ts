@@ -26,7 +26,22 @@ import type {
   BackendRecordatorioDto,
   BackendRecordatorioPayload
 } from '../types/alert';
+import type {
+  ActualizarGenealogiaRequest,
+  DescendientesAnimalResponse,
+  GenealogiaRegistroDto,
+  PadresAnimalResponse,
+  RegistrarGenealogiaRequest
+} from '../types/genealogy';
+import type {
+  BackendEventoReproductivoDto,
+  BackendEventoReproductivoPayload
+} from '../types/reproduction';
 import type { BackendArchivoMultimediaDto } from '../types/media';
+import type {
+  EstimacionPesoBoviScaleDto,
+  SolicitarEstimacionPesoPayload
+} from '../types/weighing';
 import type {
   BackendRanchoPayload,
   ChangePasswordRequestDto,
@@ -56,12 +71,15 @@ export const BACKEND_ROUTES = {
   AUTH_SESSION: '/auth/session',
   AUTH_LOGOUT: '/auth/logout',
   MEDIA: '/media',
+  BOVISCALE: '/boviscale',
   ANIMALES: '/animales',
+  GENEALOGIA: '/genealogia',
   LOTES: '/lotes',
   RANCHOS: '/ranchos',
   MOVIMIENTOS: '/movimientos-animales',
   ALIMENTACION: '/alimentacion',
   EVENTOS_SANITARIOS: '/eventos-sanitarios',
+  EVENTOS_REPRODUCTIVOS: '/eventos-reproductivos',
   TRATAMIENTOS: '/tratamientos',
   RECORDATORIOS: '/recordatorios',
   USUARIOS: '/usuarios',
@@ -850,11 +868,17 @@ export const remindersApi = {
 
 export const mediaApi = {
   async list(options?: {
+    idRancho?: string;
     idAnimal?: string;
+    tipo?: string;
+    estado?: string;
     incluirEliminados?: boolean;
   }): Promise<BackendArchivoMultimediaDto[]> {
     const params = new URLSearchParams();
+    if (options?.idRancho) params.set('idRancho', options.idRancho);
     if (options?.idAnimal) params.set('idAnimal', options.idAnimal);
+    if (options?.tipo) params.set('tipo', options.tipo);
+    if (options?.estado) params.set('estado', options.estado);
     if (options?.incluirEliminados) params.set('incluirEliminados', 'true');
     const qs = params.toString();
     const res = await apiRequest<BackendArchivoMultimediaDto[]>(
@@ -862,6 +886,14 @@ export const mediaApi = {
       { method: 'GET' }
     );
     return Array.isArray(res.data) ? res.data : [];
+  },
+
+  async getById(id: string): Promise<BackendArchivoMultimediaDto> {
+    const res = await apiRequest<BackendArchivoMultimediaDto>(
+      `${BACKEND_ROUTES.MEDIA}/archivos/${id}`,
+      { method: 'GET' }
+    );
+    return res.data;
   },
 
   async upload(formData: FormData): Promise<BackendArchivoMultimediaDto> {
@@ -875,6 +907,170 @@ export const mediaApi = {
 
   async remove(id: string): Promise<void> {
     await apiRequest<unknown>(`${BACKEND_ROUTES.MEDIA}/archivos/${id}`, {
+      method: 'DELETE',
+      allowEmptyResponse: true
+    });
+  }
+};
+
+export const boviScaleApi = {
+  async requestEstimation(
+    input: SolicitarEstimacionPesoPayload
+  ): Promise<EstimacionPesoBoviScaleDto> {
+    const res = await apiRequest<EstimacionPesoBoviScaleDto>(
+      `${BACKEND_ROUTES.BOVISCALE}/estimaciones`,
+      {
+        method: 'POST',
+        body: input,
+        headers: {
+          'X-Idempotency-Key': input.idSolicitud
+        },
+        timeoutMs: 40000
+      }
+    );
+    return res.data;
+  },
+
+  async getEstimationByRequestId(idSolicitud: string): Promise<EstimacionPesoBoviScaleDto> {
+    const res = await apiRequest<EstimacionPesoBoviScaleDto>(
+      `${BACKEND_ROUTES.BOVISCALE}/estimaciones/${encodeURIComponent(idSolicitud)}`,
+      { method: 'GET' }
+    );
+    return res.data;
+  }
+};
+
+export const genealogyApi = {
+  async list(options?: {
+    idRancho?: string;
+    incluirEliminados?: boolean;
+  }): Promise<GenealogiaRegistroDto[]> {
+    const params = new URLSearchParams();
+    if (options?.idRancho) params.set('idRancho', options.idRancho);
+    if (options?.incluirEliminados) params.set('incluirEliminados', 'true');
+    const qs = params.toString();
+    const res = await apiRequest<GenealogiaRegistroDto[]>(
+      `${BACKEND_ROUTES.GENEALOGIA}${qs ? `?${qs}` : ''}`,
+      { method: 'GET' }
+    );
+    return Array.isArray(res.data) ? res.data : [];
+  },
+
+  async getById(idGenealogia: string): Promise<GenealogiaRegistroDto> {
+    const res = await apiRequest<GenealogiaRegistroDto>(
+      `${BACKEND_ROUTES.GENEALOGIA}/${idGenealogia}`,
+      { method: 'GET' }
+    );
+    return res.data;
+  },
+
+  async getParents(idAnimal: string, profundidad = 3): Promise<PadresAnimalResponse> {
+    const clampedDepth = Math.min(10, Math.max(1, Math.trunc(profundidad)));
+    const res = await apiRequest<PadresAnimalResponse>(
+      `${BACKEND_ROUTES.GENEALOGIA}/${idAnimal}/padres?profundidad=${clampedDepth}`,
+      { method: 'GET' }
+    );
+    return res.data;
+  },
+
+  async getDescendants(idAnimal: string, profundidad = 3): Promise<DescendientesAnimalResponse> {
+    const clampedDepth = Math.min(10, Math.max(1, Math.trunc(profundidad)));
+    const res = await apiRequest<DescendientesAnimalResponse>(
+      `${BACKEND_ROUTES.GENEALOGIA}/${idAnimal}/descendientes?profundidad=${clampedDepth}`,
+      { method: 'GET' }
+    );
+    return res.data;
+  },
+
+  async register(input: RegistrarGenealogiaRequest): Promise<GenealogiaRegistroDto> {
+    const res = await apiRequest<GenealogiaRegistroDto>(BACKEND_ROUTES.GENEALOGIA, {
+      method: 'POST',
+      body: input
+    });
+    return res.data;
+  },
+
+  async update(
+    idAnimal: string,
+    input: ActualizarGenealogiaRequest
+  ): Promise<GenealogiaRegistroDto> {
+    const res = await apiRequest<GenealogiaRegistroDto>(
+      `${BACKEND_ROUTES.GENEALOGIA}/${idAnimal}`,
+      {
+        method: 'PUT',
+        body: input
+      }
+    );
+    return res.data;
+  },
+
+  async remove(idAnimal: string, versionRegistro: number): Promise<void> {
+    await apiRequest<unknown>(
+      `${BACKEND_ROUTES.GENEALOGIA}/${idAnimal}?versionRegistro=${encodeURIComponent(String(versionRegistro))}`,
+      {
+        method: 'DELETE',
+        headers: {
+          'If-Match': `"${versionRegistro}"`
+        },
+        allowEmptyResponse: true
+      }
+    );
+  }
+};
+
+export const reproductionApi = {
+  async list(options?: {
+    idRancho?: string;
+    idAnimal?: string;
+    tipo?: string;
+    desde?: string;
+    hasta?: string;
+    incluirEliminados?: boolean;
+  }): Promise<BackendEventoReproductivoDto[]> {
+    const params = new URLSearchParams();
+    if (options?.idRancho) params.set('idRancho', options.idRancho);
+    if (options?.idAnimal) params.set('idAnimal', options.idAnimal);
+    if (options?.tipo) params.set('tipo', options.tipo);
+    if (options?.desde) params.set('desde', options.desde);
+    if (options?.hasta) params.set('hasta', options.hasta);
+    if (options?.incluirEliminados) params.set('incluirEliminados', 'true');
+    const qs = params.toString();
+    const res = await apiRequest<BackendEventoReproductivoDto[]>(
+      `${BACKEND_ROUTES.EVENTOS_REPRODUCTIVOS}${qs ? `?${qs}` : ''}`,
+      { method: 'GET' }
+    );
+    return Array.isArray(res.data) ? res.data : [];
+  },
+
+  async getById(id: string): Promise<BackendEventoReproductivoDto> {
+    const res = await apiRequest<BackendEventoReproductivoDto>(
+      `${BACKEND_ROUTES.EVENTOS_REPRODUCTIVOS}/${id}`,
+      { method: 'GET' }
+    );
+    return res.data;
+  },
+
+  async create(input: BackendEventoReproductivoPayload): Promise<BackendEventoReproductivoDto> {
+    const res = await apiRequest<BackendEventoReproductivoDto>(
+      BACKEND_ROUTES.EVENTOS_REPRODUCTIVOS,
+      {
+        method: 'POST',
+        body: input
+      }
+    );
+    return res.data;
+  },
+
+  async update(id: string, input: BackendEventoReproductivoPayload): Promise<void> {
+    await apiRequest<unknown>(`${BACKEND_ROUTES.EVENTOS_REPRODUCTIVOS}/${id}`, {
+      method: 'PUT',
+      body: input,
+      allowEmptyResponse: true
+    });
+  },
+
+  async remove(id: string): Promise<void> {
+    await apiRequest<unknown>(`${BACKEND_ROUTES.EVENTOS_REPRODUCTIVOS}/${id}`, {
       method: 'DELETE',
       allowEmptyResponse: true
     });

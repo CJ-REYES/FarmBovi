@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
@@ -65,21 +65,25 @@ function renderPage() {
   );
 }
 
-describe('ReproductionPage — Eventos reproductivos, validaciones, tablero real y persistencia offline', () => {
+describe('ReproductionPage — Eventos reproductivos, validaciones, columna única de acciones y persistencia offline', () => {
   beforeEach(async () => {
+    vi.restoreAllMocks();
     await db.reproductionRecords.clear();
     await db.cattle.clear();
     await db.outbox.clear();
     await seedCattle();
   });
 
-  it('muestra la dependencia de Backend documentada y valida campos obligatorios y sexo antes de guardar', async () => {
+  it('no muestra el aviso obsoleto de dependencia pendiente y valida campos obligatorios y sexo antes de guardar', async () => {
     const user = userEvent.setup();
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByText(/Dependencia de Backend documentada/i)).toBeInTheDocument();
+      expect(screen.getByText(/Sin eventos reproductivos registrados/i)).toBeInTheDocument();
     });
+
+    expect(screen.queryByText(/Dependencia de Backend documentada/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/el servidor aún no implementa el modelo EventoReproductivo/i)).not.toBeInTheDocument();
 
     await user.click(screen.getAllByRole('button', { name: /Registrar Evento Reproductivo/i })[0]);
     const dialog = screen.getByRole('dialog');
@@ -102,7 +106,7 @@ describe('ReproductionPage — Eventos reproductivos, validaciones, tablero real
     expect(await db.reproductionRecords.count()).toBe(0);
   });
 
-  it('registra evento reproductivo offline, sobrevive recarga, aparece en tablero por etapa, edita y desactiva', async () => {
+  it('registra evento reproductivo con semental, renderiza una sola columna Acciones, sobrevive recarga, edita y desactiva', async () => {
     const user = userEvent.setup();
     const { unmount } = renderPage();
 
@@ -110,7 +114,7 @@ describe('ReproductionPage — Eventos reproductivos, validaciones, tablero real
       expect(screen.getByText(/Sin eventos reproductivos registrados/i)).toBeInTheDocument();
     });
 
-    // 1. Registrar evento de gestación para la hembra MX-VAC-501
+    // 1. Registrar evento de gestación para la hembra MX-VAC-501 con semental MX-TOR-909
     await user.click(screen.getAllByRole('button', { name: /Registrar Evento Reproductivo/i })[0]);
     const dialog = screen.getByRole('dialog');
 
@@ -121,6 +125,8 @@ describe('ReproductionPage — Eventos reproductivos, validaciones, tablero real
       within(dialog).getByLabelText(/Tipo de Evento Reproductivo/i),
       'Gestación Confirmada'
     );
+    await user.click(within(dialog).getByRole('combobox', { name: /Semental asociado/i }));
+    await user.click(within(dialog).getByRole('option', { name: /MX-TOR-909/i }));
     await user.type(within(dialog).getByLabelText(/^Resultado/i), 'Positivo / Gestante');
     await user.type(
       within(dialog).getByLabelText(/^Observaciones/i),
@@ -135,6 +141,13 @@ describe('ReproductionPage — Eventos reproductivos, validaciones, tablero real
 
     expect((await screen.findAllByText('Gestación Confirmada')).length).toBeGreaterThan(0);
     expect((await screen.findAllByText('Positivo / Gestante')).length).toBeGreaterThan(0);
+
+    // Verificar que la tabla solo renderiza UNA columna "Acciones" y un solo botón Editar por fila
+    const actionHeaders = screen.queryAllByRole('columnheader', { name: /^Acciones$/i });
+    if (actionHeaders.length > 0) {
+      expect(actionHeaders).toHaveLength(1);
+    }
+    expect(screen.getAllByRole('button', { name: /Editar evento Gestación Confirmada/i })).toHaveLength(1);
 
     // 2. Simular recarga completa (desmontar y volver a montar desde IndexedDB)
     unmount();

@@ -1,10 +1,11 @@
 import { useMemo, useRef, useState, type FormEvent } from 'react';
-import { AlertCircle, Info, Loader2, Save, WifiOff, X } from 'lucide-react';
+import { AlertCircle, Loader2, Save, WifiOff, X } from 'lucide-react';
 import type { Cattle } from '../../types/cattle';
 import type { GenealogyInput, GenealogyRecord } from '../../types/genealogy';
 import {
-  isFemaleSex,
-  isMaleSex,
+  GENEALOGY_MAX_OBSERVACIONES_LENGTH,
+  isValidFatherSex,
+  isValidMotherSex,
   validateGenealogyInput,
   type GenealogyValidationErrors
 } from '../../services/genealogy.validation';
@@ -43,20 +44,27 @@ export default function GenealogyFormModal({
       return {
         idAnimal: initialRecord.idAnimal,
         idPadre: initialRecord.idPadre,
-        idMadre: initialRecord.idMadre
+        idMadre: initialRecord.idMadre,
+        observaciones: initialRecord.observaciones ?? ''
       };
     }
 
     return {
       idAnimal: preselectedAnimalId || '',
       idPadre: null,
-      idMadre: null
+      idMadre: null,
+      observaciones: ''
     };
   });
 
   const [fieldErrors, setFieldErrors] = useState<GenealogyValidationErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+
+  const selectedChildRanchId = useMemo(
+    () => animals.find((a) => a.id === formData.idAnimal)?.idRancho || null,
+    [animals, formData.idAnimal]
+  );
 
   const activeRecordsByAnimal = useMemo(() => {
     const set = new Set<string>();
@@ -79,26 +87,15 @@ export default function GenealogyFormModal({
     [animals, activeRecordsByAnimal]
   );
 
-  // Candidatos a padre: excluye al propio animal seleccionado y prioriza machos (sin ocultar si está editando un dato legado)
+  // Candidatos a padre: mismo rancho, excluye al propio animal y prioriza machos (o sexo desconocido)
   const fatherOptions = useMemo(
     () =>
       animals
-        .filter((a) => a.id !== formData.idAnimal && (isMaleSex(a.sexo) || a.id === formData.idPadre))
-        .map((a) => ({
-          id: a.id,
-          arete: a.arete,
-          raza: a.raza,
-          extraLabel: `(${a.sexo} · ${a.estado})`
-        })),
-    [animals, formData.idAnimal, formData.idPadre]
-  );
-
-  // Candidatos a madre: excluye al propio animal seleccionado y prioriza hembras
-  const motherOptions = useMemo(
-    () =>
-      animals
         .filter(
-          (a) => a.id !== formData.idAnimal && (isFemaleSex(a.sexo) || a.id === formData.idMadre)
+          (a) =>
+            a.id !== formData.idAnimal &&
+            (!selectedChildRanchId || !a.idRancho || a.idRancho === selectedChildRanchId || a.id === formData.idPadre) &&
+            (isValidFatherSex(a.sexo) || a.id === formData.idPadre)
         )
         .map((a) => ({
           id: a.id,
@@ -106,7 +103,26 @@ export default function GenealogyFormModal({
           raza: a.raza,
           extraLabel: `(${a.sexo} · ${a.estado})`
         })),
-    [animals, formData.idAnimal, formData.idMadre]
+    [animals, formData.idAnimal, formData.idPadre, selectedChildRanchId]
+  );
+
+  // Candidatos a madre: mismo rancho, excluye al propio animal y prioriza hembras (o sexo desconocido)
+  const motherOptions = useMemo(
+    () =>
+      animals
+        .filter(
+          (a) =>
+            a.id !== formData.idAnimal &&
+            (!selectedChildRanchId || !a.idRancho || a.idRancho === selectedChildRanchId || a.id === formData.idMadre) &&
+            (isValidMotherSex(a.sexo) || a.id === formData.idMadre)
+        )
+        .map((a) => ({
+          id: a.id,
+          arete: a.arete,
+          raza: a.raza,
+          extraLabel: `(${a.sexo} · ${a.estado})`
+        })),
+    [animals, formData.idAnimal, formData.idMadre, selectedChildRanchId]
   );
 
   const clearFieldError = (field: keyof GenealogyValidationErrors) => {
@@ -198,21 +214,12 @@ export default function GenealogyFormModal({
         </div>
 
         <form onSubmit={handleSubmit} noValidate className="p-6 space-y-5">
-          {!isOnline ? (
+          {!isOnline && (
             <div className="p-3 rounded-lg bg-status-warning/15 border border-status-warning/40 text-brand-dark text-[12px] flex items-center gap-2">
               <WifiOff size={15} className="text-status-warning shrink-0" />
               <span>
                 Modo sin conexión: el parentesco se guardará localmente en IndexedDB y quedará en
-                cola pendiente.
-              </span>
-            </div>
-          ) : (
-            <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-brand-slate text-[12px] flex items-center gap-2">
-              <Info size={15} className="text-amber-700 shrink-0" />
-              <span>
-                Persistencia local offline-first activa: el Backend aún no habilita endpoints para{' '}
-                <strong>Genealogia</strong>; el vínculo se almacena en IndexedDB sin simular
-                sincronización remota.
+                cola pendiente hasta recuperar conectividad.
               </span>
             </div>
           )}
@@ -316,6 +323,37 @@ export default function GenealogyFormModal({
                 </button>
               )}
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label
+                htmlFor="gen-observaciones"
+                className="block text-[13px] font-semibold text-brand-slate"
+              >
+                Observaciones (opcional)
+              </label>
+              <span className="text-[11px] text-brand-slate/60">
+                {(formData.observaciones ?? '').length}/{GENEALOGY_MAX_OBSERVACIONES_LENGTH}
+              </span>
+            </div>
+            <textarea
+              id="gen-observaciones"
+              rows={2}
+              maxLength={GENEALOGY_MAX_OBSERVACIONES_LENGTH}
+              value={formData.observaciones ?? ''}
+              onChange={(e) => {
+                setFormData((prev) => ({ ...prev, observaciones: e.target.value }));
+                clearFieldError('observaciones');
+              }}
+              placeholder="Ej. Inseminación artificial, empadre controlado, línea lechera..."
+              className="w-full px-3 py-2 bg-surface-white border border-border-light rounded-md text-[13px] text-brand-slate outline-none focus:border-brand-primary resize-none"
+            />
+            {fieldErrors.observaciones && (
+              <p className="text-[12px] text-status-danger font-medium">
+                {fieldErrors.observaciones}
+              </p>
+            )}
           </div>
 
           <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-3 pt-2 border-t border-border-light">

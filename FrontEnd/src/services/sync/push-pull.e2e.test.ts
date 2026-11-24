@@ -339,9 +339,11 @@ class BackendSyncServerSimulator {
     const serverEntitiesByClient: Record<string, string[]> = {
       cattle: ['Animal'],
       lots: ['Lote'],
+      genealogy: ['GenealogiaAnimal', 'Genealogia'],
       weighings: ['Pesaje'],
       healthRecords: ['EventoSanitario', 'Tratamiento'],
       feedingRecords: ['Alimentacion'],
+      reproductionRecords: ['EventoReproductivo'],
       movements: ['MovimientoAnimal'],
       alerts: ['Recordatorio']
     };

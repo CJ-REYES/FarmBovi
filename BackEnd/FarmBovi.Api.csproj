@@ -6,6 +6,7 @@
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <OutputPath>bin\CustomBuild\</OutputPath>
     <SignAssemblyOnBuild Condition="'$(SignAssemblyOnBuild)' == ''">false</SignAssemblyOnBuild>
+    <UserSecretsId>0666c1d7-4fc1-4c3f-bc8b-3f2cbf7d3db7</UserSecretsId>
   </PropertyGroup>
 
   

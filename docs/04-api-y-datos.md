@@ -34,6 +34,7 @@ Además del token JWT válido, todos los controladores de dominio aplican aislam
 | UsuarioRancho | `/api/usuario-ranchos` | `IdUsuarioRancho` |
 | Alimentación | `/api/alimentacion` | `IdAlimentacion` |
 | Evento sanitario | `/api/eventos-sanitarios` | `IdEventoSanitario` |
+| Evento reproductivo | `/api/eventos-reproductivos` | `IdEventoReproductivo` |
 | Tratamiento | `/api/tratamientos` | `IdTratamiento` |
 | Movimiento animal | `/api/movimientos-animales` | `IdMovimiento` |
 | Recordatorio | `/api/recordatorios` | `IdRecordatorio` |

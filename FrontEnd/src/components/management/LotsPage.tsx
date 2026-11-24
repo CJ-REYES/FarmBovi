@@ -155,13 +155,8 @@ export default function LotsPage() {
       }
     })();
 
-    let previousSyncAt = SyncScheduler.getSnapshot().lastCompletedSyncAt;
-    const unsubscribe = SyncScheduler.subscribe(() => {
-      const nextSyncAt = SyncScheduler.getSnapshot().lastCompletedSyncAt;
-      if (nextSyncAt && nextSyncAt !== previousSyncAt) {
-        previousSyncAt = nextSyncAt;
-        void loadLots(includeDeleted);
-      }
+    const unsubscribe = SyncScheduler.subscribeToDataUpdates(['lots', 'ranches'], () => {
+      void loadLots(includeDeleted);
     });
 
     return () => {

@@ -1,23 +1,25 @@
 import type { SyncStatus } from '../lib/database/schema';
 
 /**
- * Sugerencias de tipos de evento reproductivo (no bloquea tipos personalizados
- * hasta que el Backend publique un catálogo formal para `EventoReproductivo`).
+ * Sugerencias de tipos de evento reproductivo del ciclo ganadero real
+ * (compatible con tipos personalizados registrados previamente).
  */
 export const REPRODUCTION_EVENT_SUGGESTED_TYPES = [
-  'Celo',
+  'Detección de celo',
+  'Servicio o monta',
   'Monta Natural',
+  'Inseminación',
   'Inseminación Artificial',
-  'Palpación / Diagnóstico',
-  'Gestación Confirmada',
-  'Secado',
+  'Diagnóstico de gestación',
+  'Confirmación de gestación',
   'Parto',
-  'Aborto',
+  'Pérdida gestacional',
+  'Secado',
   'Destete'
 ] as const;
 
 /**
- * Sugerencias para el campo opcional `resultado` alineado a `docs/08-contrato-sincronizacion.md`.
+ * Sugerencias para el campo opcional `resultado` alineado a `EventoReproductivo`.
  */
 export const REPRODUCTION_RESULT_SUGGESTED = [
   'Pendiente',
@@ -32,32 +34,8 @@ export const REPRODUCTION_RESULT_SUGGESTED = [
 export type ReproductionStage = 'servicios' | 'gestaciones' | 'partos';
 
 /**
- * Dependencia explícita con el Backend (ver `docs/08-contrato-sincronizacion.md` §Alcance real de Pull
- * y `BackEnd/Data/FarmDbContext.cs`).
- * No existen endpoints REST ni soporte de Sync Push/Pull para `EventoReproductivo`.
- */
-export const REPRODUCTION_BACKEND_DEPENDENCY = {
-  entityName: 'EventoReproductivo',
-  missingRestEndpoint: '/api/eventos-reproductivos',
-  syncPushEnabled: false,
-  syncPullEnabled: false,
-  requiredBackendFields: [
-    'IdEventoReproductivo',
-    'IdAnimal',
-    'Tipo',
-    'Fecha',
-    'Resultado',
-    'Observaciones',
-    'VersionRegistro',
-    'EliminadoEn'
-  ],
-  summaryMessage:
-    'Dependencia de Backend pendiente: el servidor aún no implementa el modelo EventoReproductivo ni sus endpoints REST o de sincronización Push/Pull. Los registros se persisten localmente en IndexedDB y permanecen en cola pendiente sin simular sincronización remota.'
-} as const;
-
-/**
  * Contrato de dominio del Frontend para eventos reproductivos, alineado a
- * `LocalReproductionRecord` (IndexedDB) y al contrato planificado `EventoReproductivo`.
+ * `LocalReproductionRecord` (IndexedDB) y `EventoReproductivo` en el Backend.
  */
 export interface ReproductionEvent {
   id: string;
@@ -65,6 +43,7 @@ export interface ReproductionEvent {
   remoteId?: string | number;
   idRancho: string;
   idAnimal: string;
+  idSemental?: string | null;
   /** Tipo de evento reproductivo (almacenado en `evento` en IndexedDB por compatibilidad). */
   tipo: string;
   fecha: string;
@@ -79,6 +58,7 @@ export interface ReproductionEvent {
 
 export interface ReproductionEventInput {
   idAnimal: string;
+  idSemental?: string | null;
   tipo: string;
   fecha: string;
   resultado: string | null;
@@ -86,10 +66,26 @@ export interface ReproductionEventInput {
 }
 
 export interface BackendEventoReproductivoPayload {
-  idEventoReproductivo: string;
+  idEventoReproductivo?: string;
   idAnimal: string;
+  idSemental?: string | null;
   tipo: string;
   fecha: string;
   resultado: string | null;
   observaciones: string | null;
+  versionRegistro?: number;
+}
+
+export interface BackendEventoReproductivoDto {
+  idEventoReproductivo: string;
+  idAnimal: string;
+  idSemental: string | null;
+  tipo: string;
+  fecha: string;
+  resultado: string | null;
+  observaciones: string | null;
+  idAutor: string;
+  creadoEn: string;
+  versionRegistro: number;
+  eliminadoEn: string | null;
 }

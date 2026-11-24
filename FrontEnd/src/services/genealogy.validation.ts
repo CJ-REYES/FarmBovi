@@ -1,39 +1,92 @@
 import type { Cattle } from '../types/cattle';
 import type {
+  AncestroGenealogicoDto,
   AnimalGenealogyProfile,
+  AnimalResumenGenealogiaDto,
   DescendantLink,
+  DescendienteGenealogicoDto,
+  DescendientesAnimalResponse,
   GenealogyInput,
-  GenealogyRecord
+  GenealogyRecord,
+  PadresAnimalResponse
 } from '../types/genealogy';
 import { isValidGuid } from './cattle.validation';
 
-export type GenealogyValidationField = 'idAnimal' | 'idPadre' | 'idMadre' | 'general';
+export const GENEALOGY_MAX_OBSERVACIONES_LENGTH = 500;
+
+export type GenealogyValidationField =
+  | 'idAnimal'
+  | 'idPadre'
+  | 'idMadre'
+  | 'observaciones'
+  | 'general';
 
 export type GenealogyValidationErrors = Partial<Record<GenealogyValidationField, string>>;
+
+const UNKNOWN_SEX_VALUES = new Set([
+  'desconocido',
+  'desconocida',
+  'unknown',
+  'nd',
+  'n/a',
+  'indefinido',
+  'indeterminado',
+  'sin especificar'
+]);
 
 function normalizeOptId(raw: string | null | undefined): string | null {
   const trimmed = raw?.trim() || '';
   return trimmed.length > 0 ? trimmed : null;
 }
 
-export function normalizeGenealogyInput(input: GenealogyInput): GenealogyInput {
+function normalizeObservaciones(raw: string | null | undefined): string | null {
+  const trimmed = raw?.trim() || '';
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+export function normalizeGenealogyInput(input: GenealogyInput): {
+  idAnimal: string;
+  idPadre: string | null;
+  idMadre: string | null;
+  observaciones: string | null;
+} {
   return {
     idAnimal: input.idAnimal.trim(),
     idPadre: normalizeOptId(input.idPadre),
-    idMadre: normalizeOptId(input.idMadre)
+    idMadre: normalizeOptId(input.idMadre),
+    observaciones: normalizeObservaciones(input.observaciones)
   };
+}
+
+export function isUnknownSex(sexo: string | undefined | null): boolean {
+  if (!sexo || sexo.trim().length === 0) return true;
+  return UNKNOWN_SEX_VALUES.has(sexo.trim().toLowerCase());
 }
 
 export function isMaleSex(sexo: string | undefined | null): boolean {
   if (!sexo) return false;
   const lowered = sexo.trim().toLowerCase();
-  return lowered === 'macho' || lowered === 'm' || lowered === 'male';
+  return lowered === 'macho' || lowered === 'masculino' || lowered === 'm' || lowered === 'male';
 }
 
 export function isFemaleSex(sexo: string | undefined | null): boolean {
   if (!sexo) return false;
   const lowered = sexo.trim().toLowerCase();
-  return lowered === 'hembra' || lowered === 'h' || lowered === 'f' || lowered === 'female';
+  return (
+    lowered === 'hembra' ||
+    lowered === 'femenino' ||
+    lowered === 'h' ||
+    lowered === 'f' ||
+    lowered === 'female'
+  );
+}
+
+export function isValidFatherSex(sexo: string | undefined | null): boolean {
+  return isUnknownSex(sexo) || isMaleSex(sexo);
+}
+
+export function isValidMotherSex(sexo: string | undefined | null): boolean {
+  return isUnknownSex(sexo) || isFemaleSex(sexo);
 }
 
 /**
@@ -91,7 +144,7 @@ export function validateGenealogyInput(
 ): GenealogyValidationErrors {
   const errors: GenealogyValidationErrors = {};
   const normalized = normalizeGenealogyInput(rawInput);
-  const { idAnimal, idPadre, idMadre } = normalized;
+  const { idAnimal, idPadre, idMadre, observaciones } = normalized;
 
   let childAnimal: Cattle | undefined;
   let fatherAnimal: Cattle | undefined;
@@ -114,7 +167,8 @@ export function validateGenealogyInput(
       (rec) =>
         !rec.deletedAt &&
         rec.idAnimal === idAnimal &&
-        rec.id !== context.editingRecordId
+        rec.id !== context.editingRecordId &&
+        rec.idGenealogia !== context.editingRecordId
     );
     if (duplicate) {
       errors.idAnimal =
@@ -127,6 +181,10 @@ export function validateGenealogyInput(
       'Debes seleccionar al menos un progenitor (padre o madre) para guardar el parentesco.';
   }
 
+  if (observaciones && observaciones.length > GENEALOGY_MAX_OBSERVACIONES_LENGTH) {
+    errors.observaciones = `Las observaciones no pueden exceder ${GENEALOGY_MAX_OBSERVACIONES_LENGTH} caracteres.`;
+  }
+
   if (idPadre) {
     if (!isValidGuid(idPadre)) {
       errors.idPadre = 'El identificador del padre debe ser un UUID válido.';
@@ -136,7 +194,7 @@ export function validateGenealogyInput(
       fatherAnimal = context.animals.find((a) => a.id === idPadre && !a.deletedAt);
       if (!fatherAnimal) {
         errors.idPadre = 'El padre seleccionado no existe o está desactivado.';
-      } else if (!isMaleSex(fatherAnimal.sexo)) {
+      } else if (!isValidFatherSex(fatherAnimal.sexo)) {
         errors.idPadre = `El padre seleccionado (${fatherAnimal.arete}) está registrado como ${fatherAnimal.sexo}; debe ser Macho.`;
       } else if (
         childAnimal?.idRancho &&
@@ -164,7 +222,7 @@ export function validateGenealogyInput(
       motherAnimal = context.animals.find((a) => a.id === idMadre && !a.deletedAt);
       if (!motherAnimal) {
         errors.idMadre = 'La madre seleccionada no existe o está desactivada.';
-      } else if (!isFemaleSex(motherAnimal.sexo)) {
+      } else if (!isValidMotherSex(motherAnimal.sexo)) {
         errors.idMadre = `La madre seleccionada (${motherAnimal.arete}) está registrada como ${motherAnimal.sexo}; debe ser Hembra.`;
       } else if (
         childAnimal?.idRancho &&
@@ -210,14 +268,166 @@ export function validateGenealogyInput(
   return errors;
 }
 
+export function summaryDtoToCattle(
+  dto: AnimalResumenGenealogiaDto,
+  animalById?: Map<string, Cattle>
+): Cattle {
+  const existing = animalById?.get(dto.idAnimal);
+  if (existing) return existing;
+
+  const now = new Date().toISOString();
+  return {
+    id: dto.idAnimal,
+    idAnimal: dto.idAnimal,
+    remoteId: dto.idAnimal,
+    idRancho: dto.idRancho,
+    idLote: null,
+    arete: dto.arete,
+    raza: dto.raza,
+    sexo: isMaleSex(dto.sexo) ? 'Macho' : 'Hembra',
+    fechaNacimiento: dto.fechaNacimiento,
+    fechaIngreso: dto.fechaNacimiento ?? now.slice(0, 10),
+    procedencia: '',
+    estado: dto.estado,
+    fechaSalida: null,
+    observaciones: null,
+    versionRegistro: 1,
+    createdAt: now,
+    updatedAt: now,
+    deletedAt: null,
+    syncStatus: 'synced'
+  };
+}
+
+export function cattleToSummaryDto(animal: Cattle): AnimalResumenGenealogiaDto {
+  return {
+    idAnimal: animal.id,
+    idRancho: animal.idRancho,
+    arete: animal.arete,
+    raza: animal.raza,
+    sexo: animal.sexo,
+    fechaNacimiento: animal.fechaNacimiento,
+    estado: animal.estado
+  };
+}
+
 /**
- * Construye el perfil genealógico real de un animal (padres, abuelos y descendientes directos)
- * estrictamente a partir de los vínculos registrados, sin inventar relaciones ni duplicar hijos.
+ * Construye el perfil genealógico directamente a partir de las respuestas reales del servidor
+ * (`GET /api/genealogia/{idAnimal}/padres` y `GET /api/genealogia/{idAnimal}/descendientes`).
+ */
+export function buildGenealogyProfileFromServer(params: {
+  parentsResponse: PadresAnimalResponse;
+  descendantsResponse: DescendientesAnimalResponse;
+  animals: Cattle[];
+  localRecord?: GenealogyRecord | null;
+}): AnimalGenealogyProfile {
+  const { parentsResponse, descendantsResponse, animals, localRecord } = params;
+  const animalById = new Map<string, Cattle>();
+  for (const a of animals) {
+    if (!a.deletedAt) animalById.set(a.id, a);
+  }
+
+  const focalAnimal = summaryDtoToCattle(parentsResponse.animal, animalById);
+  const padre = parentsResponse.padre ? summaryDtoToCattle(parentsResponse.padre, animalById) : null;
+  const madre = parentsResponse.madre ? summaryDtoToCattle(parentsResponse.madre, animalById) : null;
+
+  const gen2Ancestors = parentsResponse.ancestros.filter((a) => a.generacion === 2);
+  const findAncestor = (childId: string | undefined, vinculo: 'Padre' | 'Madre'): Cattle | null => {
+    if (!childId) return null;
+    const match = gen2Ancestors.find(
+      (a) => a.idHijo === childId && a.vinculo.toLowerCase() === vinculo.toLowerCase()
+    );
+    return match ? summaryDtoToCattle(match.animal, animalById) : null;
+  };
+
+  const abueloPaterno = findAncestor(padre?.id, 'Padre');
+  const abuelaPaterna = findAncestor(padre?.id, 'Madre');
+  const abueloMaterno = findAncestor(madre?.id, 'Padre');
+  const abuelaMaterna = findAncestor(madre?.id, 'Madre');
+
+  const directDescendants: DescendantLink[] = descendantsResponse.descendientes
+    .filter((d) => d.generacion === 1)
+    .map((d) => {
+      const child = summaryDtoToCattle(d.descendiente, animalById);
+      const isFather = d.descendiente.idPadre === focalAnimal.id;
+      const isMother = d.descendiente.idMadre === focalAnimal.id;
+      const role: DescendantLink['role'] =
+        isFather && isMother
+          ? 'ambos'
+          : isFather || d.rolProgenitor.toLowerCase() === 'padre'
+            ? 'padre'
+            : 'madre';
+      return {
+        animal: child,
+        recordId: d.descendiente.idAnimal,
+        role,
+        generacion: d.generacion
+      };
+    })
+    .sort((a, b) => a.animal.arete.localeCompare(b.animal.arete, 'es'));
+
+  const now = new Date().toISOString();
+  const hasDirectLink = Boolean(
+    parentsResponse.idGenealogia || parentsResponse.padre || parentsResponse.madre
+  );
+
+  const resolvedRecord: GenealogyRecord | null = hasDirectLink
+    ? {
+        id: localRecord?.id ?? parentsResponse.idGenealogia ?? focalAnimal.id,
+        idGenealogia:
+          parentsResponse.idGenealogia ?? localRecord?.idGenealogia ?? focalAnimal.id,
+        remoteId: parentsResponse.idGenealogia ?? localRecord?.remoteId,
+        idRancho: focalAnimal.idRancho,
+        idAnimal: focalAnimal.id,
+        idPadre: parentsResponse.padre?.idAnimal ?? null,
+        idMadre: parentsResponse.madre?.idAnimal ?? null,
+        observaciones: parentsResponse.observaciones ?? null,
+        versionRegistro: parentsResponse.versionRegistro ?? localRecord?.versionRegistro ?? 1,
+        createdAt: localRecord?.createdAt ?? now,
+        updatedAt: localRecord?.updatedAt ?? now,
+        deletedAt: null,
+        syncStatus: localRecord?.syncStatus === 'pending' ? 'pending' : 'synced'
+      }
+    : null;
+
+  const hasAnyGenealogyData = Boolean(
+    padre ||
+      madre ||
+      abueloPaterno ||
+      abuelaPaterna ||
+      abueloMaterno ||
+      abuelaMaterna ||
+      parentsResponse.ancestros.length > 0 ||
+      descendantsResponse.totalDescendientes > 0
+  );
+
+  return {
+    animal: focalAnimal,
+    record: resolvedRecord,
+    observaciones: parentsResponse.observaciones ?? null,
+    padre,
+    madre,
+    abueloPaterno,
+    abuelaPaterna,
+    abueloMaterno,
+    abuelaMaterna,
+    ancestros: parentsResponse.ancestros,
+    descendientes: directDescendants,
+    descendientesMultigeneracion: descendantsResponse.descendientes,
+    totalDescendientes: descendantsResponse.totalDescendientes,
+    hasAnyGenealogyData
+  };
+}
+
+/**
+ * Construye el perfil genealógico local (fallback offline) a partir de los registros en IndexedDB,
+ * soportando múltiples generaciones de ancestros y descendientes sin inventar datos ni ciclar.
  */
 export function buildAnimalGenealogyProfile(
   focalAnimalId: string,
   animals: Cattle[],
-  records: GenealogyRecord[]
+  records: GenealogyRecord[],
+  maxDepth = 3
 ): AnimalGenealogyProfile | null {
   const animalById = new Map<string, Cattle>();
   for (const a of animals) {
@@ -229,7 +439,6 @@ export function buildAnimalGenealogyProfile(
   const focalAnimal = animalById.get(focalAnimalId);
   if (!focalAnimal) return null;
 
-  // Deduplicar registros activos por idAnimal (si hubiera datos legados repetidos, prevalece el más reciente)
   const recordByAnimalId = new Map<string, GenealogyRecord>();
   const activeRecords = records
     .filter((r) => !r.deletedAt)
@@ -267,25 +476,103 @@ export function buildAnimalGenealogyProfile(
   const abueloMaterno = resolveParent(madreRec?.idPadre, visitedMaternal);
   const abuelaMaterna = resolveParent(madreRec?.idMadre, visitedMaternal);
 
-  // Descendientes directos deduplicados
-  const descendantMap = new Map<string, DescendantLink>();
-  for (const rec of recordByAnimalId.values()) {
-    if (rec.idAnimal === focalAnimalId) continue;
-    const isFather = rec.idPadre === focalAnimalId;
-    const isMother = rec.idMadre === focalAnimalId;
-    if (!isFather && !isMother) continue;
-
-    const child = animalById.get(rec.idAnimal);
-    if (!child) continue;
-
-    descendantMap.set(child.id, {
-      animal: child,
-      recordId: rec.id,
-      role: isFather && isMother ? 'ambos' : isFather ? 'padre' : 'madre'
-    });
+  // Ancestros BFS (coincide con el contrato `AncestroGenealogicoDto` del Backend)
+  const ancestros: AncestroGenealogicoDto[] = [];
+  const visitedAnc = new Set<string>([focalAnimalId]);
+  let ancFrontier: string[] = [focalAnimalId];
+  for (let gen = 1; gen <= maxDepth && ancFrontier.length > 0; gen++) {
+    const nextFrontier: string[] = [];
+    for (const currentId of ancFrontier) {
+      const rec = recordByAnimalId.get(currentId);
+      if (!rec) continue;
+      if (rec.idPadre) {
+        const p = animalById.get(rec.idPadre);
+        if (p) {
+          ancestros.push({
+            generacion: gen,
+            vinculo: 'Padre',
+            idHijo: currentId,
+            animal: cattleToSummaryDto(p)
+          });
+          if (!visitedAnc.has(p.id)) {
+            visitedAnc.add(p.id);
+            nextFrontier.push(p.id);
+          }
+        }
+      }
+      if (rec.idMadre) {
+        const m = animalById.get(rec.idMadre);
+        if (m) {
+          ancestros.push({
+            generacion: gen,
+            vinculo: 'Madre',
+            idHijo: currentId,
+            animal: cattleToSummaryDto(m)
+          });
+          if (!visitedAnc.has(m.id)) {
+            visitedAnc.add(m.id);
+            nextFrontier.push(m.id);
+          }
+        }
+      }
+    }
+    ancFrontier = nextFrontier;
   }
 
-  const descendientes = Array.from(descendantMap.values()).sort((a, b) =>
+  // Descendientes BFS (coincide con el contrato `DescendienteGenealogicoDto` del Backend)
+  const descendientesMultigeneracion: DescendienteGenealogicoDto[] = [];
+  const directDescendantMap = new Map<string, DescendantLink>();
+  const visitedDesc = new Set<string>([focalAnimalId]);
+  let descFrontier: string[] = [focalAnimalId];
+
+  for (let gen = 1; gen <= maxDepth && descFrontier.length > 0; gen++) {
+    const frontierSet = new Set(descFrontier);
+    const nextFrontier: string[] = [];
+
+    for (const rec of recordByAnimalId.values()) {
+      const isFather = Boolean(rec.idPadre && frontierSet.has(rec.idPadre));
+      const isMother = Boolean(rec.idMadre && frontierSet.has(rec.idMadre));
+      if (!isFather && !isMother) continue;
+
+      const child = animalById.get(rec.idAnimal);
+      if (!child || visitedDesc.has(child.id)) continue;
+      visitedDesc.add(child.id);
+
+      const directParentId = isFather ? rec.idPadre! : rec.idMadre!;
+      const rolProgenitor = isFather ? 'Padre' : 'Madre';
+
+      descendientesMultigeneracion.push({
+        generacion: gen,
+        rolProgenitor,
+        idPadreOMadreDirecto: directParentId,
+        descendiente: {
+          ...cattleToSummaryDto(child),
+          idPadre: rec.idPadre,
+          idMadre: rec.idMadre
+        }
+      });
+
+      if (gen === 1) {
+        directDescendantMap.set(child.id, {
+          animal: child,
+          recordId: rec.id,
+          role:
+            rec.idPadre === focalAnimalId && rec.idMadre === focalAnimalId
+              ? 'ambos'
+              : rec.idPadre === focalAnimalId
+                ? 'padre'
+                : 'madre',
+          generacion: 1
+        });
+      }
+
+      nextFrontier.push(child.id);
+    }
+
+    descFrontier = nextFrontier;
+  }
+
+  const descendientes = Array.from(directDescendantMap.values()).sort((a, b) =>
     a.animal.arete.localeCompare(b.animal.arete, 'es')
   );
 
@@ -296,19 +583,24 @@ export function buildAnimalGenealogyProfile(
       abuelaPaterna ||
       abueloMaterno ||
       abuelaMaterna ||
-      descendientes.length > 0
+      ancestros.length > 0 ||
+      descendientesMultigeneracion.length > 0
   );
 
   return {
     animal: focalAnimal,
     record: focalRecord,
+    observaciones: focalRecord?.observaciones ?? null,
     padre,
     madre,
     abueloPaterno,
     abuelaPaterna,
     abueloMaterno,
     abuelaMaterna,
+    ancestros,
     descendientes,
+    descendientesMultigeneracion,
+    totalDescendientes: descendientesMultigeneracion.length,
     hasAnyGenealogyData
   };
 }

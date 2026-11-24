@@ -153,14 +153,12 @@ export default function FeedingPage() {
       }
     })();
 
-    let previousSyncAt = SyncScheduler.getSnapshot().lastCompletedSyncAt;
-    const unsubscribe = SyncScheduler.subscribe(() => {
-      const nextSyncAt = SyncScheduler.getSnapshot().lastCompletedSyncAt;
-      if (nextSyncAt && nextSyncAt !== previousSyncAt) {
-        previousSyncAt = nextSyncAt;
+    const unsubscribe = SyncScheduler.subscribeToDataUpdates(
+      ['feedingRecords', 'cattle', 'lots'],
+      () => {
         void loadData(includeDeleted, sortOrder);
       }
-    });
+    );
 
     return () => {
       active = false;

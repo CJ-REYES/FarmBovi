@@ -2,6 +2,7 @@ import { hasActiveAuthSession } from '../lib/api';
 import { StorageManager } from '../lib/database/db';
 import { CattleRepository } from '../lib/database/repositories/cattle.repository';
 import { MediaRepository } from '../lib/database/repositories/media.repository';
+import { OutboxRepository } from '../lib/database/repositories/outbox.repository';
 import type { LocalMedia } from '../lib/database/schema';
 import type { Cattle } from '../types/cattle';
 import {
@@ -30,6 +31,7 @@ export interface SaveAnimalPhotoInput {
 export interface SaveAnimalPhotoResult {
   photo: StoredAnimalPhoto;
   synced: boolean;
+  duplicated?: boolean;
   syncMessage: string;
 }
 
@@ -247,14 +249,21 @@ export const PhotoCaptureService = {
       tipo: local.tipo,
       nombreArchivo: local.nombreArchivo,
       mimeType: local.mimeType,
+      extension: local.extension ?? null,
       tamanoBytes: local.tamanoBytes,
       checksumSha256: local.checksumSha256 ?? null,
       blobData: local.blobData,
       urlRemota: local.urlRemota ?? null,
+      rutaArchivoRemota: local.rutaArchivoRemota ?? null,
+      proveedorAlmacenamiento: local.proveedorAlmacenamiento ?? null,
+      estadoRemoto: local.estadoRemoto ?? null,
+      fechaCarga: local.fechaCarga ?? null,
       idOperacionSubida: local.idOperacionSubida ?? null,
       estadoArchivo: local.estadoArchivo,
       intentosSubida: local.intentosSubida,
       ultimoErrorSubida: local.ultimoErrorSubida ?? null,
+      proximoIntentoSubida: local.proximoIntentoSubida ?? null,
+      errorSubidaPermanente: Boolean(local.errorSubidaPermanente),
       fechaCaptura: local.fechaCaptura,
       syncStatus: local.syncStatus,
       deletedAt: local.deletedAt ?? null
@@ -283,16 +292,20 @@ export const PhotoCaptureService = {
 
     let totalBytes = 0;
     let pendingUploads = 0;
+    let failedUploads = 0;
     for (const item of mediaList) {
       totalBytes += item.tamanoBytes || item.blobData?.size || 0;
       if (item.estadoArchivo === 'pendiente_subida' || item.estadoArchivo === 'subiendo') {
         pendingUploads++;
+      } else if (item.estadoArchivo === 'error_subida') {
+        failedUploads++;
       }
     }
 
     return {
       totalPhotos: mediaList.length,
       pendingUploads,
+      failedUploads,
       totalBytes,
       browserUsageBytes: estimate.usage,
       browserQuotaBytes: estimate.quota,
@@ -345,7 +358,7 @@ export const PhotoCaptureService = {
     const safeArete = (animal.arete || animal.id.slice(0, 8)).replace(/[^A-Za-z0-9_-]/g, '_');
     const defaultName = `${input.tipo.toLowerCase()}_${safeArete}_${Date.now()}.${extension}`;
 
-    const { media } = await MediaRepository.saveCapture({
+    const { media, duplicated } = await MediaRepository.saveCapture({
       fileOrBlob: input.blob,
       tipo: input.tipo,
       entidadRelacionada: 'cattle',
@@ -356,6 +369,15 @@ export const PhotoCaptureService = {
       crearTrabajoPesaje: false
     });
 
+    if (duplicated && media.estadoArchivo === 'subido') {
+      return {
+        photo: this.toStoredPhoto(media),
+        synced: true,
+        duplicated: true,
+        syncMessage: `Esta fotografía ya estaba registrada y sincronizada para ${animal.arete}. Se evitó una carga duplicada.`
+      };
+    }
+
     const isOnline = typeof navigator !== 'undefined' && navigator.onLine;
     if (isOnline && hasActiveAuthSession()) {
       const syncResult = await MediaSyncEngine.syncSingleMedia(media.id);
@@ -364,12 +386,16 @@ export const PhotoCaptureService = {
         return {
           photo: this.toStoredPhoto(refreshed),
           synced: true,
-          syncMessage: `Fotografía sincronizada correctamente para ${animal.arete} (${formatBytesHuman(refreshed.tamanoBytes)}). Guardada en servidor y vinculada por ruta.`
+          duplicated,
+          syncMessage: duplicated
+            ? `Fotografía existente sincronizada para ${animal.arete} sin duplicar registros.`
+            : `Fotografía sincronizada correctamente para ${animal.arete} (${formatBytesHuman(refreshed.tamanoBytes)}). Guardada en servidor y vinculada.`
         };
       }
       return {
         photo: this.toStoredPhoto(refreshed),
         synced: false,
+        duplicated,
         syncMessage: syncResult.error
           ? `Guardada localmente en IndexedDB, pero la subida falló: ${syncResult.error}`
           : `Fotografía guardada localmente (${formatBytesHuman(refreshed.tamanoBytes)}) para ${animal.arete}. Pendiente de sincronización.`
@@ -379,9 +405,43 @@ export const PhotoCaptureService = {
     return {
       photo: this.toStoredPhoto(media),
       synced: false,
-      syncMessage: isOnline
-        ? `Fotografía guardada localmente (${formatBytesHuman(media.tamanoBytes)}) asociada a ${animal.arete}. Inicia sesión para sincronizarla con el servidor.`
-        : `Sin conexión: fotografía guardada en IndexedDB (${formatBytesHuman(media.tamanoBytes)}) asociada a ${animal.arete} y encolada para sincronización posterior.`
+      duplicated,
+      syncMessage: duplicated
+        ? `Esta fotografía ya estaba en cola local para ${animal.arete}. Se evitó duplicarla.`
+        : isOnline
+          ? `Fotografía guardada localmente (${formatBytesHuman(media.tamanoBytes)}) asociada a ${animal.arete}. Inicia sesión para sincronizarla con el servidor.`
+          : `Sin conexión: fotografía guardada en IndexedDB (${formatBytesHuman(media.tamanoBytes)}) asociada a ${animal.arete} y encolada para sincronización posterior.`
+    };
+  },
+
+  async retryPhotoUpload(mediaId: string): Promise<{ synced: boolean; syncMessage: string }> {
+    const isOnline = typeof navigator !== 'undefined' && navigator.onLine;
+    if (!isOnline) {
+      return {
+        synced: false,
+        syncMessage: 'Sin conexión a internet. La fotografía se reintentará automáticamente al reconectar.'
+      };
+    }
+    if (!hasActiveAuthSession()) {
+      return {
+        synced: false,
+        syncMessage: 'Inicia sesión para reintentar la subida de la fotografía.'
+      };
+    }
+
+    const summary = await MediaSyncEngine.retryFailedMedia(mediaId);
+    const refreshed = await MediaRepository.getById(mediaId);
+    if (summary.uploadedCount > 0 || refreshed?.estadoArchivo === 'subido') {
+      return {
+        synced: true,
+        syncMessage: 'Fotografía sincronizada correctamente en el reintento.'
+      };
+    }
+    return {
+      synced: false,
+      syncMessage:
+        refreshed?.ultimoErrorSubida ||
+        'No se pudo completar la subida en este reintento. La fotografía sigue protegida localmente.'
     };
   },
 
@@ -389,11 +449,21 @@ export const PhotoCaptureService = {
     await MediaRepository.softDeleteMedia(mediaId);
     const isOnline = typeof navigator !== 'undefined' && navigator.onLine;
     if (isOnline && hasActiveAuthSession()) {
-      const summary = await MediaSyncEngine.syncPendingMedia();
-      if (summary.errorCount === 0) {
+      await MediaSyncEngine.syncPendingMedia({ skipPull: true });
+      const ops = await OutboxRepository.getByEntity('media', mediaId);
+      const deleteOp = [...ops].reverse().find((op) => op.tipoOperacion === 'DELETE');
+      if (!deleteOp || deleteOp.estado === 'confirmado') {
         return {
           synced: true,
           syncMessage: 'Fotografía eliminada del dispositivo y sincronizada con el servidor.'
+        };
+      }
+      if (deleteOp.estado === 'fallido') {
+        return {
+          synced: false,
+          syncMessage:
+            deleteOp.ultimoError ||
+            'Eliminada localmente, pero el servidor rechazó o no pudo confirmar la baja remota.'
         };
       }
     }

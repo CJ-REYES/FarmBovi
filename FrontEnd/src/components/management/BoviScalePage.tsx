@@ -15,12 +15,17 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
+  Scale,
   ShieldCheck,
   SwitchCamera,
   Trash2,
   Upload,
   X
 } from 'lucide-react';
+import { WeighingRepository } from '../../lib/database/repositories/weighing.repository';
+import type { LocalWeighing, LocalWeighingAnalysisJob } from '../../lib/database/schema';
+import { BoviScaleAnalysisService } from '../../services/boviscale-analysis.service';
+import { SyncScheduler } from '../../services/sync/sync-scheduler';
 import {
   PermissionsManagerService,
   type ManagedPermissionState
@@ -39,6 +44,10 @@ import {
   type PhotoStorageSummary,
   type StoredAnimalPhoto
 } from '../../types/media';
+import type {
+  BoviScaleEstimationStep,
+  EstimacionPesoBoviScaleDto
+} from '../../types/weighing';
 import AnimalSelectField from '../shared/AnimalSelectField';
 import BlobImage from '../shared/BlobImage';
 import EmptyState from '../ui/EmptyState';
@@ -94,6 +103,47 @@ function renderUploadBadge(estado: StoredAnimalPhoto['estadoArchivo']) {
   );
 }
 
+const ESTIMATION_STEP_META: Record<
+  BoviScaleEstimationStep,
+  { label: string; description: string; badgeClass: string }
+> = {
+  fotografia_pendiente: {
+    label: 'Fotografía pendiente',
+    description: 'Captura o selecciona una fotografía lateral del bovino para iniciar.',
+    badgeClass: 'bg-surface-secondary text-brand-slate border border-border-light'
+  },
+  fotografia_validada: {
+    label: 'Fotografía validada',
+    description: 'Imagen verificada. Lista para guardar localmente o enviar a estimación.',
+    badgeClass: 'bg-brand-primary/15 text-brand-primary border border-brand-primary/25'
+  },
+  solicitud_enviada: {
+    label: 'Solicitud enviada',
+    description: 'Enviando fotografía y metadatos al backend de FarmBovi...',
+    badgeClass: 'bg-brand-primary/15 text-brand-primary border border-brand-primary/30'
+  },
+  procesando_estimacion: {
+    label: 'Procesando estimación',
+    description: 'El backend está consultando el modelo de estimación de peso...',
+    badgeClass: 'bg-brand-primary/15 text-brand-primary border border-brand-primary/30'
+  },
+  estimacion_recibida: {
+    label: 'Estimación recibida',
+    description: 'Resultado recibido del servidor. Actualizando historial del bovino...',
+    badgeClass: 'bg-status-success/15 text-status-success border border-status-success/30'
+  },
+  pesaje_registrado: {
+    label: 'Pesaje registrado',
+    description: 'Peso estimado validado y registrado en el historial oficial del bovino.',
+    badgeClass: 'bg-status-success/15 text-status-success border border-status-success/30'
+  },
+  error_procesamiento: {
+    label: 'Error de procesamiento',
+    description: 'No se pudo completar la estimación. No se registró ningún pesaje.',
+    badgeClass: 'bg-status-danger/15 text-status-danger border border-status-danger/30'
+  }
+};
+
 export default function BoviScalePage() {
   const [searchParams] = useSearchParams();
 
@@ -140,6 +190,23 @@ export default function BoviScalePage() {
   const [inspectPhoto, setInspectPhoto] = useState<StoredAnimalPhoto | null>(null);
   const [confirmDeletePhoto, setConfirmDeletePhoto] = useState<StoredAnimalPhoto | null>(null);
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [retryingPhotoId, setRetryingPhotoId] = useState<string | null>(null);
+
+  // Estado del flujo de estimación BoviScale (React -> .NET -> Python -> MySQL -> React)
+  const [estimationStep, setEstimationStep] =
+    useState<BoviScaleEstimationStep>('fotografia_pendiente');
+  const [isEstimating, setIsEstimating] = useState<boolean>(false);
+  const [estimationResult, setEstimationResult] = useState<EstimacionPesoBoviScaleDto | null>(null);
+  const [estimationError, setEstimationError] = useState<string | null>(null);
+  const [retryableEstimation, setRetryableEstimation] = useState<boolean>(false);
+  const [lastEstimationContext, setLastEstimationContext] = useState<{
+    idSolicitud: string;
+    cattleId: string;
+    mediaId?: string;
+  } | null>(null);
+  const [animalWeighings, setAnimalWeighings] = useState<LocalWeighing[]>([]);
+  const [loadingWeighings, setLoadingWeighings] = useState<boolean>(false);
+  const [pendingOfflineJobs, setPendingOfflineJobs] = useState<LocalWeighingAnalysisJob[]>([]);
 
   // Referencias de hardware y control de concurrencia
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -326,6 +393,54 @@ export default function BoviScalePage() {
     void startCameraWithFacing(nextFacing);
   };
 
+  const loadAnimalWeighings = useCallback(async (cattleId: string) => {
+    if (!cattleId) {
+      setAnimalWeighings([]);
+      return;
+    }
+    setLoadingWeighings(true);
+    try {
+      const rows = await WeighingRepository.getByCattleId(cattleId);
+      setAnimalWeighings(rows);
+    } catch {
+      setAnimalWeighings([]);
+    } finally {
+      setLoadingWeighings(false);
+    }
+  }, []);
+
+  const loadPendingOfflineJobs = useCallback(async () => {
+    try {
+      const jobs = await BoviScaleAnalysisService.getPendingOfflineRequests();
+      setPendingOfflineJobs(jobs);
+    } catch {
+      setPendingOfflineJobs([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadPendingOfflineJobs();
+  }, [loadPendingOfflineJobs]);
+
+  useEffect(() => {
+    void loadAnimalWeighings(selectedCattleId);
+  }, [selectedCattleId, loadAnimalWeighings]);
+
+  useEffect(() => {
+    let previousFinishedAt = SyncScheduler.getSnapshot().lastCycleResult?.finishedAt ?? null;
+    const unsubscribe = SyncScheduler.subscribe(() => {
+      const nextFinishedAt = SyncScheduler.getSnapshot().lastCycleResult?.finishedAt ?? null;
+      if (nextFinishedAt && nextFinishedAt !== previousFinishedAt) {
+        previousFinishedAt = nextFinishedAt;
+        void loadPendingOfflineJobs();
+        if (selectedCattleId) {
+          void loadAnimalWeighings(selectedCattleId);
+        }
+      }
+    });
+    return unsubscribe;
+  }, [selectedCattleId, loadAnimalWeighings, loadPendingOfflineJobs]);
+
   const handleCaptureFrame = async () => {
     if (isCapturing) return;
     setCaptureError(null);
@@ -353,6 +468,9 @@ export default function BoviScalePage() {
         captureMode,
         dimensions: width && height ? { width, height } : undefined
       });
+      setEstimationStep('fotografia_validada');
+      setEstimationResult(null);
+      setEstimationError(null);
       // Liberar hardware de cámara inmediatamente al obtener la foto
       stopCamera();
     } catch (err) {
@@ -385,17 +503,26 @@ export default function BoviScalePage() {
       nombreArchivo: file.name,
       source: 'file'
     });
+    setEstimationStep('fotografia_validada');
+    setEstimationResult(null);
+    setEstimationError(null);
   };
 
   const handleDiscardCapture = () => {
     setPendingCapture(null);
     setCaptureError(null);
+    setEstimationError(null);
+    setEstimationResult(null);
+    setEstimationStep('fotografia_pendiente');
   };
 
   const handleRetakeCapture = () => {
     const previousSource = pendingCapture?.source;
     setPendingCapture(null);
     setCaptureError(null);
+    setEstimationError(null);
+    setEstimationResult(null);
+    setEstimationStep('fotografia_pendiente');
     if (previousSource === 'camera') {
       void startCameraWithFacing(facingMode);
     } else {
@@ -437,6 +564,167 @@ export default function BoviScalePage() {
     } finally {
       saveLockRef.current = false;
       setIsSaving(false);
+    }
+  };
+
+  const handleEstimateWeight = async (options?: {
+    existingPhoto?: StoredAnimalPhoto;
+    retry?: boolean;
+  }) => {
+    if (isEstimating || isSaving) return;
+
+    const targetCattleId =
+      options?.existingPhoto?.cattleId ||
+      (options?.retry ? lastEstimationContext?.cattleId : undefined) ||
+      selectedCattleId;
+    const targetMediaId =
+      options?.existingPhoto?.id ||
+      (options?.retry ? lastEstimationContext?.mediaId : undefined);
+    const targetBlob = !targetMediaId ? pendingCapture?.blob : undefined;
+
+    setCaptureError(null);
+    setFeedbackMsg(null);
+    setEstimationError(null);
+    setEstimationResult(null);
+
+    if (!targetCattleId) {
+      setCaptureError('Selecciona un animal del padrón antes de solicitar la estimación de peso.');
+      setEstimationStep('error_procesamiento');
+      setEstimationError('Debes seleccionar un animal válido antes de analizar la fotografía.');
+      setRetryableEstimation(false);
+      return;
+    }
+
+    if (!targetBlob && !targetMediaId) {
+      setCaptureError('Captura o selecciona una fotografía antes de solicitar la estimación de peso.');
+      setEstimationStep('fotografia_pendiente');
+      return;
+    }
+
+    if (targetCattleId !== selectedCattleId) {
+      setSelectedCattleId(targetCattleId);
+    }
+
+    const requestId =
+      options?.retry && lastEstimationContext?.idSolicitud
+        ? lastEstimationContext.idSolicitud
+        : crypto.randomUUID();
+
+    setIsEstimating(true);
+    setRetryableEstimation(false);
+
+    try {
+      const result = await BoviScaleAnalysisService.requestWeightEstimation(
+        {
+          cattleId: targetCattleId,
+          blob: targetBlob,
+          existingMediaId: targetMediaId,
+          tipo:
+            options?.existingPhoto?.tipo === 'FotoPerfil'
+              ? 'FotoPerfil'
+              : options?.existingPhoto
+                ? 'BoviScaleVision'
+                : photoType,
+          nombreArchivo: options?.existingPhoto?.nombreArchivo ?? pendingCapture?.nombreArchivo,
+          idSolicitud: requestId
+        },
+        (step) => {
+          setEstimationStep(step);
+        }
+      );
+
+      if (result.ok && result.estimation) {
+        setEstimationResult(result.estimation);
+        setEstimationStep('pesaje_registrado');
+        setEstimationError(null);
+        setLastEstimationContext(null);
+        if (!targetMediaId) {
+          setPendingCapture(null);
+        }
+        const animalLabel = animalById.get(targetCattleId)?.arete || targetCattleId;
+        setFeedbackMsg(
+          `Pesaje registrado para ${animalLabel}: ${result.estimation.pesoEstimadoKg} ${result.estimation.unidadPeso}.`
+        );
+        await Promise.all([
+          loadGallery(galleryAnimalFilter),
+          loadAnimalWeighings(targetCattleId),
+          loadPendingOfflineJobs()
+        ]);
+      } else {
+        setEstimationResult(null);
+        setEstimationStep('error_procesamiento');
+        setEstimationError(
+          result.error || 'No se pudo completar la estimación de peso. No se registró ningún pesaje.'
+        );
+        setRetryableEstimation(Boolean(result.retryable));
+        setLastEstimationContext({
+          idSolicitud: result.idSolicitud,
+          cattleId: targetCattleId,
+          mediaId: result.mediaId
+        });
+        if (result.mediaId) {
+          await Promise.all([loadGallery(galleryAnimalFilter), loadPendingOfflineJobs()]);
+        } else if (result.queuedOffline) {
+          await loadPendingOfflineJobs();
+        }
+      }
+    } finally {
+      setIsEstimating(false);
+    }
+  };
+
+  const handleProcessPendingJob = async (job: LocalWeighingAnalysisJob) => {
+    if (isEstimating) return;
+    setSelectedCattleId(job.idBovino);
+    setEstimationError(null);
+    setEstimationResult(null);
+    setIsEstimating(true);
+    setEstimationStep('solicitud_enviada');
+    try {
+      const result = await BoviScaleAnalysisService.retryImmediately(job.idTrabajo);
+      if (result?.ok && result.estimation) {
+        setEstimationResult(result.estimation);
+        setEstimationStep('pesaje_registrado');
+        const label = animalById.get(job.idBovino)?.arete || job.idBovino;
+        setFeedbackMsg(
+          `Solicitud pendiente completada para ${label}: ${result.estimation.pesoEstimadoKg} ${result.estimation.unidadPeso}.`
+        );
+      } else {
+        setEstimationStep('error_procesamiento');
+        setEstimationError(
+          result?.error || 'No se pudo procesar la solicitud pendiente en este momento.'
+        );
+        setRetryableEstimation(Boolean(result?.retryable));
+      }
+      await Promise.all([
+        loadGallery(galleryAnimalFilter),
+        loadAnimalWeighings(job.idBovino),
+        loadPendingOfflineJobs()
+      ]);
+    } finally {
+      setIsEstimating(false);
+    }
+  };
+
+  const handleRetryPhoto = async (photo: StoredAnimalPhoto) => {
+    if (retryingPhotoId) return;
+    setRetryingPhotoId(photo.id);
+    setGalleryError(null);
+    setFeedbackMsg(null);
+    try {
+      const res = await PhotoCaptureService.retryPhotoUpload(photo.id);
+      if (res.synced) {
+        setFeedbackMsg(res.syncMessage);
+      } else {
+        setGalleryError(res.syncMessage);
+      }
+      await loadGallery(galleryAnimalFilter);
+    } catch (err) {
+      setGalleryError(
+        err instanceof Error ? err.message : 'No se pudo reintentar la subida de la fotografía.'
+      );
+    } finally {
+      setRetryingPhotoId(null);
     }
   };
 
@@ -817,8 +1105,8 @@ export default function BoviScalePage() {
                   <button
                     type="button"
                     onClick={() => void handleSavePhoto()}
-                    disabled={isSaving || !selectedCattleId}
-                    className="flex-1 min-h-[42px] flex justify-center items-center gap-2 bg-brand-primary hover:bg-brand-dark text-white px-5 rounded-md font-semibold text-[13px] transition-colors shadow-sm disabled:opacity-50"
+                    disabled={isSaving || isEstimating || !selectedCattleId}
+                    className="flex-1 min-h-[42px] flex justify-center items-center gap-2 bg-surface-white border border-brand-primary text-brand-primary hover:bg-brand-primary/5 px-4 rounded-md font-semibold text-[13px] transition-colors disabled:opacity-50"
                   >
                     {isSaving ? (
                       <>
@@ -830,7 +1118,148 @@ export default function BoviScalePage() {
                       </>
                     )}
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleEstimateWeight()}
+                    disabled={isSaving || isEstimating || !selectedCattleId}
+                    className="flex-1 min-h-[42px] flex justify-center items-center gap-2 bg-brand-primary hover:bg-brand-dark text-white px-5 rounded-md font-semibold text-[13px] transition-colors shadow-sm disabled:opacity-50"
+                  >
+                    {isEstimating ? (
+                      <>
+                        <Loader2 size={16} className="animate-spin" /> Procesando estimación...
+                      </>
+                    ) : (
+                      <>
+                        <Scale size={16} /> Estimar Peso
+                      </>
+                    )}
+                  </button>
                 </>
+              )}
+            </div>
+
+            {/* Panel de estado del flujo de estimación BoviScale */}
+            <div
+              aria-live="polite"
+              data-testid="boviscale-estimation-status"
+              className="rounded-xl border border-border-light bg-surface-app/40 p-4 space-y-2.5"
+            >
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <Scale size={16} className="text-brand-primary shrink-0" />
+                  <span className="text-[13px] font-bold text-brand-forest">
+                    Estado de Estimación BoviScale
+                  </span>
+                </div>
+                <span
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold ${ESTIMATION_STEP_META[estimationStep].badgeClass}`}
+                >
+                  {(estimationStep === 'solicitud_enviada' ||
+                    estimationStep === 'procesando_estimacion') && (
+                    <Loader2 size={11} className="animate-spin" />
+                  )}
+                  {estimationStep === 'pesaje_registrado' && <CheckCircle2 size={11} />}
+                  {estimationStep === 'error_procesamiento' && <AlertTriangle size={11} />}
+                  <span>{ESTIMATION_STEP_META[estimationStep].label}</span>
+                </span>
+              </div>
+
+              <p className="text-[12px] text-brand-slate/75">
+                {ESTIMATION_STEP_META[estimationStep].description}
+              </p>
+
+              {estimationStep === 'error_procesamiento' && estimationError && (
+                <div
+                  role="alert"
+                  className="p-3 rounded-lg bg-status-danger/10 border border-status-danger/30 text-status-danger text-[12px] flex items-start justify-between gap-3"
+                >
+                  <div className="flex items-start gap-2">
+                    <AlertCircle size={15} className="shrink-0 mt-0.5" />
+                    <span>{estimationError}</span>
+                  </div>
+                  {retryableEstimation && lastEstimationContext && (
+                    <button
+                      type="button"
+                      disabled={isEstimating}
+                      onClick={() => void handleEstimateWeight({ retry: true })}
+                      className="shrink-0 px-2.5 py-1 rounded bg-surface-white border border-status-danger/40 text-status-danger font-semibold text-[11px] hover:bg-status-danger/5 disabled:opacity-50"
+                    >
+                      Reintentar estimación
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {estimationStep === 'pesaje_registrado' && estimationResult && (
+                <div
+                  data-testid="boviscale-estimation-result"
+                  className="p-3.5 rounded-lg bg-status-success/10 border border-status-success/30 space-y-1.5"
+                >
+                  <div className="flex items-baseline justify-between gap-2 flex-wrap">
+                    <span className="text-[12px] font-semibold text-brand-forest">
+                      Peso estimado registrado:
+                    </span>
+                    <span className="text-2xl font-condensed font-bold text-status-success">
+                      {estimationResult.pesoEstimadoKg} {estimationResult.unidadPeso}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-brand-slate/75">
+                    {estimationResult.confianzaModelo !== null && (
+                      <span>
+                        Confianza: {(estimationResult.confianzaModelo * 100).toFixed(1)}%
+                      </span>
+                    )}
+                    {estimationResult.versionModelo && (
+                      <span>Modelo: {estimationResult.versionModelo}</span>
+                    )}
+                    <span>Responsable: {estimationResult.responsable}</span>
+                    {estimationResult.duplicadoIgnorado && (
+                      <span className="font-semibold text-brand-primary">
+                        Solicitud ya registrada previamente
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {pendingOfflineJobs.length > 0 && (
+                <div
+                  data-testid="boviscale-pending-requests"
+                  className="pt-2 border-t border-border-light/70 space-y-2"
+                >
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-brand-slate/65">
+                    Solicitudes de análisis pendientes ({pendingOfflineJobs.length})
+                  </p>
+                  <ul className="space-y-1.5">
+                    {pendingOfflineJobs.map((job) => {
+                      const animal = animalById.get(job.idBovino);
+                      return (
+                        <li
+                          key={job.idTrabajo}
+                          className="flex items-center justify-between gap-2 rounded-lg bg-surface-white border border-border-light px-3 py-2 text-[12px]"
+                        >
+                          <div className="min-w-0">
+                            <p className="font-semibold text-brand-forest truncate">
+                              {animal ? animal.arete : job.idBovino.slice(0, 8)} ·{' '}
+                              {formatDateTimeDisplay(job.fechaCreacion)}
+                            </p>
+                            <p className="text-[11px] text-brand-slate/65 truncate">
+                              {job.ultimoError || 'Esperando conexión con el servidor para estimar peso.'}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={isEstimating}
+                            onClick={() => void handleProcessPendingJob(job)}
+                            className="shrink-0 px-2.5 py-1 rounded-md bg-brand-primary/10 hover:bg-brand-primary/20 text-brand-primary font-semibold text-[11px] disabled:opacity-50"
+                          >
+                            Procesar pendiente
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
               )}
             </div>
           </div>
@@ -934,7 +1363,16 @@ export default function BoviScalePage() {
                         {formatDateTimeDisplay(photo.fechaCaptura)}
                       </p>
 
-                      <div className="pt-1 flex items-center gap-3">
+                      {photo.estadoArchivo === 'error_subida' && photo.ultimoErrorSubida && (
+                        <p
+                          role="alert"
+                          className="text-[11px] text-status-danger bg-status-danger/10 rounded px-2 py-1"
+                        >
+                          {photo.ultimoErrorSubida}
+                        </p>
+                      )}
+
+                      <div className="pt-1 flex items-center gap-3 flex-wrap">
                         <button
                           type="button"
                           onClick={() => setInspectPhoto(photo)}
@@ -942,6 +1380,30 @@ export default function BoviScalePage() {
                         >
                           <Eye size={12} /> Ver
                         </button>
+                        <button
+                          type="button"
+                          disabled={isEstimating}
+                          onClick={() => void handleEstimateWeight({ existingPhoto: photo })}
+                          aria-label={`Estimar peso desde ${photo.nombreArchivo}`}
+                          className="text-[11px] font-semibold text-brand-forest hover:underline inline-flex items-center gap-1 disabled:opacity-50"
+                        >
+                          <Scale size={12} /> Estimar peso
+                        </button>
+                        {photo.estadoArchivo === 'error_subida' && !photo.errorSubidaPermanente && (
+                          <button
+                            type="button"
+                            disabled={retryingPhotoId === photo.id}
+                            onClick={() => void handleRetryPhoto(photo)}
+                            aria-label={`Reintentar subida de ${photo.nombreArchivo}`}
+                            className="text-[11px] font-semibold text-brand-forest hover:underline inline-flex items-center gap-1 disabled:opacity-50"
+                          >
+                            <RefreshCw
+                              size={12}
+                              className={retryingPhotoId === photo.id ? 'animate-spin' : undefined}
+                            />{' '}
+                            Reintentar
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => setConfirmDeletePhoto(photo)}
@@ -959,6 +1421,71 @@ export default function BoviScalePage() {
           </div>
         </section>
       </div>
+
+      {/* Historial de pesajes del bovino seleccionado (actualización en vivo sin recargar) */}
+      {selectedCattleId && (
+        <section
+          aria-label="Historial de pesajes del bovino"
+          className="bg-surface-white border border-border-light rounded-xl shadow-sm overflow-hidden"
+        >
+          <div className="px-5 py-3.5 border-b border-border-light bg-surface-app/30 flex items-center justify-between gap-2 flex-wrap">
+            <h2 className="font-bold text-[15px] text-brand-forest flex items-center gap-2">
+              <Scale size={17} className="text-brand-primary" />
+              Historial de Pesajes —{' '}
+              {animalById.get(selectedCattleId)?.arete || selectedCattleId.slice(0, 8)} (
+              {animalWeighings.length})
+            </h2>
+            <div className="flex items-center gap-3 text-[12px]">
+              <Link
+                to={`/cattle/${selectedCattleId}`}
+                className="font-semibold text-brand-primary hover:underline"
+              >
+                Ver expediente
+              </Link>
+              <Link to="/weighing" className="font-semibold text-brand-slate hover:underline">
+                Módulo de pesajes
+              </Link>
+            </div>
+          </div>
+
+          <div className="p-4">
+            {loadingWeighings ? (
+              <p className="text-[12px] text-brand-slate/60 text-center py-4">
+                Cargando historial de pesajes...
+              </p>
+            ) : animalWeighings.length === 0 ? (
+              <p className="text-[12px] text-brand-slate/65 text-center py-4">
+                Aún no hay pesajes registrados para este bovino.
+              </p>
+            ) : (
+              <ul className="divide-y divide-border-light">
+                {animalWeighings.slice(0, 6).map((w) => (
+                  <li
+                    key={w.id}
+                    className="py-2.5 flex items-center justify-between gap-3 text-[13px]"
+                  >
+                    <div className="min-w-0">
+                      <p className="font-bold text-brand-forest">
+                        {w.peso} kg{' '}
+                        <span className="ml-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-surface-secondary text-brand-slate">
+                          {w.origenPesaje === 'boviscale_ia' ? 'BoviScale IA' : 'Manual'}
+                        </span>
+                      </p>
+                      <p className="text-[11px] text-brand-slate/65 truncate">
+                        {formatDateTimeDisplay(w.fecha)} · {w.fuenteBascula || 'Báscula'}
+                        {w.observaciones ? ` · ${w.observaciones}` : ''}
+                      </p>
+                    </div>
+                    <span className="text-[11px] font-semibold text-status-success shrink-0">
+                      {w.syncStatus === 'synced' ? 'Confirmado' : 'Pendiente sync'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* Modal de inspección ampliada */}
       {inspectPhoto && (

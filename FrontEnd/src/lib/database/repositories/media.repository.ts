@@ -49,6 +49,7 @@ export const MediaRepository = {
   async saveCapture(options: SaveMediaCaptureOptions): Promise<{
     media: LocalMedia;
     weighingJob?: LocalWeighingAnalysisJob;
+    duplicated?: boolean;
   }> {
     const MAX_SIZE_BYTES = PHOTO_CAPTURE_LIMITS.maxSizeBytes;
     const maxSizeMb = Math.round(MAX_SIZE_BYTES / (1024 * 1024));
@@ -78,7 +79,6 @@ export const MediaRepository = {
         [db.media, db.weighingAnalysisJobs, db.outbox],
         async () => {
           const now = new Date().toISOString();
-          const mediaId = crypto.randomUUID();
           const extension = (normalizedMime.split('/')[1] || 'jpg').replace('jpeg', 'jpg');
           const cattleUuid = options.cattleId || options.idEntidadRelacionada;
 
@@ -86,6 +86,36 @@ export const MediaRepository = {
             throw new Error('Debe seleccionar un bovino antes de capturar evidencia para pesaje.');
           }
 
+          // Deduplicación: evitar guardar y encolar dos veces exactamente la misma fotografía para el mismo animal
+          if (!options.crearTrabajoPesaje && cattleUuid && checksumSha256) {
+            const existingForCattle = await db.media
+              .where('cattleId')
+              .equals(cattleUuid)
+              .filter(
+                (m) =>
+                  !m.deletedAt &&
+                  m.checksumSha256 === checksumSha256 &&
+                  m.tipo === options.tipo
+              )
+              .first();
+
+            if (existingForCattle) {
+              // Si existía solo como referencia remota sin Blob local, conservar el Blob local sin duplicar registro
+              if (!existingForCattle.blobData) {
+                await db.media.update(existingForCattle.id, {
+                  blobData: options.fileOrBlob,
+                  updatedAt: now
+                });
+                return {
+                  media: { ...existingForCattle, blobData: options.fileOrBlob, updatedAt: now },
+                  duplicated: true
+                };
+              }
+              return { media: existingForCattle, duplicated: true };
+            }
+          }
+
+          const mediaId = crypto.randomUUID();
           let uploadOperationId: string | null = null;
           if (!options.crearTrabajoPesaje) {
             const uploadOperation = OutboxRepository.createOperationRecord({
@@ -123,14 +153,21 @@ export const MediaRepository = {
             nombreArchivo:
               options.nombreArchivo || `${options.tipo.toLowerCase()}-${mediaId}.${extension}`,
             mimeType: normalizedMime,
+            extension: `.${extension}`,
             tamanoBytes: options.fileOrBlob.size,
             checksumSha256,
             blobData: options.fileOrBlob,
             urlRemota: null,
+            rutaArchivoRemota: null,
+            proveedorAlmacenamiento: null,
+            estadoRemoto: null,
+            fechaCarga: null,
             idOperacionSubida: uploadOperationId,
             estadoArchivo: 'pendiente_subida',
             intentosSubida: 0,
             ultimoErrorSubida: null,
+            proximoIntentoSubida: null,
+            errorSubidaPermanente: false,
             fechaCaptura: now,
             createdAt: now,
             updatedAt: now,

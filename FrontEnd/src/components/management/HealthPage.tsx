@@ -212,14 +212,12 @@ export default function HealthPage() {
       }
     })();
 
-    let previousSyncAt = SyncScheduler.getSnapshot().lastCompletedSyncAt;
-    const unsubscribe = SyncScheduler.subscribe(() => {
-      const nextSyncAt = SyncScheduler.getSnapshot().lastCompletedSyncAt;
-      if (nextSyncAt && nextSyncAt !== previousSyncAt) {
-        previousSyncAt = nextSyncAt;
+    const unsubscribe = SyncScheduler.subscribeToDataUpdates(
+      ['healthRecords', 'treatments', 'cattle'],
+      () => {
         void loadData(includeDeleted, sortOrder);
       }
-    });
+    );
 
     return () => {
       active = false;

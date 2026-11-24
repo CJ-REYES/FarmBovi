@@ -115,6 +115,9 @@ export default function WeighingPage() {
       setWeighings(result.data);
       setAnimals(result.animals);
       setBackendNotice(result.backendNotice);
+      setSelectedWeighing((current) =>
+        current ? (result.data.find((w) => w.id === current.id) ?? null) : null
+      );
     } catch (err) {
       setError(
         err instanceof Error
@@ -154,10 +157,28 @@ export default function WeighingPage() {
     })();
 
     let previousSyncAt = SyncScheduler.getSnapshot().lastCompletedSyncAt;
+    let previousCycleFinishedAt = SyncScheduler.getSnapshot().lastCycleResult?.finishedAt ?? null;
     const unsubscribe = SyncScheduler.subscribe(() => {
-      const nextSyncAt = SyncScheduler.getSnapshot().lastCompletedSyncAt;
-      if (nextSyncAt && nextSyncAt !== previousSyncAt) {
+      const snap = SyncScheduler.getSnapshot();
+      const nextSyncAt = snap.lastCompletedSyncAt;
+      const nextCycle = snap.lastCycleResult;
+      const nextCycleFinishedAt = nextCycle?.finishedAt ?? null;
+
+      const fullSyncAdvanced = Boolean(nextSyncAt && nextSyncAt !== previousSyncAt);
+      const relevantPullApplied =
+        Boolean(nextCycleFinishedAt && nextCycleFinishedAt !== previousCycleFinishedAt) &&
+        Boolean(
+          nextCycle?.hasDataChanges ||
+            nextCycle?.pull.some(
+              (item) =>
+                (item.entidad === 'weighings' || item.entidad === 'cattle') &&
+                (item.appliedCount > 0 || item.deletedCount > 0 || item.conflictCount > 0)
+            )
+        );
+
+      if (fullSyncAdvanced || relevantPullApplied) {
         previousSyncAt = nextSyncAt;
+        previousCycleFinishedAt = nextCycleFinishedAt;
         void loadData(includeDeleted, sortOrder);
       }
     });
@@ -324,10 +345,21 @@ export default function WeighingPage() {
     },
     {
       key: 'fuente',
-      header: 'Báscula / Responsable',
+      header: 'Báscula / Origen',
       renderCell: (w) => (
-        <div className="text-[12px]">
-          <p className="font-medium text-brand-slate truncate max-w-[200px]">{w.fuenteBascula}</p>
+        <div className="text-[12px] space-y-0.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <p className="font-medium text-brand-slate truncate max-w-[180px]">{w.fuenteBascula}</p>
+            <span
+              className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
+                w.origenPesaje === 'boviscale_ia'
+                  ? 'bg-brand-primary/15 text-brand-primary'
+                  : 'bg-surface-secondary text-brand-slate/75'
+              }`}
+            >
+              {w.origenPesaje === 'boviscale_ia' ? 'BoviScale IA' : 'Manual'}
+            </span>
+          </div>
           <p className="text-[11px] text-brand-slate/60 truncate max-w-[200px]">{w.responsable}</p>
         </div>
       )
