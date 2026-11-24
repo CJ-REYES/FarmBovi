@@ -46,9 +46,10 @@ import {
 import { calculateAnimalAge } from '../../services/cattle.validation';
 import { GenealogyService } from '../../services/genealogy.service';
 import { ReproductionService } from '../../services/reproduction.service';
-import { formatBytesHuman } from '../../services/photo-capture.service';
+import { PhotoCaptureService, formatBytesHuman } from '../../services/photo-capture.service';
 import { ReportsPdfService } from '../../services/reports.pdf';
 import { ReportsService } from '../../services/reports.service';
+import { MediaSyncEngine } from '../../services/sync/media-sync.engine';
 import { SyncScheduler } from '../../services/sync/sync-scheduler';
 import BlobImage from '../shared/BlobImage';
 import EmptyState from '../ui/EmptyState';
@@ -139,10 +140,11 @@ export default function CattleDetailPage() {
         setErrorMsg(null);
 
         if (typeof navigator !== 'undefined' && navigator.onLine) {
-          // Hidratar genealogía, descendientes y eventos reproductivos desde la API real (con fallback transparente a caché local)
+          // Hidratar genealogía, eventos reproductivos y metadatos fotográficos del animal (sin descargar binarios innecesarios)
           await Promise.all([
             GenealogyService.getAnimalTree(record.id, { profundidad: 1 }).catch(() => undefined),
-            ReproductionService.getAll({ cattleId: record.id }).catch(() => undefined)
+            ReproductionService.getAll({ cattleId: record.id }).catch(() => undefined),
+            MediaSyncEngine.pullRemoteMedia({ cattleId: record.id, ranchId: record.idRancho }).catch(() => undefined)
           ]);
           if (!active) return;
         }
@@ -483,13 +485,44 @@ export default function CattleDetailPage() {
                       className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-semibold ${
                         profilePhoto.estadoArchivo === 'subido'
                           ? 'bg-status-success/15 text-status-success'
-                          : 'bg-status-warning/20 text-brand-dark'
+                          : profilePhoto.estadoArchivo === 'error_subida'
+                            ? 'bg-status-danger/15 text-status-danger'
+                            : profilePhoto.estadoArchivo === 'subiendo'
+                              ? 'bg-brand-primary/15 text-brand-primary'
+                              : 'bg-status-warning/20 text-brand-dark'
                       }`}
                     >
                       <Clock size={10} />
-                      {profilePhoto.estadoArchivo === 'subido' ? 'Sincronizada' : 'Pendiente subida'}
+                      {profilePhoto.estadoArchivo === 'subido'
+                        ? 'Sincronizada'
+                        : profilePhoto.estadoArchivo === 'error_subida'
+                          ? 'Error de subida'
+                          : profilePhoto.estadoArchivo === 'subiendo'
+                            ? 'Subiendo…'
+                            : 'Pendiente subida'}
                     </span>
                   </div>
+                  {profilePhoto.estadoArchivo === 'error_subida' && (
+                    <div className="rounded-md bg-status-danger/10 px-2.5 py-1.5 text-[11px] text-status-danger flex items-center justify-between gap-2">
+                      <span className="truncate">
+                        {profilePhoto.ultimoErrorSubida || 'Error temporal al subir la fotografía.'}
+                      </span>
+                      {!profilePhoto.errorSubidaPermanente && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const res = await PhotoCaptureService.retryPhotoUpload(profilePhoto.id);
+                            setFeedbackMsg(res.syncMessage);
+                            const refreshedPhotos = await MediaRepository.getByCattleId(animal.id);
+                            setHistory((prev) => ({ ...prev, photos: refreshedPhotos }));
+                          }}
+                          className="shrink-0 font-bold underline hover:opacity-80"
+                        >
+                          Reintentar
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="rounded-lg border border-dashed border-border-dark/60 bg-surface-app/40 p-4 text-center space-y-2">
