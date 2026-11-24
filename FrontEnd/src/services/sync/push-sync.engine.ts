@@ -61,10 +61,12 @@ const BACKEND_PUSH_SUPPORTED_ENTITIES = new Set<SyncEntityName>([
   'ranches',
   'lots',
   'cattle',
+  'genealogy',
   'weighings',
   'healthRecords',
   'treatments',
   'feedingRecords',
+  'reproductionRecords',
   'movements',
   'alerts'
 ]);

@@ -45,6 +45,26 @@ function readString(
   return fallback;
 }
 
+function readNullableString(
+  data: Record<string, unknown>,
+  keys: readonly string[],
+  fallback?: string
+): string | undefined {
+  let explicitlyProvided = false;
+  for (const key of keys) {
+    if (!(key in data) || data[key] === undefined) continue;
+    explicitlyProvided = true;
+    const val = data[key];
+    if (typeof val === 'string' && val.trim().length > 0) {
+      return val.trim();
+    }
+    if (typeof val === 'number' && Number.isFinite(val)) {
+      return String(val);
+    }
+  }
+  return explicitlyProvided ? undefined : fallback;
+}
+
 function readNumber(data: Record<string, unknown>, keys: readonly string[]): number | undefined {
   for (const key of keys) {
     const val = data[key];
@@ -138,7 +158,7 @@ export async function mapRemoteChangeToLocalEntity(
       ? change.remoteId
       : crypto.randomUUID());
   const localNumericId = existing?.localNumericId ?? computeStableNegativeId(stableId);
-  const ranchId = readString(data, ['ranchId', 'ranchoId'], existing?.ranchId);
+  const ranchId = readString(data, ['ranchId', 'ranchoId', 'idRancho'], existing?.ranchId);
   const createdAt =
     readString(data, ['createdAt', 'fechaCreacion'], existing?.createdAt) ??
     change.actualizadoEnServidor;
@@ -234,18 +254,38 @@ export async function mapRemoteChangeToLocalEntity(
         rawCattleId
       );
 
+      let resolvedRanchId = baseFields.ranchId;
+      if (!resolvedRanchId) {
+        const parentAnimal = await db.cattle.get(cattleId);
+        resolvedRanchId = parentAnimal?.ranchId;
+      }
+
+      const origenPesaje =
+        data.origenPesaje === 'boviscale_ia'
+          ? 'boviscale_ia'
+          : data.origenPesaje === 'manual'
+            ? 'manual'
+            : (existingWeighing?.origenPesaje ?? 'manual');
+
       const weighingRecord: LocalWeighing = {
         ...baseFields,
+        ranchId: resolvedRanchId,
         cattleId,
         peso,
         fecha,
         fuenteBascula: readString(data, ['fuenteBascula'], existingWeighing?.fuenteBascula),
         responsable: readString(data, ['responsable'], existingWeighing?.responsable),
-        observaciones: readString(data, ['observaciones', 'notes'], existingWeighing?.observaciones),
-        origenPesaje:
-          data.origenPesaje === 'boviscale_ia' ? 'boviscale_ia' : 'manual',
-        sourceAnalysisJobId: readString(data, ['sourceAnalysisJobId']) ?? null,
-        sourceMediaId: readString(data, ['sourceMediaId']) ?? null
+        observaciones: readNullableString(
+          data,
+          ['observaciones', 'notes'],
+          existingWeighing?.observaciones
+        ),
+        origenPesaje,
+        sourceAnalysisJobId:
+          readString(data, ['sourceAnalysisJobId'], existingWeighing?.sourceAnalysisJobId ?? undefined) ??
+          null,
+        sourceMediaId:
+          readString(data, ['sourceMediaId'], existingWeighing?.sourceMediaId ?? undefined) ?? null
       };
       return weighingRecord;
     }
@@ -422,6 +462,7 @@ export async function mapRemoteChangeToLocalEntity(
 
     case 'reproductionRecords': {
       const rawCattleId = readString(data, ['idAnimal', 'cattleId', 'animalId', 'bovinoId']);
+      const rawSementalId = readString(data, ['idSemental', 'sementalId', 'sireId']);
       const evento = readString(data, ['tipo', 'evento', 'event']);
       const fecha = readString(data, ['fecha', 'date'], change.actualizadoEnServidor);
 
@@ -431,14 +472,16 @@ export async function mapRemoteChangeToLocalEntity(
         );
       }
 
-      const cattleId = await resolveLocalForeignUuid(
-        db.cattle as unknown as Table<BaseLocalEntity, string>,
-        rawCattleId
-      );
+      const cattleTable = db.cattle as unknown as Table<BaseLocalEntity, string>;
+      const cattleId = await resolveLocalForeignUuid(cattleTable, rawCattleId);
+      const sementalId = rawSementalId
+        ? await resolveLocalForeignUuid(cattleTable, rawSementalId)
+        : null;
 
       const reproductionRecord: LocalReproductionRecord = {
         ...baseFields,
         cattleId,
+        sementalId,
         evento,
         fecha,
         resultado: readString(data, ['resultado', 'result']) ?? null,
@@ -505,6 +548,7 @@ export async function mapRemoteChangeToLocalEntity(
     }
 
     case 'genealogy': {
+      const existingGenealogy = existing as LocalGenealogy | undefined;
       const rawCattleId = readString(data, ['idAnimal', 'cattleId', 'animalId', 'bovinoId']);
       if (!rawCattleId) {
         throw new Error(
@@ -514,14 +558,50 @@ export async function mapRemoteChangeToLocalEntity(
 
       const cattleTable = db.cattle as unknown as Table<BaseLocalEntity, string>;
       const cattleId = await resolveLocalForeignUuid(cattleTable, rawCattleId);
-      const rawPadre = readString(data, ['idPadre', 'padreId', 'fatherId']);
-      const rawMadre = readString(data, ['idMadre', 'madreId', 'motherId']);
+      const rawPadre = readNullableString(
+        data,
+        ['idPadre', 'padreId', 'fatherId'],
+        existingGenealogy?.padreId
+      );
+      const rawMadre = readNullableString(
+        data,
+        ['idMadre', 'madreId', 'motherId'],
+        existingGenealogy?.madreId
+      );
+      const padreId = rawPadre ? await resolveLocalForeignUuid(cattleTable, rawPadre) : undefined;
+      const madreId = rawMadre ? await resolveLocalForeignUuid(cattleTable, rawMadre) : undefined;
+
+      if (!padreId && !madreId) {
+        throw new Error(
+          `Registro remoto de genealogía sin progenitores válidos (remoteId=${String(change.remoteId)}).`
+        );
+      }
+      if (padreId === cattleId || madreId === cattleId || (padreId && padreId === madreId)) {
+        throw new Error(
+          `Registro remoto de genealogía con parentesco inválido (remoteId=${String(change.remoteId)}).`
+        );
+      }
+
+      let resolvedRanchId = baseFields.ranchId;
+      if (!resolvedRanchId) {
+        const parentAnimal = await db.cattle.get(cattleId);
+        resolvedRanchId = parentAnimal?.ranchId;
+      }
+
+      const observaciones =
+        readNullableString(
+          data,
+          ['observaciones', 'notes'],
+          existingGenealogy?.observaciones ?? undefined
+        ) ?? null;
 
       const genealogyRecord: LocalGenealogy = {
         ...baseFields,
+        ranchId: resolvedRanchId,
         cattleId,
-        padreId: rawPadre ? await resolveLocalForeignUuid(cattleTable, rawPadre) : undefined,
-        madreId: rawMadre ? await resolveLocalForeignUuid(cattleTable, rawMadre) : undefined
+        padreId,
+        madreId,
+        observaciones
       };
       return genealogyRecord;
     }

@@ -44,9 +44,12 @@ import {
   WeighingRepository
 } from '../../lib/database/repositories';
 import { calculateAnimalAge } from '../../services/cattle.validation';
+import { GenealogyService } from '../../services/genealogy.service';
+import { ReproductionService } from '../../services/reproduction.service';
 import { formatBytesHuman } from '../../services/photo-capture.service';
 import { ReportsPdfService } from '../../services/reports.pdf';
 import { ReportsService } from '../../services/reports.service';
+import { SyncScheduler } from '../../services/sync/sync-scheduler';
 import BlobImage from '../shared/BlobImage';
 import EmptyState from '../ui/EmptyState';
 
@@ -122,7 +125,7 @@ export default function CattleDetailPage() {
 
     let active = true;
 
-    void (async () => {
+    const loadDetail = async () => {
       try {
         const record = await getById(id);
         if (!active) return;
@@ -134,6 +137,15 @@ export default function CattleDetailPage() {
 
         setAnimal(record);
         setErrorMsg(null);
+
+        if (typeof navigator !== 'undefined' && navigator.onLine) {
+          // Hidratar genealogía, descendientes y eventos reproductivos desde la API real (con fallback transparente a caché local)
+          await Promise.all([
+            GenealogyService.getAnimalTree(record.id, { profundidad: 1 }).catch(() => undefined),
+            ReproductionService.getAll({ cattleId: record.id }).catch(() => undefined)
+          ]);
+          if (!active) return;
+        }
 
         const [
           movements,
@@ -173,10 +185,37 @@ export default function CattleDetailPage() {
           setLoading(false);
         }
       }
-    })();
+    };
+
+    void loadDetail();
+
+    let previousSyncAt = SyncScheduler.getSnapshot().lastCompletedSyncAt;
+    let previousCycleFinishedAt = SyncScheduler.getSnapshot().lastCycleResult?.finishedAt ?? null;
+    const unsubscribe = SyncScheduler.subscribe(() => {
+      const snap = SyncScheduler.getSnapshot();
+      const nextSyncAt = snap.lastCompletedSyncAt;
+      const nextCycle = snap.lastCycleResult;
+      const nextCycleFinishedAt = nextCycle?.finishedAt ?? null;
+
+      const fullSyncAdvanced = Boolean(nextSyncAt && nextSyncAt !== previousSyncAt);
+      const relevantPullApplied =
+        Boolean(nextCycleFinishedAt && nextCycleFinishedAt !== previousCycleFinishedAt) &&
+        Boolean(
+          nextCycle?.pull.some(
+            (item) => item.appliedCount > 0 || item.deletedCount > 0 || item.conflictCount > 0
+          )
+        );
+
+      if (fullSyncAdvanced || relevantPullApplied) {
+        previousSyncAt = nextSyncAt;
+        previousCycleFinishedAt = nextCycleFinishedAt;
+        void loadDetail();
+      }
+    });
 
     return () => {
       active = false;
+      unsubscribe();
     };
   }, [id, getById]);
 

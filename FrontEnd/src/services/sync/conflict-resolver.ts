@@ -39,6 +39,18 @@ const NON_MERGEABLE_ENTITIES = new Set<SyncEntityName>([
 
 const INTERNAL_METADATA_KEYS = new Set<string>([
   'id',
+  'idGenealogia',
+  'idEventoReproductivo',
+  'idEventoSanitario',
+  'idTratamiento',
+  'idAlimentacion',
+  'idMovimiento',
+  'idRecordatorio',
+  'idPesaje',
+  'idAutor',
+  'creadoEn',
+  'eliminadoEn',
+  'versionRegistro',
   'localNumericId',
   'remoteId',
   'ranchId',
@@ -82,12 +94,18 @@ const FIELD_LABELS: Record<string, string> = {
   tipoAlimento: 'Tipo de alimento',
   cantidadKg: 'Cantidad (kg)',
   evento: 'Evento reproductivo',
+  resultado: 'Resultado',
+  idSemental: 'Semental',
+  sementalId: 'Semental',
   capacidad: 'Capacidad',
   ubicacion: 'Ubicación',
   origenLotId: 'Lote origen',
   destinoLotId: 'Lote destino',
   motivo: 'Motivo',
+  idAnimal: 'Animal',
+  idPadre: 'Padre',
   padreId: 'Padre',
+  idMadre: 'Madre',
   madreId: 'Madre',
   prioridad: 'Prioridad',
   mensaje: 'Mensaje',
@@ -100,14 +118,56 @@ function normalizeComparableValue(val: unknown): string {
   return String(val);
 }
 
-function sanitizeEditableFields(source: Record<string, unknown>): Record<string, unknown> {
+function sanitizeEditableFields(
+  source: Record<string, unknown>,
+  entidad?: SyncEntityName
+): Record<string, unknown> {
   const clean: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(source)) {
     if (!INTERNAL_METADATA_KEYS.has(key) && value !== undefined) {
       clean[key] = value;
     }
   }
+
+  // En reproducción, unificar alias cliente/servidor (`evento` <-> `tipo`, `sementalId` <-> `idSemental`)
+  // y excluir el animal inmutable (`idAnimal`/`cattleId`) de la comparación editable.
+  if (entidad === 'reproductionRecords') {
+    if (clean.tipo === undefined && clean.evento !== undefined) {
+      clean.tipo = clean.evento;
+    }
+    delete clean.evento;
+
+    if (clean.idSemental === undefined && clean.sementalId !== undefined) {
+      clean.idSemental = clean.sementalId;
+    }
+    delete clean.sementalId;
+
+    delete clean.idAnimal;
+    delete clean.cattleId;
+  }
+
   return clean;
+}
+
+function applyEntitySpecificLocalAliases(
+  entidad: SyncEntityName,
+  fields: Record<string, unknown>
+): Record<string, unknown> {
+  if (entidad !== 'reproductionRecords') {
+    return fields;
+  }
+  const adapted: Record<string, unknown> = { ...fields };
+  if (typeof adapted.tipo === 'string') {
+    adapted.evento = adapted.tipo;
+  } else if (typeof adapted.evento === 'string') {
+    adapted.tipo = adapted.evento;
+  }
+  if (adapted.idSemental !== undefined) {
+    adapted.sementalId = adapted.idSemental;
+  } else if (adapted.sementalId !== undefined) {
+    adapted.idSemental = adapted.sementalId;
+  }
+  return adapted;
 }
 
 export const ConflictResolver = {
@@ -159,8 +219,8 @@ export const ConflictResolver = {
    * Extrae los campos editables comparando datosLocales vs estadoServidor.
    */
   getMergeableFields(conflict: LocalSyncConflict): MergeableFieldDescriptor[] {
-    const localClean = sanitizeEditableFields(conflict.datosLocales ?? {});
-    const serverClean = sanitizeEditableFields(conflict.estadoServidor ?? {});
+    const localClean = sanitizeEditableFields(conflict.datosLocales ?? {}, conflict.entidad);
+    const serverClean = sanitizeEditableFields(conflict.estadoServidor ?? {}, conflict.entidad);
     const allKeys = Array.from(
       new Set([...Object.keys(serverClean), ...Object.keys(localClean)])
     );
@@ -371,7 +431,10 @@ export const ConflictResolver = {
       if (entityTable) {
         existingEntity = await entityTable.get(freshConflict.idEntidad);
         if (existingEntity) {
-          const editableLocal = sanitizeEditableFields(freshConflict.datosLocales);
+          const editableLocal = applyEntitySpecificLocalAliases(
+            freshConflict.entidad,
+            sanitizeEditableFields(freshConflict.datosLocales, freshConflict.entidad)
+          );
           const updatedEntity: BaseLocalEntity = {
             ...existingEntity,
             ...editableLocal,
@@ -394,7 +457,10 @@ export const ConflictResolver = {
       const nextPayload = existingEntity
         ? {
             ...existingEntity,
-            ...sanitizeEditableFields(freshConflict.datosLocales)
+            ...applyEntitySpecificLocalAliases(
+              freshConflict.entidad,
+              sanitizeEditableFields(freshConflict.datosLocales, freshConflict.entidad)
+            )
           }
         : freshConflict.datosLocales;
 
@@ -408,7 +474,8 @@ export const ConflictResolver = {
             ? 'UPDATE'
             : freshConflict.operacionLocal.tipoOperacion,
         versionBase: isDeletedOnServer ? null : (freshConflict.versionServidor ?? null),
-        payload: nextPayload
+        payload: nextPayload,
+        idRancho: existingEntity?.ranchId ?? freshConflict.operacionLocal.idRancho ?? null
       });
 
       await db.outbox.put(newOperation);
@@ -479,15 +546,21 @@ export const ConflictResolver = {
       }
 
       const now = new Date().toISOString();
-      const baseServerClean = sanitizeEditableFields(freshConflict.estadoServidor ?? {});
-      const baseLocalClean = sanitizeEditableFields(freshConflict.datosLocales ?? {});
-      const chosenClean = sanitizeEditableFields(selectedFields);
+      const baseServerClean = sanitizeEditableFields(
+        freshConflict.estadoServidor ?? {},
+        freshConflict.entidad
+      );
+      const baseLocalClean = sanitizeEditableFields(
+        freshConflict.datosLocales ?? {},
+        freshConflict.entidad
+      );
+      const chosenClean = sanitizeEditableFields(selectedFields, freshConflict.entidad);
 
-      const mergedEditableFields: Record<string, unknown> = {
+      const mergedEditableFields = applyEntitySpecificLocalAliases(freshConflict.entidad, {
         ...baseServerClean,
         ...baseLocalClean,
         ...chosenClean
-      };
+      });
 
       let existingEntity: BaseLocalEntity | undefined;
       if (entityTable) {
@@ -518,7 +591,8 @@ export const ConflictResolver = {
         idEntidad: freshConflict.idEntidad,
         tipoOperacion: 'UPDATE',
         versionBase: freshConflict.versionServidor ?? null,
-        payload: mergedPayload
+        payload: mergedPayload,
+        idRancho: existingEntity?.ranchId ?? freshConflict.operacionLocal.idRancho ?? null
       });
 
       await db.outbox.put(newMergeOperation);

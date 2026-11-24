@@ -115,6 +115,9 @@ export default function WeighingPage() {
       setWeighings(result.data);
       setAnimals(result.animals);
       setBackendNotice(result.backendNotice);
+      setSelectedWeighing((current) =>
+        current ? (result.data.find((w) => w.id === current.id) ?? null) : null
+      );
     } catch (err) {
       setError(
         err instanceof Error
@@ -154,10 +157,27 @@ export default function WeighingPage() {
     })();
 
     let previousSyncAt = SyncScheduler.getSnapshot().lastCompletedSyncAt;
+    let previousCycleFinishedAt = SyncScheduler.getSnapshot().lastCycleResult?.finishedAt ?? null;
     const unsubscribe = SyncScheduler.subscribe(() => {
-      const nextSyncAt = SyncScheduler.getSnapshot().lastCompletedSyncAt;
-      if (nextSyncAt && nextSyncAt !== previousSyncAt) {
+      const snap = SyncScheduler.getSnapshot();
+      const nextSyncAt = snap.lastCompletedSyncAt;
+      const nextCycle = snap.lastCycleResult;
+      const nextCycleFinishedAt = nextCycle?.finishedAt ?? null;
+
+      const fullSyncAdvanced = Boolean(nextSyncAt && nextSyncAt !== previousSyncAt);
+      const relevantPullApplied =
+        Boolean(nextCycleFinishedAt && nextCycleFinishedAt !== previousCycleFinishedAt) &&
+        Boolean(
+          nextCycle?.pull.some(
+            (item) =>
+              (item.entidad === 'weighings' || item.entidad === 'cattle') &&
+              (item.appliedCount > 0 || item.deletedCount > 0 || item.conflictCount > 0)
+          )
+        );
+
+      if (fullSyncAdvanced || relevantPullApplied) {
         previousSyncAt = nextSyncAt;
+        previousCycleFinishedAt = nextCycleFinishedAt;
         void loadData(includeDeleted, sortOrder);
       }
     });

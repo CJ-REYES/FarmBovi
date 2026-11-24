@@ -69,13 +69,17 @@ export default function ResponsiveDataView<T>({
     );
   }
 
+  const tableColumns = renderCardActions
+    ? columns.filter((col) => col.key !== 'acciones' && col.key !== 'actions')
+    : columns;
+
   // En tableta y escritorio renderiza tabla completa con foco y contraste accesible
   return (
     <div className="overflow-x-auto rounded-xl border border-border-light bg-surface-white shadow-sm">
       <table className="w-full text-left border-collapse text-[13px]">
         <thead>
           <tr className="bg-surface-secondary/70 border-b border-border-light text-brand-slate/80">
-            {columns.map((col) => (
+            {tableColumns.map((col) => (
               <th key={col.key} className="py-3 px-4 font-bold">
                 {col.header}
               </th>
@@ -89,7 +93,7 @@ export default function ResponsiveDataView<T>({
               key={getKey(item)}
               className="hover:bg-surface-secondary/40 transition-colors"
             >
-              {columns.map((col) => (
+              {tableColumns.map((col) => (
                 <td key={col.key} className="py-3 px-4 text-brand-slate">
                   {col.renderCell(item)}
                 </td>

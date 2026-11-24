@@ -131,6 +131,20 @@ public sealed partial class SincronizacionController(
                 nameof(Pesaje.Responsable),
                 nameof(Pesaje.Observaciones),
                 nameof(Pesaje.OrigenPesaje)
+            },
+            [nameof(GenealogiaAnimal)] = new(StringComparer.OrdinalIgnoreCase)
+            {
+                nameof(GenealogiaAnimal.IdPadre),
+                nameof(GenealogiaAnimal.IdMadre),
+                nameof(GenealogiaAnimal.Observaciones)
+            },
+            [nameof(EventoReproductivo)] = new(StringComparer.OrdinalIgnoreCase)
+            {
+                nameof(EventoReproductivo.IdSemental),
+                nameof(EventoReproductivo.Tipo),
+                nameof(EventoReproductivo.Fecha),
+                nameof(EventoReproductivo.Resultado),
+                nameof(EventoReproductivo.Observaciones)
             }
         };
 
@@ -156,6 +170,18 @@ public sealed partial class SincronizacionController(
         var operacionEstandar = NormalizeOperation(request.ResolverOperacionBruta());
         if (operacionEstandar is null)
             return BadRequest($"La operación '{request.ResolverOperacionBruta()}' no es válida. Usa Crear, Actualizar o Eliminar.");
+
+        if (entidadNormalizada == nameof(Rancho) && operacionEstandar is "Actualizar" or "Eliminar")
+        {
+            var access = new RanchAccessService(db);
+            if (!await access.IsAdminAsync(idUsuarioJwt, request.IdRancho, ct))
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new
+                {
+                    mensaje = "Solo un administrador del rancho puede modificar o eliminar el rancho."
+                });
+            }
+        }
 
         var payload = request.ResolverPayload();
         var hashSolicitud = ComputeRequestHash(
@@ -1058,7 +1084,9 @@ public sealed partial class SincronizacionController(
         name.Equals("idRecordatorio", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("idAlimentacion", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("idMovimiento", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("idPesaje", StringComparison.OrdinalIgnoreCase);
+        name.Equals("idPesaje", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("idGenealogia", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("idEventoReproductivo", StringComparison.OrdinalIgnoreCase);
 
     public static void ApplyPartialUpdate(object entity, JsonElement datos)
     {
@@ -1077,6 +1105,19 @@ public sealed partial class SincronizacionController(
 
             var value = JsonSerializer.Deserialize(jsonProp.Value.GetRawText(), propInfo.PropertyType, JsonOptions);
             propInfo.SetValue(entity, value);
+        }
+
+        if (entity is GenealogiaAnimal gen)
+        {
+            gen.Observaciones = string.IsNullOrWhiteSpace(gen.Observaciones)
+                ? null
+                : gen.Observaciones.Trim();
+        }
+        else if (entity is EventoReproductivo er)
+        {
+            er.Tipo = er.Tipo?.Trim() ?? string.Empty;
+            er.Resultado = string.IsNullOrWhiteSpace(er.Resultado) ? null : er.Resultado.Trim();
+            er.Observaciones = string.IsNullOrWhiteSpace(er.Observaciones) ? null : er.Observaciones.Trim();
         }
     }
 
@@ -1111,9 +1152,66 @@ public sealed partial class SincronizacionController(
                 return null;
 
             case Recordatorio rec:
+            {
                 if (rec.IdRancho != expectedRanchoId)
                     return ForbidRanchMismatch();
+
+                if (rec.IdAnimal.HasValue && rec.IdLote.HasValue)
+                    return BadRequest("El recordatorio no puede asociarse simultáneamente a un animal y a un lote.");
+
+                if (rec.IdAnimal.HasValue && rec.IdAnimal.Value != Guid.Empty)
+                {
+                    var animalRancho = await db.Animales.AsNoTracking()
+                        .Where(a => a.IdAnimal == rec.IdAnimal.Value)
+                        .Select(a => a.IdRancho)
+                        .FirstOrDefaultAsync(ct);
+                    if (animalRancho == Guid.Empty)
+                        return BadRequest("El animal asociado al recordatorio no existe.");
+                    if (animalRancho != expectedRanchoId)
+                        return ForbidRanchMismatch();
+                }
+
+                if (rec.IdLote.HasValue && rec.IdLote.Value != Guid.Empty)
+                {
+                    var loteRancho = await db.Lotes.AsNoTracking()
+                        .Where(l => l.IdLote == rec.IdLote.Value)
+                        .Select(l => l.IdRancho)
+                        .FirstOrDefaultAsync(ct);
+                    if (loteRancho == Guid.Empty)
+                        return BadRequest("El lote asociado al recordatorio no existe.");
+                    if (loteRancho != expectedRanchoId)
+                        return ForbidRanchMismatch();
+                }
+
+                if (rec.IdTratamiento.HasValue && rec.IdTratamiento.Value != Guid.Empty)
+                {
+                    var tratRancho = await (from t in db.Tratamientos.AsNoTracking()
+                                            join e in db.EventosSanitarios.AsNoTracking() on t.IdEventoSanitario equals e.IdEventoSanitario
+                                            join a in db.Animales.AsNoTracking() on e.IdAnimal equals a.IdAnimal
+                                            where t.IdTratamiento == rec.IdTratamiento.Value
+                                            select a.IdRancho).FirstOrDefaultAsync(ct);
+                    if (tratRancho == Guid.Empty)
+                        return BadRequest("El tratamiento asociado al recordatorio no existe.");
+                    if (tratRancho != expectedRanchoId)
+                        return ForbidRanchMismatch();
+                }
+
+                if (rec.IdResponsable.HasValue && rec.IdResponsable.Value != Guid.Empty)
+                {
+                    var respOk = await (from ur in db.UsuarioRanchos.AsNoTracking()
+                                        join u in db.Usuarios.AsNoTracking() on ur.IdUsuario equals u.IdUsuario
+                                        where ur.IdUsuario == rec.IdResponsable.Value
+                                           && ur.IdRancho == expectedRanchoId
+                                           && ur.FechaBaja == null
+                                           && ur.Estado.ToLower() == "activo"
+                                           && u.Estado.ToLower() == "activo"
+                                        select ur.IdUsuarioRancho).AnyAsync(ct);
+                    if (!respOk)
+                        return ForbidRanchMismatch();
+                }
+
                 return null;
+            }
 
             case EventoSanitario ev:
             {
@@ -1138,6 +1236,31 @@ public sealed partial class SincronizacionController(
                     return BadRequest("El animal asociado al movimiento no existe.");
                 if (animalRancho != expectedRanchoId)
                     return ForbidRanchMismatch();
+
+                if (mov.IdLoteOrigen.HasValue && mov.IdLoteOrigen.Value != Guid.Empty)
+                {
+                    var origenRancho = await db.Lotes.AsNoTracking()
+                        .Where(l => l.IdLote == mov.IdLoteOrigen.Value)
+                        .Select(l => l.IdRancho)
+                        .FirstOrDefaultAsync(ct);
+                    if (origenRancho == Guid.Empty)
+                        return BadRequest("El lote de origen del movimiento no existe.");
+                    if (origenRancho != expectedRanchoId)
+                        return ForbidRanchMismatch();
+                }
+
+                if (mov.IdLoteDestino.HasValue && mov.IdLoteDestino.Value != Guid.Empty)
+                {
+                    var destinoRancho = await db.Lotes.AsNoTracking()
+                        .Where(l => l.IdLote == mov.IdLoteDestino.Value)
+                        .Select(l => l.IdRancho)
+                        .FirstOrDefaultAsync(ct);
+                    if (destinoRancho == Guid.Empty)
+                        return BadRequest("El lote de destino del movimiento no existe.");
+                    if (destinoRancho != expectedRanchoId)
+                        return ForbidRanchMismatch();
+                }
+
                 return null;
             }
 
@@ -1158,23 +1281,72 @@ public sealed partial class SincronizacionController(
                 return null;
             }
 
-            case Alimentacion al:
+            case GenealogiaAnimal gen:
+                return await ValidateGenealogyForSyncAsync(gen, expectedRanchoId, isCreate, ct);
+
+            case EventoReproductivo er:
             {
-                if (al.IdAnimal.HasValue && al.IdAnimal.Value != Guid.Empty)
+                var animal = await db.Animales.AsNoTracking()
+                    .FirstOrDefaultAsync(a => a.IdAnimal == er.IdAnimal, ct);
+                if (animal is null)
+                    return BadRequest("El animal asociado al evento reproductivo no existe.");
+                if (animal.IdRancho != expectedRanchoId)
+                    return ForbidRanchMismatch();
+
+                if (er.IdSemental is { } sementalId && sementalId != Guid.Empty)
                 {
-                    var animalRancho = await db.Animales.AsNoTracking()
-                        .Where(a => a.IdAnimal == al.IdAnimal.Value)
+                    var sementalRancho = await db.Animales.AsNoTracking()
+                        .Where(a => a.IdAnimal == sementalId)
                         .Select(a => a.IdRancho)
                         .FirstOrDefaultAsync(ct);
+                    if (sementalRancho == Guid.Empty)
+                        return BadRequest("El semental asociado al evento reproductivo no existe.");
+                    if (sementalRancho != expectedRanchoId)
+                        return ForbidRanchMismatch();
+                }
+
+                if (isCreate || er.EliminadoEn is null)
+                {
+                    er.Fecha = ApiProblemResults.EnsureUtc(er.Fecha);
+                    var validator = new FarmDomainValidationService(db);
+                    var domainError = await validator.ValidateEventoReproductivoAsync(
+                        er,
+                        isCreate ? null : er.IdEventoReproductivo,
+                        ct);
+                    if (domainError is not null)
+                        return BadRequest(domainError);
+                }
+
+                return null;
+            }
+
+            case Alimentacion al:
+            {
+                var hasAnimal = al.IdAnimal.HasValue && al.IdAnimal.Value != Guid.Empty;
+                var hasLote = al.IdLote.HasValue && al.IdLote.Value != Guid.Empty;
+                if (hasAnimal == hasLote)
+                    return BadRequest("Debe informarse exactamente uno entre idAnimal e idLote en la alimentación.");
+
+                if (hasAnimal)
+                {
+                    var animalRancho = await db.Animales.AsNoTracking()
+                        .Where(a => a.IdAnimal == al.IdAnimal!.Value)
+                        .Select(a => a.IdRancho)
+                        .FirstOrDefaultAsync(ct);
+                    if (animalRancho == Guid.Empty)
+                        return BadRequest("El animal asociado a la alimentación no existe.");
                     if (animalRancho != expectedRanchoId)
                         return ForbidRanchMismatch();
                 }
-                if (al.IdLote.HasValue && al.IdLote.Value != Guid.Empty)
+
+                if (hasLote)
                 {
                     var loteRancho = await db.Lotes.AsNoTracking()
-                        .Where(l => l.IdLote == al.IdLote.Value)
+                        .Where(l => l.IdLote == al.IdLote!.Value)
                         .Select(l => l.IdRancho)
                         .FirstOrDefaultAsync(ct);
+                    if (loteRancho == Guid.Empty)
+                        return BadRequest("El lote asociado a la alimentación no existe.");
                     if (loteRancho != expectedRanchoId)
                         return ForbidRanchMismatch();
                 }
@@ -1282,9 +1454,173 @@ public sealed partial class SincronizacionController(
                 }
                 break;
             }
+            case GenealogiaAnimal gen:
+            {
+                var dupGen = await db.GenealogiasAnimales.AsNoTracking()
+                    .FirstOrDefaultAsync(x => x.IdAnimal == gen.IdAnimal, ct);
+                if (dupGen is not null)
+                {
+                    var detalleEstado = dupGen.EliminadoEn.HasValue
+                        ? "en un registro desactivado previamente"
+                        : "en un vínculo genealógico activo";
+                    return Conflict(new
+                    {
+                        tipoConflicto = "DUPLICATE_OR_INVALID_REFERENCE",
+                        campo = "idAnimal",
+                        mensaje = $"El animal '{gen.IdAnimal}' ya cuenta con genealogía registrada ({detalleEstado}).",
+                        idOperacion = request.IdOperacion,
+                        entidad = entidadNormalizada,
+                        idRegistro,
+                        idExistente = dupGen.IdGenealogia,
+                        versionServidor = dupGen.VersionRegistro
+                    });
+                }
+                break;
+            }
         }
 
         return null;
+    }
+
+    private static readonly HashSet<string> SyncMaleSexes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "macho", "masculino", "m", "male"
+    };
+
+    private static readonly HashSet<string> SyncFemaleSexes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "hembra", "femenino", "h", "f", "female"
+    };
+
+    private static readonly HashSet<string> SyncUnknownSexes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "desconocido", "desconocida", "unknown", "nd", "n/a", "indefinido", "indeterminado", "sin especificar"
+    };
+
+    private static bool IsSyncValidFatherSex(string? sexo) =>
+        string.IsNullOrWhiteSpace(sexo) || SyncUnknownSexes.Contains(sexo.Trim()) || SyncMaleSexes.Contains(sexo.Trim());
+
+    private static bool IsSyncValidMotherSex(string? sexo) =>
+        string.IsNullOrWhiteSpace(sexo) || SyncUnknownSexes.Contains(sexo.Trim()) || SyncFemaleSexes.Contains(sexo.Trim());
+
+    private async Task<IActionResult?> ValidateGenealogyForSyncAsync(
+        GenealogiaAnimal gen,
+        Guid expectedRanchoId,
+        bool isCreate,
+        CancellationToken ct)
+    {
+        if (gen.IdAnimal == Guid.Empty)
+            return BadRequest("El identificador del animal (idAnimal) es obligatorio.");
+
+        var animal = await db.Animales.AsNoTracking()
+            .FirstOrDefaultAsync(a => a.IdAnimal == gen.IdAnimal, ct);
+        if (animal is null)
+            return BadRequest("El animal descendiente especificado no existe.");
+        if (animal.IdRancho != expectedRanchoId)
+            return ForbidRanchMismatch();
+        if (isCreate && animal.EliminadoEn.HasValue)
+            return BadRequest("El animal descendiente especificado está eliminado.");
+
+        if (!gen.IdPadre.HasValue && !gen.IdMadre.HasValue)
+            return BadRequest("Debe especificar al menos un padre (idPadre) o una madre (idMadre).");
+
+        if (gen.IdPadre == Guid.Empty || gen.IdMadre == Guid.Empty)
+            return BadRequest("Los identificadores de padre y madre no pueden ser GUID vacíos.");
+
+        if (gen.IdPadre == gen.IdAnimal || gen.IdMadre == gen.IdAnimal)
+            return BadRequest("Un animal no puede ser su propio padre o madre.");
+
+        if (gen.IdPadre.HasValue && gen.IdPadre == gen.IdMadre)
+            return BadRequest("El padre y la madre no pueden ser el mismo animal.");
+
+        gen.Observaciones = string.IsNullOrWhiteSpace(gen.Observaciones) ? null : gen.Observaciones.Trim();
+        if (gen.Observaciones is not null && gen.Observaciones.Length > GenealogiaService.MaxObservacionesLength)
+            return BadRequest($"Las observaciones no pueden exceder {GenealogiaService.MaxObservacionesLength} caracteres.");
+
+        if (gen.IdPadre is { } padreId)
+        {
+            var padre = await db.Animales.AsNoTracking()
+                .FirstOrDefaultAsync(a => a.IdAnimal == padreId, ct);
+            if (padre is null || (isCreate && padre.EliminadoEn.HasValue))
+                return BadRequest("El padre especificado no existe o está eliminado.");
+            if (padre.IdRancho != expectedRanchoId)
+                return ForbidRanchMismatch();
+            if (!IsSyncValidFatherSex(padre.Sexo))
+                return BadRequest("El padre especificado debe ser de sexo macho.");
+            if (animal.FechaNacimiento.HasValue && padre.FechaNacimiento.HasValue &&
+                padre.FechaNacimiento.Value.Date >= animal.FechaNacimiento.Value.Date)
+                return BadRequest("La fecha de nacimiento del padre debe ser anterior a la fecha de nacimiento del animal descendiente.");
+        }
+
+        if (gen.IdMadre is { } madreId)
+        {
+            var madre = await db.Animales.AsNoTracking()
+                .FirstOrDefaultAsync(a => a.IdAnimal == madreId, ct);
+            if (madre is null || (isCreate && madre.EliminadoEn.HasValue))
+                return BadRequest("La madre especificada no existe o está eliminada.");
+            if (madre.IdRancho != expectedRanchoId)
+                return ForbidRanchMismatch();
+            if (!IsSyncValidMotherSex(madre.Sexo))
+                return BadRequest("La madre especificada debe ser de sexo hembra.");
+            if (animal.FechaNacimiento.HasValue && madre.FechaNacimiento.HasValue &&
+                madre.FechaNacimiento.Value.Date >= animal.FechaNacimiento.Value.Date)
+                return BadRequest("La fecha de nacimiento de la madre debe ser anterior a la fecha de nacimiento del animal descendiente.");
+        }
+
+        if (await CreatesGenealogyCycleAsync(gen.IdAnimal, gen.IdPadre, gen.IdMadre, expectedRanchoId, gen.IdGenealogia, ct))
+            return BadRequest("La relación solicitada genera un ciclo genealógico: el animal descendiente ya es ancestro de uno de sus progenitores.");
+
+        return null;
+    }
+
+    private async Task<bool> CreatesGenealogyCycleAsync(
+        Guid idAnimal,
+        Guid? idPadre,
+        Guid? idMadre,
+        Guid idRancho,
+        Guid excludeGenealogyId,
+        CancellationToken ct)
+    {
+        var visited = new HashSet<Guid>();
+        var frontier = new List<Guid>();
+
+        if (idPadre is { } p && visited.Add(p)) frontier.Add(p);
+        if (idMadre is { } m && visited.Add(m)) frontier.Add(m);
+
+        while (frontier.Count > 0)
+        {
+            if (frontier.Contains(idAnimal)) return true;
+
+            var levelRels = await (
+                from g in db.GenealogiasAnimales.AsNoTracking()
+                join a in db.Animales.AsNoTracking() on g.IdAnimal equals a.IdAnimal
+                where g.EliminadoEn == null
+                      && g.IdGenealogia != excludeGenealogyId
+                      && a.EliminadoEn == null
+                      && a.IdRancho == idRancho
+                      && frontier.Contains(g.IdAnimal)
+                select new { g.IdPadre, g.IdMadre }
+            ).ToListAsync(ct);
+
+            var nextFrontier = new List<Guid>();
+            foreach (var rel in levelRels)
+            {
+                if (rel.IdPadre is { } nextP)
+                {
+                    if (nextP == idAnimal) return true;
+                    if (visited.Add(nextP)) nextFrontier.Add(nextP);
+                }
+                if (rel.IdMadre is { } nextM)
+                {
+                    if (nextM == idAnimal) return true;
+                    if (visited.Add(nextM)) nextFrontier.Add(nextM);
+                }
+            }
+
+            frontier = nextFrontier;
+        }
+
+        return false;
     }
 
     private IActionResult ForbidRanchMismatch() =>
@@ -1305,6 +1641,8 @@ public sealed partial class SincronizacionController(
             nameof(Alimentacion) => await db.Alimentaciones.FindAsync([idRegistro], ct),
             nameof(MovimientoAnimal) => await db.MovimientosAnimales.FindAsync([idRegistro], ct),
             nameof(Pesaje) => await db.Pesajes.FindAsync([idRegistro], ct),
+            nameof(GenealogiaAnimal) => await db.GenealogiasAnimales.FindAsync([idRegistro], ct),
+            nameof(EventoReproductivo) => await db.EventosReproductivos.FindAsync([idRegistro], ct),
             _ => null
         };
 
@@ -1320,6 +1658,8 @@ public sealed partial class SincronizacionController(
             nameof(Alimentacion) => await db.Alimentaciones.AsNoTracking().FirstOrDefaultAsync(x => x.IdAlimentacion == idRegistro, ct),
             nameof(MovimientoAnimal) => await db.MovimientosAnimales.AsNoTracking().FirstOrDefaultAsync(x => x.IdMovimiento == idRegistro, ct),
             nameof(Pesaje) => await db.Pesajes.AsNoTracking().FirstOrDefaultAsync(x => x.IdPesaje == idRegistro, ct),
+            nameof(GenealogiaAnimal) => await db.GenealogiasAnimales.AsNoTracking().FirstOrDefaultAsync(x => x.IdGenealogia == idRegistro, ct),
+            nameof(EventoReproductivo) => await db.EventosReproductivos.AsNoTracking().FirstOrDefaultAsync(x => x.IdEventoReproductivo == idRegistro, ct),
             _ => null
         };
 
@@ -1337,6 +1677,8 @@ public sealed partial class SincronizacionController(
             nameof(Alimentacion) => JsonSerializer.Deserialize<Alimentacion>(raw, JsonOptions)!,
             nameof(MovimientoAnimal) => JsonSerializer.Deserialize<MovimientoAnimal>(raw, JsonOptions)!,
             nameof(Pesaje) => JsonSerializer.Deserialize<Pesaje>(raw, JsonOptions)!,
+            nameof(GenealogiaAnimal) => JsonSerializer.Deserialize<GenealogiaAnimal>(raw, JsonOptions)!,
+            nameof(EventoReproductivo) => JsonSerializer.Deserialize<EventoReproductivo>(raw, JsonOptions)!,
             _ => throw new InvalidOperationException($"Entidad no soportada: {entidadNormalizada}")
         };
     }
@@ -1441,6 +1783,27 @@ public sealed partial class SincronizacionController(
                 pesaje.VersionRegistro = 1;
                 pesaje.EliminadoEn = null;
                 break;
+
+            case GenealogiaAnimal gen:
+                gen.IdGenealogia = targetId;
+                gen.IdAutor = idUsuarioJwt;
+                gen.Observaciones = string.IsNullOrWhiteSpace(gen.Observaciones) ? null : gen.Observaciones.Trim();
+                gen.CreadoEn = ahora;
+                gen.VersionRegistro = 1;
+                gen.EliminadoEn = null;
+                break;
+
+            case EventoReproductivo er:
+                er.IdEventoReproductivo = targetId;
+                er.IdAutor = idUsuarioJwt;
+                er.Tipo = er.Tipo?.Trim() ?? string.Empty;
+                er.Fecha = er.Fecha == default ? ahora : ApiProblemResults.EnsureUtc(er.Fecha);
+                er.Resultado = string.IsNullOrWhiteSpace(er.Resultado) ? null : er.Resultado.Trim();
+                er.Observaciones = string.IsNullOrWhiteSpace(er.Observaciones) ? null : er.Observaciones.Trim();
+                er.CreadoEn = ahora;
+                er.VersionRegistro = 1;
+                er.EliminadoEn = null;
+                break;
         }
     }
 
@@ -1456,6 +1819,8 @@ public sealed partial class SincronizacionController(
             Alimentacion al => al.IdAlimentacion,
             MovimientoAnimal mov => mov.IdMovimiento,
             Pesaje pesaje => pesaje.IdPesaje,
+            GenealogiaAnimal gen => gen.IdGenealogia,
+            EventoReproductivo er => er.IdEventoReproductivo,
             _ => throw new InvalidOperationException($"Entidad desconocida: {entidadNormalizada}")
         };
 
@@ -1471,6 +1836,8 @@ public sealed partial class SincronizacionController(
             Alimentacion al => al.VersionRegistro,
             MovimientoAnimal mov => mov.VersionRegistro,
             Pesaje pesaje => pesaje.VersionRegistro,
+            GenealogiaAnimal gen => gen.VersionRegistro,
+            EventoReproductivo er => er.VersionRegistro,
             _ => 1
         };
 
@@ -1487,6 +1854,8 @@ public sealed partial class SincronizacionController(
             case Alimentacion al: al.VersionRegistro = version; break;
             case MovimientoAnimal mov: mov.VersionRegistro = version; break;
             case Pesaje pesaje: pesaje.VersionRegistro = version; break;
+            case GenealogiaAnimal gen: gen.VersionRegistro = version; break;
+            case EventoReproductivo er: er.VersionRegistro = version; break;
         }
     }
 
@@ -1502,6 +1871,8 @@ public sealed partial class SincronizacionController(
             Alimentacion al => al.EliminadoEn,
             MovimientoAnimal mov => mov.EliminadoEn,
             Pesaje pesaje => pesaje.EliminadoEn,
+            GenealogiaAnimal gen => gen.EliminadoEn,
+            EventoReproductivo er => er.EliminadoEn,
             _ => null
         };
 
@@ -1518,6 +1889,8 @@ public sealed partial class SincronizacionController(
             case Alimentacion al: al.EliminadoEn = deletedAt; break;
             case MovimientoAnimal mov: mov.EliminadoEn = deletedAt; break;
             case Pesaje pesaje: pesaje.EliminadoEn = deletedAt; break;
+            case GenealogiaAnimal gen: gen.EliminadoEn = deletedAt; break;
+            case EventoReproductivo er: er.EliminadoEn = deletedAt; break;
         }
     }
 
@@ -1535,6 +1908,8 @@ public sealed partial class SincronizacionController(
             "alimentacion" or "alimentaciones" or "feedingrecords" => nameof(Alimentacion),
             "movimientoanimal" or "movimientos-animales" or "movements" => nameof(MovimientoAnimal),
             "pesaje" or "pesajes" or "weighing" or "weighings" => nameof(Pesaje),
+            "genealogia" or "genealogias" or "genealogiaanimal" or "genealogy" => nameof(GenealogiaAnimal),
+            "eventoreproductivo" or "eventos-reproductivos" or "reproductionrecords" => nameof(EventoReproductivo),
             _ => null
         };
     }

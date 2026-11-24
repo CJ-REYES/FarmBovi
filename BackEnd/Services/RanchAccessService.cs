@@ -48,22 +48,25 @@ public sealed class RanchAccessService(FarmDbContext db)
     public Task<bool> IsAdminOfAnyAsync(Guid userId, CancellationToken ct) =>
         AdminRanchIds(userId).AnyAsync(ct);
 
-    /// <summary>Ranchos activos (no dados de baja) a los que pertenece un usuario objetivo.</summary>
+    /// <summary>Ranchos activos (no dados de baja ni eliminados) a los que pertenece un usuario objetivo.</summary>
     public IQueryable<Guid> MembershipRanchIds(Guid userId) =>
-        db.UsuarioRanchos.AsNoTracking()
-            .Where(ur => ur.IdUsuario == userId && ur.FechaBaja == null)
-            .Select(ur => ur.IdRancho);
+        from ur in db.UsuarioRanchos.AsNoTracking()
+        join r in db.Ranchos.AsNoTracking() on ur.IdRancho equals r.IdRancho
+        where ur.IdUsuario == userId && ur.FechaBaja == null &&
+              ur.Estado.ToLower() == "activo" && r.EliminadoEn == null
+        select ur.IdRancho;
 
     /// <summary>
-    /// El usuario <paramref name="adminId"/> puede administrar a <paramref name="targetId"/> cuando es
-    /// administrador de todos los ranchos donde el objetivo tiene membresía. Un usuario sin ranchos
-    /// solo puede ser administrado por quien sea administrador de algún rancho.
+    /// El usuario <paramref name="adminId"/> puede administrar a <paramref name="targetId"/> únicamente
+    /// cuando el objetivo pertenece al menos a un rancho activo y <paramref name="adminId"/> es
+    /// administrador de todos los ranchos donde el objetivo tiene membresía.
     /// </summary>
     public async Task<bool> CanManageUserAsync(Guid adminId, Guid targetId, CancellationToken ct)
     {
         var adminRanchIds = await AdminRanchIds(adminId).Distinct().ToListAsync(ct);
         if (adminRanchIds.Count == 0) return false;
         var targetRanchIds = await MembershipRanchIds(targetId).Distinct().ToListAsync(ct);
+        if (targetRanchIds.Count == 0) return false;
         return targetRanchIds.All(adminRanchIds.Contains);
     }
 
@@ -121,4 +124,16 @@ public sealed class RanchAccessService(FarmDbContext db)
 
     public Task<Guid?> RanchOfUsuarioRanchoAsync(Guid id, CancellationToken ct) =>
         db.UsuarioRanchos.AsNoTracking().Where(ur => ur.IdUsuarioRancho == id).Select(ur => (Guid?)ur.IdRancho).FirstOrDefaultAsync(ct);
+
+    public Task<Guid?> RanchOfPesajeAsync(Guid id, CancellationToken ct) =>
+        (from p in db.Pesajes.AsNoTracking()
+         join a in db.Animales.AsNoTracking() on p.IdAnimal equals a.IdAnimal
+         where p.IdPesaje == id
+         select (Guid?)a.IdRancho).FirstOrDefaultAsync(ct);
+
+    public Task<Guid?> RanchOfEventoReproductivoAsync(Guid id, CancellationToken ct) =>
+        (from e in db.EventosReproductivos.AsNoTracking()
+         join a in db.Animales.AsNoTracking() on e.IdAnimal equals a.IdAnimal
+         where e.IdEventoReproductivo == id
+         select (Guid?)a.IdRancho).FirstOrDefaultAsync(ct);
 }

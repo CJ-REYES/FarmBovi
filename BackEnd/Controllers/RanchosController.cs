@@ -1,4 +1,5 @@
 using FarmBovi.Api.Data;
+using FarmBovi.Api.DTOs;
 using FarmBovi.Api.Models;
 using FarmBovi.Api.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -7,59 +8,75 @@ using Microsoft.EntityFrameworkCore;
 namespace FarmBovi.Api.Controllers;
 
 [ApiController]
-[RanchScope(RanchResource.Rancho, AdminForUpdateDelete = true)]
 [Route("api/ranchos")]
+[RanchScope(RanchResource.Rancho, AdminForUpdateDelete = true)]
 public sealed class RanchosController(FarmDbContext db, FarmDomainValidationService validator) : ControllerBase
 {
     [HttpGet]
-    public Task<List<Rancho>> GetAll([FromServices] RanchAccessService access, [FromQuery] bool incluirEliminados = false, CancellationToken ct = default)
+    [ProducesResponseType(typeof(List<RanchoResponseDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    public async Task<ActionResult<List<RanchoResponseDto>>> GetAll(
+        [FromServices] RanchAccessService access,
+        [FromQuery] bool incluirEliminados = false,
+        CancellationToken ct = default)
     {
         var query = db.Ranchos.AsNoTracking();
         if (!incluirEliminados)
             query = query.Where(r => r.EliminadoEn == null);
 
-        // Solo registros de ranchos donde el usuario tiene membresía activa.
         var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
-        query = query.Where(x => ranchIds.Contains(x.IdRancho));
-
-        return query.ToListAsync(ct);
+        var items = await query.Where(x => ranchIds.Contains(x.IdRancho)).ToListAsync(ct);
+        return Ok(items.Select(ToResponseDto).ToList());
     }
 
     [HttpGet("{id:guid}")]
-    public async Task<ActionResult<Rancho>> Get(Guid id, CancellationToken ct) =>
+    [ProducesResponseType(typeof(RanchoResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<RanchoResponseDto>> Get(Guid id, CancellationToken ct) =>
         await db.Ranchos.AsNoTracking().FirstOrDefaultAsync(r => r.IdRancho == id, ct) is { } item
-            ? Ok(item)
-            : NotFound();
+            ? Ok(ToResponseDto(item))
+            : this.NotFoundProblem("El rancho solicitado no existe.");
 
     [HttpPost]
-    public async Task<ActionResult<Rancho>> Create(Rancho item, CancellationToken ct)
+    [ProducesResponseType(typeof(RanchoResponseDto), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(RanchoResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<RanchoResponseDto>> Create(
+        [FromServices] RanchAccessService access,
+        RanchoCreateDto dto,
+        CancellationToken ct)
     {
-        if (item.IdRancho == Guid.Empty)
-            item.IdRancho = Guid.NewGuid();
+        var id = dto.IdRancho ?? Guid.NewGuid();
 
-        var existing = await db.Ranchos.AsNoTracking().FirstOrDefaultAsync(r => r.IdRancho == item.IdRancho, ct);
+        var existing = await db.Ranchos.AsNoTracking().FirstOrDefaultAsync(r => r.IdRancho == id, ct);
         if (existing is not null)
-            return Ok(existing);
-
-        if (string.IsNullOrWhiteSpace(item.Nombre) ||
-            string.IsNullOrWhiteSpace(item.UbicacionGeneral) ||
-            string.IsNullOrWhiteSpace(item.Estado))
         {
-            return BadRequest("Nombre, ubicación general y estado del rancho son obligatorios.");
+            return existing.EliminadoEn is null && MatchesRancho(existing, dto)
+                ? Ok(ToResponseDto(existing))
+                : this.ConflictProblem("Ya existe un rancho con el identificador proporcionado y contenido diferente o eliminado.");
         }
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, item.IdAutor, ct);
-        if (authorError is not null) return BadRequest(authorError);
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
+        if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
 
-        item.IdAutor = authorId;
-        item.Nombre = item.Nombre.Trim();
-        item.UbicacionGeneral = item.UbicacionGeneral.Trim();
-        item.Estado = item.Estado.Trim();
-        if (item.CreadoEn == default) item.CreadoEn = DateTime.UtcNow;
-        if (item.VersionRegistro <= 0) item.VersionRegistro = 1;
+        var item = new Rancho
+        {
+            IdRancho = id,
+            Nombre = dto.Nombre.Trim(),
+            UbicacionGeneral = dto.UbicacionGeneral.Trim(),
+            Estado = dto.Estado.Trim(),
+            IdAutor = authorId,
+            CreadoEn = DateTime.UtcNow,
+            VersionRegistro = 1
+        };
 
         db.Ranchos.Add(item);
-        // Quien crea el rancho queda como su administrador para poder operarlo con las reglas por rancho.
         if (RanchAccessService.GetUserId(User) is { } creatorId)
         {
             db.UsuarioRanchos.Add(new UsuarioRancho
@@ -72,32 +89,58 @@ public sealed class RanchosController(FarmDbContext db, FarmDomainValidationServ
                 FechaAlta = DateTime.UtcNow
             });
         }
+
         try
         {
             await db.SaveChangesAsync(ct);
         }
         catch (DbUpdateException)
         {
-            return Conflict("No se pudo crear el rancho.");
+            var collision = await db.Ranchos.AsNoTracking().FirstOrDefaultAsync(r => r.IdRancho == id, ct);
+            if (collision is not null)
+            {
+                var userId = RanchAccessService.GetUserId(User);
+                if (userId is { } uid && await access.CanAccessAsync(uid, collision.IdRancho, ct))
+                {
+                    return collision.EliminadoEn is null && MatchesRancho(collision, dto)
+                        ? Ok(ToResponseDto(collision))
+                        : this.ConflictProblem("Ya existe un rancho con el identificador proporcionado y contenido diferente o eliminado.");
+                }
+
+                return this.ConflictProblem("Conflicto con un recurso existente.");
+            }
+
+            return this.ConflictProblem("No se pudo crear el rancho.");
         }
 
-        return CreatedAtAction(nameof(Get), new { id = item.IdRancho }, item);
+        return CreatedAtAction(nameof(Get), new { id = item.IdRancho }, ToResponseDto(item));
     }
 
     [HttpPut("{id:guid}")]
-    public async Task<IActionResult> Update(Guid id, Rancho input, CancellationToken ct)
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Update(Guid id, RanchoUpdateDto dto, CancellationToken ct)
     {
         var item = await db.Ranchos.FindAsync([id], ct);
-        if (item is null) return NotFound();
+        if (item is null) return this.NotFoundProblem("El rancho solicitado no existe.");
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, input.IdAutor, ct);
-        if (authorError is not null) return BadRequest(authorError);
+        if (item.EliminadoEn is not null)
+            return this.ConflictProblem("No se puede actualizar un rancho eliminado.");
 
-        item.Nombre = input.Nombre.Trim();
-        item.UbicacionGeneral = input.UbicacionGeneral.Trim();
-        item.Estado = input.Estado.Trim();
+        if (dto.EliminadoEn.HasValue)
+            return this.ValidationError("Para eliminar un rancho utiliza el endpoint DELETE.", nameof(dto.EliminadoEn));
+
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
+        if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
+
+        item.Nombre = dto.Nombre.Trim();
+        item.UbicacionGeneral = dto.UbicacionGeneral.Trim();
+        item.Estado = dto.Estado.Trim();
         item.IdAutor = authorId;
-        item.EliminadoEn = input.EliminadoEn;
         item.VersionRegistro++;
 
         try
@@ -106,17 +149,22 @@ public sealed class RanchosController(FarmDbContext db, FarmDomainValidationServ
         }
         catch (DbUpdateException)
         {
-            return Conflict("No se pudo actualizar el rancho.");
+            return this.ConflictProblem("No se pudo actualizar el rancho.");
         }
 
         return NoContent();
     }
 
     [HttpDelete("{id:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         var item = await db.Ranchos.FindAsync([id], ct);
-        if (item is null) return NotFound();
+        if (item is null) return this.NotFoundProblem("El rancho solicitado no existe.");
 
         var hasDependencies =
             await db.Lotes.AsNoTracking().AnyAsync(l => l.IdRancho == id && l.EliminadoEn == null, ct) ||
@@ -124,7 +172,7 @@ public sealed class RanchosController(FarmDbContext db, FarmDomainValidationServ
             await db.UsuarioRanchos.AsNoTracking().AnyAsync(ur => ur.IdRancho == id && ur.FechaBaja == null, ct);
 
         if (hasDependencies)
-            return Conflict("No se puede eliminar un rancho que tiene lotes, animales o usuarios asociados.");
+            return this.ConflictProblem("No se puede eliminar un rancho que tiene lotes, animales o usuarios asociados.");
 
         if (item.EliminadoEn is null)
         {
@@ -135,4 +183,21 @@ public sealed class RanchosController(FarmDbContext db, FarmDomainValidationServ
 
         return NoContent();
     }
+
+    private static bool MatchesRancho(Rancho existing, RanchoCreateDto dto) =>
+        ApiProblemResults.SameText(existing.Nombre, dto.Nombre) &&
+        ApiProblemResults.SameText(existing.UbicacionGeneral, dto.UbicacionGeneral) &&
+        ApiProblemResults.SameText(existing.Estado, dto.Estado);
+
+    internal static RanchoResponseDto ToResponseDto(Rancho r) => new()
+    {
+        IdRancho = r.IdRancho,
+        Nombre = r.Nombre,
+        UbicacionGeneral = r.UbicacionGeneral,
+        Estado = r.Estado,
+        IdAutor = r.IdAutor,
+        CreadoEn = r.CreadoEn,
+        VersionRegistro = r.VersionRegistro,
+        EliminadoEn = r.EliminadoEn
+    };
 }

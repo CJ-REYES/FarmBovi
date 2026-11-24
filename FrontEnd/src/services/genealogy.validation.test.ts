@@ -59,6 +59,7 @@ const EXISTING_RECORDS: GenealogyRecord[] = [
     idAnimal: FATHER_ID,
     idPadre: GRANDPA_ID,
     idMadre: null,
+    observaciones: null,
     versionRegistro: 1,
     createdAt: '2024-01-01T00:00:00Z',
     updatedAt: '2024-01-01T00:00:00Z',
@@ -72,6 +73,7 @@ const EXISTING_RECORDS: GenealogyRecord[] = [
     idAnimal: CALF_ID,
     idPadre: FATHER_ID,
     idMadre: MOTHER_ID,
+    observaciones: 'Línea paterna principal',
     versionRegistro: 1,
     createdAt: '2024-01-02T00:00:00Z',
     updatedAt: '2024-01-02T00:00:00Z',
@@ -162,5 +164,32 @@ describe('genealogy.validation', () => {
     expect(emptyProfile?.padre).toBeNull();
     expect(emptyProfile?.madre).toBeNull();
     expect(emptyProfile?.descendientes).toHaveLength(0);
+  });
+
+  it('valida límite de 500 caracteres en observaciones y permite sexo desconocido como progenitor', () => {
+    const tooLongObs = validateGenealogyInput(
+      {
+        idAnimal: CALF_ID,
+        idPadre: FATHER_ID,
+        idMadre: null,
+        observaciones: 'x'.repeat(501)
+      },
+      { animals: ANIMALS, existingRecords: [] }
+    );
+    expect(tooLongObs.observaciones).toMatch(/500 caracteres/i);
+
+    const unknownSexParent: Cattle = {
+      ...ANIMALS[1],
+      sexo: 'Desconocido' as unknown as Cattle['sexo']
+    };
+    const allowedUnknown = validateGenealogyInput(
+      {
+        idAnimal: CALF_ID,
+        idPadre: unknownSexParent.id,
+        idMadre: null
+      },
+      { animals: [ANIMALS[3], unknownSexParent], existingRecords: [] }
+    );
+    expect(Object.keys(allowedUnknown)).toHaveLength(0);
   });
 });

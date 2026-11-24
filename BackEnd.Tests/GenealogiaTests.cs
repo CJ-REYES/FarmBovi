@@ -627,6 +627,52 @@ public sealed class GenealogiaTests
     }
 
     [Fact]
+    public async Task Listar_FiltraPorRanchosAutorizadosYRechazaRanchoAjenoCon403()
+    {
+        await using var db = CreateInMemoryDb(nameof(Listar_FiltraPorRanchosAutorizadosYRechazaRanchoAjenoCon403));
+        var (userId, ranchoId, otroRanchoId) = await SeedBaseAsync(db);
+
+        var padreA = NewAnimal(ranchoId, userId, "A-PAD", "Macho");
+        var criaA = NewAnimal(ranchoId, userId, "A-CRIA", "Hembra");
+        var padreB = NewAnimal(otroRanchoId, userId, "B-PAD", "Macho");
+        var criaB = NewAnimal(otroRanchoId, userId, "B-CRIA", "Macho");
+        db.Animales.AddRange(padreA, criaA, padreB, criaB);
+
+        var genA = new GenealogiaAnimal { IdAnimal = criaA.IdAnimal, IdPadre = padreA.IdAnimal, Observaciones = "Rancho A", IdAutor = userId };
+        var genB = new GenealogiaAnimal { IdAnimal = criaB.IdAnimal, IdPadre = padreB.IdAnimal, Observaciones = "Rancho B", IdAutor = userId };
+        db.GenealogiasAnimales.AddRange(genA, genB);
+        await db.SaveChangesAsync();
+
+        var controller = CreateController(db, userId);
+
+        // Listado general devuelve solo los vínculos de ranchos autorizados del usuario
+        var listRes = Assert.IsType<OkObjectResult>(await controller.Listar(ct: default));
+        var list = Assert.IsAssignableFrom<IReadOnlyList<GenealogiaRegistroDto>>(listRes.Value);
+        var only = Assert.Single(list);
+        Assert.Equal(genA.IdGenealogia, only.IdGenealogia);
+        Assert.Equal(criaA.IdAnimal, only.IdAnimal);
+        Assert.Equal("Rancho A", only.Observaciones);
+
+        // Solicitar explícitamente un rancho ajeno retorna 403 Forbidden
+        AssertForbiddenProblem(await controller.Listar(idRancho: otroRanchoId, ct: default));
+
+        // ObtenerPadres incluye idGenealogia y versionRegistro para permitir edición/eliminación con concurrencia optimista
+        var padresConRegistro = Assert.IsType<OkObjectResult>(await controller.ObtenerPadres(criaA.IdAnimal, 2, default));
+        var padresDto = Assert.IsType<PadresAnimalResponse>(padresConRegistro.Value);
+        Assert.Equal(genA.IdGenealogia, padresDto.IdGenealogia);
+        Assert.Equal(1L, padresDto.VersionRegistro);
+
+        // Animal sin padres registrados devuelve nulos y listas vacías sin error
+        var sinPadresRes = Assert.IsType<OkObjectResult>(await controller.ObtenerPadres(padreA.IdAnimal, 2, default));
+        var sinPadresDto = Assert.IsType<PadresAnimalResponse>(sinPadresRes.Value);
+        Assert.Null(sinPadresDto.Padre);
+        Assert.Null(sinPadresDto.Madre);
+        Assert.Null(sinPadresDto.IdGenealogia);
+        Assert.Null(sinPadresDto.VersionRegistro);
+        Assert.Empty(sinPadresDto.Ancestros);
+    }
+
+    [Fact]
     public async Task Eliminar_ExigeVersionObligatoriaOIfMatchYRechazaObsoleta()
     {
         await using var db = CreateInMemoryDb(nameof(Eliminar_ExigeVersionObligatoriaOIfMatchYRechazaObsoleta));

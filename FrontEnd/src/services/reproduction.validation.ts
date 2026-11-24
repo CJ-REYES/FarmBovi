@@ -7,6 +7,7 @@ import { isValidGuid } from './cattle.validation';
 
 export type ReproductionValidationField =
   | 'idAnimal'
+  | 'idSemental'
   | 'tipo'
   | 'fecha'
   | 'resultado'
@@ -33,7 +34,8 @@ const FEMALE_ONLY_EVENT_PATTERNS = [
   /\bpre[ñn]ez\b/i,
   /\bsecado\b/i,
   /\bparto\b/i,
-  /\baborto\b/i
+  /\baborto\b/i,
+  /\bp[eé]rdida\s+gestacional\b/i
 ];
 
 function normalizeOptionalText(raw: string | null | undefined): string | null {
@@ -44,8 +46,10 @@ function normalizeOptionalText(raw: string | null | undefined): string | null {
 export function normalizeReproductionInput(
   input: ReproductionEventInput
 ): ReproductionEventInput {
+  const normalizedSemental = normalizeOptionalText(input.idSemental);
   return {
     idAnimal: input.idAnimal.trim(),
+    ...(input.idSemental !== undefined ? { idSemental: normalizedSemental } : {}),
     tipo: input.tipo.trim(),
     fecha: input.fecha.trim(),
     resultado: normalizeOptionalText(input.resultado),
@@ -62,11 +66,37 @@ export function isFemaleOnlyReproductionEvent(tipo: string): boolean {
 export function isMaleAnimal(sexo: string | undefined | null): boolean {
   if (!sexo) return false;
   const lowered = sexo.trim().toLowerCase();
-  return lowered === 'macho' || lowered === 'm' || lowered === 'male';
+  return lowered === 'macho' || lowered === 'masculino' || lowered === 'm' || lowered === 'male';
+}
+
+export function isFemaleAnimal(sexo: string | undefined | null): boolean {
+  if (!sexo) return false;
+  const lowered = sexo.trim().toLowerCase();
+  return (
+    lowered === 'hembra' ||
+    lowered === 'femenino' ||
+    lowered === 'h' ||
+    lowered === 'f' ||
+    lowered === 'female'
+  );
+}
+
+export function isCalvingEvent(tipo: string): boolean {
+  const normalized = tipo.trim().toLowerCase();
+  return normalized === 'parto' || normalized.startsWith('parto ');
 }
 
 export interface ValidateReproductionContext {
   animals?: Cattle[];
+  existingEvents?: Array<{
+    id: string;
+    idEventoReproductivo?: string;
+    idAnimal: string;
+    tipo: string;
+    fecha: string;
+    deletedAt?: string | null;
+  }>;
+  excludeEventId?: string;
   now?: Date;
 }
 
@@ -76,12 +106,14 @@ export function validateReproductionInput(
 ): ReproductionValidationErrors {
   const errors: ReproductionValidationErrors = {};
   const idAnimal = rawInput.idAnimal.trim();
+  const idSemental = normalizeOptionalText(rawInput.idSemental);
   const tipo = rawInput.tipo.trim();
   const fechaStr = rawInput.fecha.trim();
   const resultado = normalizeOptionalText(rawInput.resultado);
   const observaciones = normalizeOptionalText(rawInput.observaciones);
 
   let selectedAnimal: Cattle | undefined;
+  let selectedSemental: Cattle | undefined;
 
   if (!idAnimal) {
     errors.idAnimal = 'Debes seleccionar el animal del evento reproductivo.';
@@ -91,6 +123,26 @@ export function validateReproductionInput(
     selectedAnimal = context.animals.find((a) => a.id === idAnimal && !a.deletedAt);
     if (!selectedAnimal) {
       errors.idAnimal = 'El animal seleccionado no existe o está desactivado.';
+    }
+  }
+
+  if (idSemental) {
+    if (!isValidGuid(idSemental)) {
+      errors.idSemental = 'El identificador del semental debe ser un UUID válido.';
+    } else if (idSemental === idAnimal) {
+      errors.idSemental = 'Un animal no puede asociarse como su propio semental.';
+    } else if (selectedAnimal && isMaleAnimal(selectedAnimal.sexo)) {
+      errors.idSemental =
+        'Cuando se asocia un semental, el animal principal del evento debe ser hembra.';
+    } else if (context.animals) {
+      selectedSemental = context.animals.find((a) => a.id === idSemental && !a.deletedAt);
+      if (!selectedSemental) {
+        errors.idSemental = 'El semental seleccionado no existe o está desactivado.';
+      } else if (selectedAnimal && selectedSemental.idRancho !== selectedAnimal.idRancho) {
+        errors.idSemental = 'El semental debe pertenecer al mismo rancho del animal.';
+      } else if (isFemaleAnimal(selectedSemental.sexo)) {
+        errors.idSemental = 'El semental seleccionado debe ser de sexo Macho.';
+      }
     }
   }
 
@@ -128,6 +180,47 @@ export function validateReproductionInput(
         errors.fecha = 'La fecha del evento no puede ser anterior al nacimiento del animal.';
       }
     }
+
+    if (!errors.fecha && selectedAnimal?.fechaSalida) {
+      const exitDate = new Date(`${selectedAnimal.fechaSalida.slice(0, 10)}T23:59:59`);
+      if (!Number.isNaN(exitDate.getTime()) && parsedFecha.getTime() > exitDate.getTime()) {
+        errors.fecha = 'La fecha del evento no puede ser posterior a la fecha de salida del animal.';
+      }
+    }
+
+    if (!errors.fecha && selectedSemental?.fechaNacimiento) {
+      const sireBirth = new Date(`${selectedSemental.fechaNacimiento.slice(0, 10)}T00:00:00`);
+      if (!Number.isNaN(sireBirth.getTime()) && parsedFecha.getTime() < sireBirth.getTime()) {
+        errors.fecha = 'La fecha del evento no puede ser anterior al nacimiento del semental.';
+      }
+    }
+
+    // Coherencia fisiológica entre partos de una misma hembra (mínimo 240 días)
+    if (!errors.fecha && idAnimal && isCalvingEvent(tipo) && context.existingEvents) {
+      const MS_PER_DAY = 24 * 60 * 60 * 1000;
+      for (const prev of context.existingEvents) {
+        if (prev.deletedAt) continue;
+        if (prev.idAnimal !== idAnimal) continue;
+        if (
+          context.excludeEventId &&
+          (prev.id === context.excludeEventId ||
+            prev.idEventoReproductivo === context.excludeEventId)
+        ) {
+          continue;
+        }
+        if (!isCalvingEvent(prev.tipo)) continue;
+
+        const prevDate = new Date(prev.fecha);
+        if (Number.isNaN(prevDate.getTime())) continue;
+
+        const daysDiff = Math.abs(parsedFecha.getTime() - prevDate.getTime()) / MS_PER_DAY;
+        if (daysDiff < 240) {
+          errors.fecha =
+            'Incoherencia cronológica: ya existe otro parto registrado para esta hembra a menos de 240 días de diferencia.';
+          break;
+        }
+      }
+    }
   }
 
   if (resultado && resultado.length > REPRODUCTION_FIELD_LIMITS.resultadoMax) {
@@ -143,7 +236,7 @@ export function validateReproductionInput(
 
 /**
  * Clasifica un evento reproductivo real en una de las 3 etapas operativas
- * de la vista de tablero sin inventar un catálogo cerrado en el Backend.
+ * de la vista de tablero.
  */
 export function classifyReproductionStage(
   tipo: string,
@@ -155,6 +248,7 @@ export function classifyReproductionStage(
     /\bparto\b/.test(combined) ||
     /\bnacimiento\b/.test(combined) ||
     /\baborto\b/.test(combined) ||
+    /\bp[eé]rdida\s+gestacional\b/.test(combined) ||
     /\bdestete\b/.test(combined) ||
     /\bcr[ií]a\b/.test(combined)
   ) {

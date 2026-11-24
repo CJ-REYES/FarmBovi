@@ -265,6 +265,45 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
         }
     }
 
+    public async Task<GenealogiaOperationResult<IReadOnlyList<GenealogiaRegistroDto>>> ListarAsync(
+        Guid userId,
+        Guid? idRancho,
+        bool incluirEliminados,
+        CancellationToken ct)
+    {
+        if (idRancho.HasValue)
+        {
+            if (idRancho.Value == Guid.Empty)
+                return new(GenealogiaOperationStatus.BadRequest, Error: "El identificador del rancho (idRancho) no es válido.");
+
+            if (!await access.CanAccessAsync(userId, idRancho.Value, ct))
+                return new(GenealogiaOperationStatus.Forbidden, Error: "No tienes permisos sobre el rancho solicitado.");
+        }
+
+        var ranchIds = idRancho.HasValue
+            ? [idRancho.Value]
+            : await access.ActiveRanchIds(userId).Distinct().ToListAsync(ct);
+
+        if (ranchIds.Count == 0)
+            return new(GenealogiaOperationStatus.Success, Array.Empty<GenealogiaRegistroDto>());
+
+        var query =
+            from g in db.GenealogiasAnimales.AsNoTracking()
+            join a in db.Animales.AsNoTracking() on g.IdAnimal equals a.IdAnimal
+            where a.EliminadoEn == null && ranchIds.Contains(a.IdRancho)
+            select g;
+
+        if (!incluirEliminados)
+            query = query.Where(g => g.EliminadoEn == null);
+
+        var items = await query
+            .OrderByDescending(g => g.CreadoEn)
+            .ThenBy(g => g.IdGenealogia)
+            .ToListAsync(ct);
+
+        return new(GenealogiaOperationStatus.Success, items.Select(MapRegistro).ToList());
+    }
+
     public async Task<GenealogiaOperationResult<GenealogiaRegistroDto>> ObtenerPorIdAsync(
         Guid idGenealogia,
         Guid userId,
@@ -314,6 +353,8 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
         AnimalResumenGenealogiaDto? padreDirecto = null;
         AnimalResumenGenealogiaDto? madreDirecta = null;
         string? observacionesDirectas = null;
+        Guid? idGenealogiaDirecta = null;
+        long? versionRegistroDirecta = null;
 
         var ancestros = new List<AncestroGenealogicoDto>();
         var visited = new HashSet<Guid> { idAnimal };
@@ -360,6 +401,8 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
 
                 if (gen == 0 && currentId == idAnimal)
                 {
+                    idGenealogiaDirecta = rel.IdGenealogia;
+                    versionRegistroDirecta = rel.VersionRegistro;
                     observacionesDirectas = rel.Observaciones;
                     if (rel.IdPadre is { } pId && parentsMap.TryGetValue(pId, out var p))
                         padreDirecto = MapResumen(p);
@@ -390,7 +433,9 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
             padreDirecto,
             madreDirecta,
             observacionesDirectas,
-            ancestros);
+            ancestros,
+            idGenealogiaDirecta,
+            versionRegistroDirecta);
 
         return new(GenealogiaOperationStatus.Success, response);
     }

@@ -66,19 +66,19 @@ No todas las tablas locales de IndexedDB tienen representación en el servidor. 
 | `feedingRecords` | `Alimentacion` | Habilitada | Tipo de alimento, cantidad, fecha y referencia a lote o animal. |
 | `movements` | `MovimientoAnimal` | Habilitada | Animal, fecha, motivo y lotes origen/destino. |
 | `alerts` | `Recordatorio` | Habilitada | Tipo, mensaje, fecha programada, prioridad y estado de lectura. |
-| `weighings` | — (solo IndexedDB) | No habilitada | Requiere crear modelo remoto `Pesaje` (`IdPesaje`, `IdAnimal`, `PesoKg`, `Fecha`, `IdRancho` o derivación por animal, `VersionRegistro`, `EliminadoEn`) y su registro en `CambioServidor`. |
-| `genealogy` | `GenealogiaAnimal` (API + `CambioServidor`) | No habilitada en Pull/Push | Modelo remoto `GenealogiaAnimal` (`IdGenealogia`, `IdAnimal`, `IdPadre`, `IdMadre`, `VersionRegistro`, `EliminadoEn`) ya integrado en `FarmDbContext.IsSynchronizableEntity()` para emitir `CambioServidor`; falta habilitar el mapeo `genealogy` en los contratos Push/Pull. |
-| `reproductionRecords` | — (solo IndexedDB) | No habilitada | Requiere crear modelo remoto `EventoReproductivo` (`IdEventoReproductivo`, `IdAnimal`, `Tipo`, `Fecha`, `Resultado`, `VersionRegistro`, `EliminadoEn`). |
-| `media` | — (solo IndexedDB) | No habilitada | Requiere almacenamiento binario/URI y modelo remoto `ArchivoMultimedia` (`IdMedia`, `IdRancho`, `EntidadRelacionada`, `IdRegistro`, `MimeType`, `Url`/`Hash`, `VersionRegistro`, `EliminadoEn`). |
+| `weighings` | `Pesaje` | Habilitada | Proyecta `ranchId`, `idAnimal`/`cattleId`, `pesoRealKg`/`peso`, `fecha`, `fuenteBascula`, `responsable`, `observaciones`, `origenPesaje` y `createdAt`; valida que el animal pertenezca al rancho autorizado y que `pesoRealKg > 0`. |
+| `genealogy` | `GenealogiaAnimal` | Habilitada | Proyecta `ranchId`, `idAnimal`/`cattleId`, `idPadre`/`padreId`, `idMadre`/`madreId`, `observaciones` y `createdAt`; valida pertenencia al rancho de animal y progenitores, impide duplicados por animal, sexo/fechas inválidas y ciclos genealógicos en Push (`POST /api/sync/operaciones`) y Pull (`GET /api/sync/cambios`). |
+| `reproductionRecords` | `EventoReproductivo` | Habilitada | Proyecta `ranchId`, `idAnimal`/`cattleId`, `idSemental`, `tipo`/`evento`, `fecha`, `resultado`, `observaciones` y `createdAt`; valida pertenencia al rancho de animal y semental, compatibilidad biológica de sexo y coherencia de fechas. |
+| `media` | `ArchivoMultimedia` (API `/api/media/archivos`) | No habilitada en Pull | Los archivos binarios se sincronizan mediante `MediaSyncEngine` contra `/api/media/archivos`. |
 
-Solicitar cualquiera de las entidades no habilitadas (`weighings`, `genealogy`, `reproductionRecords`, `media`) devuelve `400 Bad Request`.
+Solicitar cualquiera de las entidades no habilitadas en Pull (`media`) devuelve `400 Bad Request`.
 
-> **Nota de alcance (`genealogy` / `GenealogiaAnimal` — BE-P03):** El paquete BE-P03 entrega el modelo `GenealogiaAnimal`, su migración, los endpoints de la API y la emisión automática de cambios en `CambioServidor` a través de `FarmDbContext.IsSynchronizableEntity()` (conservando `IdGenealogia`, `IdAnimal`, `IdPadre`, `IdMadre`, `VersionRegistro`, `EliminadoEn` y resolviendo `IdRancho` vía `IdAnimal`). La sincronización offline completa de `genealogy` (mapeo en `GET /api/sync/cambios` y `POST /api/sincronizacion`) **no está habilitada** y queda explícitamente como dependencia del paquete de sincronización offline.
+> **Nota de alcance (`genealogy` / `GenealogiaAnimal`):** La sincronización offline-first completa de `genealogy` (Push vía `POST /api/sync/operaciones` con idempotencia por `idOperacion`, detección de duplicados por `idAnimal`, prevención de ciclos y control de concurrencia optimista + Pull incremental paginado vía `GET /api/sync/cambios?entidad=genealogy`) está habilitada y alineada con el módulo REST `/api/genealogia`.
 
 ## Pull
 
 ```http
-GET /api/sync/cambios?entidad={cattle|lots|healthRecords|feedingRecords|movements|alerts}&ranchId={uuid}&cursorOpaco={cursor-opaco}&limite={1..500}
+GET /api/sync/cambios?entidad={cattle|lots|genealogy|weighings|healthRecords|feedingRecords|movements|alerts}&ranchId={uuid}&cursorOpaco={cursor-opaco}&limite={1..500}
 Authorization: Bearer {token}
 ```
 

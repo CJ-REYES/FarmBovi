@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   AlertCircle,
+  AlertOctagon,
   ArrowUpDown,
   Baby,
   CheckCircle2,
@@ -13,27 +14,30 @@ import {
   List,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   Sparkles,
   Trash2,
+  WifiOff,
   X
 } from 'lucide-react';
 import { useConnectivity } from '../../hooks/useConnectivity';
 import type { Cattle } from '../../types/cattle';
-import {
-  REPRODUCTION_BACKEND_DEPENDENCY,
-  type ReproductionEvent,
-  type ReproductionEventInput,
-  type ReproductionStage
+import type {
+  ReproductionEvent,
+  ReproductionEventInput,
+  ReproductionStage
 } from '../../types/reproduction';
 import {
   ReproductionService,
-  type ReproductionMutationResult
+  type ReproductionMutationResult,
+  type ReproductionSyncIssue
 } from '../../services/reproduction.service';
 import { classifyReproductionStage } from '../../services/reproduction.validation';
 import { SyncScheduler } from '../../services/sync/sync-scheduler';
 import EmptyState from '../ui/EmptyState';
 import ResponsiveDataView, { type ResponsiveColumn } from '../shared/ResponsiveDataView';
+import SyncConflictsPanel from '../shared/SyncConflictsPanel';
 import ReproductionFormModal from './ReproductionFormModal';
 
 type ViewMode = 'historial' | 'tablero';
@@ -98,6 +102,13 @@ function renderSyncBadge(syncStatus: ReproductionEvent['syncStatus']) {
       </span>
     );
   }
+  if (syncStatus === 'error') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-status-danger/15 text-status-danger">
+        Error sincronización
+      </span>
+    );
+  }
   return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-status-warning/20 text-brand-dark">
       <Clock size={11} /> Pendiente local
@@ -110,11 +121,13 @@ export default function ReproductionPage() {
 
   const [events, setEvents] = useState<ReproductionEvent[]>([]);
   const [animals, setAnimals] = useState<Cattle[]>([]);
+  const [syncIssues, setSyncIssues] = useState<Record<string, ReproductionSyncIssue>>({});
+  const [activeConflictsCount, setActiveConflictsCount] = useState<number>(0);
+  const [showConflictsPanel, setShowConflictsPanel] = useState<boolean>(false);
+  const [retryingEventId, setRetryingEventId] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
-  const [backendNotice, setBackendNotice] = useState<string | null>(
-    REPRODUCTION_BACKEND_DEPENDENCY.summaryMessage
-  );
+  const [warning, setWarning] = useState<string | null>(null);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
 
   const [viewMode, setViewMode] = useState<ViewMode>('historial');
@@ -138,7 +151,9 @@ export default function ReproductionPage() {
       });
       setEvents(result.data);
       setAnimals(result.animals);
-      setBackendNotice(result.backendNotice);
+      setWarning(result.warning);
+      setSyncIssues(result.syncIssuesByEventId);
+      setActiveConflictsCount(result.activeConflictsCount);
     } catch (err) {
       setError(
         err instanceof Error
@@ -161,7 +176,9 @@ export default function ReproductionPage() {
         if (!active) return;
         setEvents(result.data);
         setAnimals(result.animals);
-        setBackendNotice(result.backendNotice);
+        setWarning(result.warning);
+        setSyncIssues(result.syncIssuesByEventId);
+        setActiveConflictsCount(result.activeConflictsCount);
         setError(null);
       } catch (err) {
         if (!active) return;
@@ -178,23 +195,45 @@ export default function ReproductionPage() {
     })();
 
     let previousSyncAt = SyncScheduler.getSnapshot().lastCompletedSyncAt;
+    let previousFinishedAt = SyncScheduler.getSnapshot().lastCycleResult?.finishedAt ?? null;
     const unsubscribe = SyncScheduler.subscribe(() => {
-      const nextSyncAt = SyncScheduler.getSnapshot().lastCompletedSyncAt;
-      if (nextSyncAt && nextSyncAt !== previousSyncAt) {
+      const snap = SyncScheduler.getSnapshot();
+      const nextSyncAt = snap.lastCompletedSyncAt;
+      const nextFinishedAt = snap.lastCycleResult?.finishedAt ?? null;
+      if (
+        (nextSyncAt && nextSyncAt !== previousSyncAt) ||
+        (nextFinishedAt && nextFinishedAt !== previousFinishedAt)
+      ) {
         previousSyncAt = nextSyncAt;
+        previousFinishedAt = nextFinishedAt;
         void loadData(includeDeleted, sortOrder);
       }
     });
 
+    const handleOnline = () => {
+      void loadData(includeDeleted, sortOrder);
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', handleOnline);
+    }
+
     return () => {
       active = false;
       unsubscribe();
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('online', handleOnline);
+      }
     };
   }, [includeDeleted, sortOrder, loadData]);
 
   const animalById = useMemo(() => new Map(animals.map((a) => [a.id, a])), [animals]);
 
   const activeEvents = useMemo(() => events.filter((ev) => !ev.deletedAt), [events]);
+
+  const failedIssueCount = useMemo(
+    () => Object.values(syncIssues).filter((i) => i.estado === 'fallido').length,
+    [syncIssues]
+  );
 
   const stats = useMemo(() => {
     let servicios = 0;
@@ -232,9 +271,11 @@ export default function ReproductionPage() {
 
       if (!query) return true;
       const animal = animalById.get(ev.idAnimal);
+      const semental = ev.idSemental ? animalById.get(ev.idSemental) : undefined;
       return (
         (animal?.arete || '').toLowerCase().includes(query) ||
         (animal?.raza || '').toLowerCase().includes(query) ||
+        (semental?.arete || '').toLowerCase().includes(query) ||
         ev.tipo.toLowerCase().includes(query) ||
         (ev.resultado || '').toLowerCase().includes(query) ||
         (ev.observaciones || '').toLowerCase().includes(query)
@@ -264,9 +305,27 @@ export default function ReproductionPage() {
       ? await ReproductionService.update(modalState.event.id, input)
       : await ReproductionService.create(input);
 
-    setFeedbackMsg(result.syncMessage);
+    setFeedbackMsg(result.syncMessage ?? null);
     await loadData(includeDeleted, sortOrder);
     return result;
+  };
+
+  const handleRetrySync = async (ev: ReproductionEvent) => {
+    setRetryingEventId(ev.id);
+    setError(null);
+    try {
+      const res = await ReproductionService.retryEventSync(ev.id);
+      setFeedbackMsg(res.syncMessage);
+      await loadData(includeDeleted, sortOrder);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'No se pudo reintentar la sincronización del evento.'
+      );
+    } finally {
+      setRetryingEventId(null);
+    }
   };
 
   const handleConfirmDeactivate = async () => {
@@ -275,7 +334,7 @@ export default function ReproductionPage() {
     setError(null);
     try {
       const outcome = await ReproductionService.deactivate(confirmDeactivate.id);
-      setFeedbackMsg(outcome.syncMessage);
+      setFeedbackMsg(outcome.syncMessage ?? 'Evento reproductivo desactivado.');
       setConfirmDeactivate(null);
       await loadData(includeDeleted, sortOrder);
     } catch (err) {
@@ -292,8 +351,23 @@ export default function ReproductionPage() {
       return <span className="text-[11px] text-brand-slate/50 italic">Registro desactivado</span>;
     }
 
+    const issue = syncIssues[ev.id];
+    const isFailed = ev.syncStatus === 'error' || issue?.estado === 'fallido';
+
     return (
-      <div className="flex items-center gap-1.5 justify-end">
+      <div className="flex items-center gap-1.5 justify-end flex-wrap">
+        {isFailed && (
+          <button
+            type="button"
+            onClick={() => void handleRetrySync(ev)}
+            disabled={retryingEventId === ev.id}
+            aria-label={`Reintentar sincronización de ${ev.tipo}`}
+            className="px-2.5 py-1.5 text-[12px] font-semibold text-amber-800 hover:bg-amber-500/15 rounded-md inline-flex items-center gap-1 transition-colors disabled:opacity-50"
+          >
+            <RotateCcw size={13} className={retryingEventId === ev.id ? 'animate-spin' : ''} />{' '}
+            Reintentar
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setModalState({ open: true, mode: 'edit', event: ev })}
@@ -321,7 +395,9 @@ export default function ReproductionPage() {
       hideOnCard: true,
       renderCell: (ev) => {
         const animal = animalById.get(ev.idAnimal);
+        const semental = ev.idSemental ? animalById.get(ev.idSemental) : undefined;
         const stage = classifyReproductionStage(ev.tipo, ev.resultado);
+        const issue = syncIssues[ev.id];
         return (
           <div className="space-y-0.5">
             <div className="flex items-center gap-2 flex-wrap">
@@ -342,7 +418,23 @@ export default function ReproductionPage() {
                 {animal ? animal.arete : ev.idAnimal.slice(0, 8)}
               </Link>
               {animal ? ` · ${animal.raza} (${animal.sexo})` : ''}
+              {ev.idSemental && (
+                <span>
+                  {' · Semental: '}
+                  <Link
+                    to={`/cattle/${ev.idSemental}`}
+                    className="font-semibold text-sky-700 hover:underline"
+                  >
+                    {semental ? semental.arete : ev.idSemental.slice(0, 8)}
+                  </Link>
+                </span>
+              )}
             </p>
+            {issue && (
+              <p className="text-[11px] text-status-danger font-medium mt-1">
+                {issue.mensaje}
+              </p>
+            )}
           </div>
         );
       }
@@ -371,12 +463,6 @@ export default function ReproductionPage() {
           {ev.observaciones || <span className="text-brand-slate/45">—</span>}
         </span>
       )
-    },
-    {
-      key: 'acciones',
-      header: 'Acciones',
-      hideOnCard: true,
-      renderCell: (ev) => renderEventActions(ev)
     }
   ];
 
@@ -414,18 +500,80 @@ export default function ReproductionPage() {
         </div>
       </header>
 
-      {backendNotice && (
+      {!isOnline && (
         <div
           role="status"
-          className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-brand-slate text-[12px] flex items-start gap-2.5"
+          className="p-3.5 rounded-xl bg-status-warning/15 border border-status-warning/40 text-brand-dark text-[12px] flex items-center gap-2.5"
         >
-          <Info size={16} className="text-amber-700 shrink-0 mt-0.5" />
-          <div className="space-y-1">
-            <p className="font-semibold text-brand-forest">
-              Dependencia de Backend documentada ({REPRODUCTION_BACKEND_DEPENDENCY.entityName})
-            </p>
-            <p>{backendNotice}</p>
+          <WifiOff size={16} className="text-status-warning shrink-0" />
+          <span>
+            Modo sin conexión activo: los eventos reproductivos se guardan localmente en IndexedDB y
+            se sincronizarán con el servidor al recuperar Internet.
+          </span>
+        </div>
+      )}
+
+      {(activeConflictsCount > 0 || failedIssueCount > 0) && (
+        <div
+          role="alert"
+          className="p-3.5 rounded-xl bg-status-danger/10 border border-status-danger/30 text-brand-slate text-[12px] flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+        >
+          <div className="flex items-start gap-2.5">
+            <AlertOctagon size={16} className="text-status-danger shrink-0 mt-0.5" />
+            <div className="space-y-0.5">
+              <p className="font-semibold text-status-danger">
+                Atención requerida en sincronización reproductiva
+              </p>
+              <p>
+                {activeConflictsCount > 0
+                  ? `${activeConflictsCount} conflicto(s) de versión pendientes de resolución.`
+                  : ''}{' '}
+                {failedIssueCount > 0
+                  ? `${failedIssueCount} operación(es) con error recuperable: puedes editarlas para corregir datos o pulsar Reintentar.`
+                  : ''}
+              </p>
+            </div>
           </div>
+          {activeConflictsCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowConflictsPanel((prev) => !prev)}
+              className="px-3 py-1.5 bg-surface-white border border-status-danger/40 rounded-md text-[12px] font-semibold text-status-danger hover:bg-status-danger/10 shrink-0"
+            >
+              {showConflictsPanel ? 'Ocultar conflictos' : 'Resolver conflictos'}
+            </button>
+          )}
+        </div>
+      )}
+
+      {showConflictsPanel && activeConflictsCount > 0 && (
+        <div className="bg-surface-white border border-border-light rounded-xl p-4 shadow-sm">
+          <SyncConflictsPanel
+            onConflictResolved={async () => {
+              await SyncScheduler.triggerSync('manual');
+              await loadData(includeDeleted, sortOrder);
+            }}
+          />
+        </div>
+      )}
+
+      {warning && (
+        <div
+          role="status"
+          className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-brand-slate text-[12px] flex items-start justify-between gap-2.5"
+        >
+          <div className="flex items-start gap-2.5">
+            <Info size={16} className="text-amber-700 shrink-0 mt-0.5" />
+            <span>{warning}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setWarning(null)}
+            aria-label="Cerrar aviso"
+            className="p-1 hover:bg-amber-500/10 rounded"
+          >
+            <X size={14} />
+          </button>
         </div>
       )}
 
@@ -470,7 +618,7 @@ export default function ReproductionPage() {
           <p className="text-[11px] text-brand-slate/60 mt-0.5">
             {stats.pendingSync > 0
               ? `${stats.pendingSync} pendientes en cola local`
-              : 'Sin pendientes en cola'}
+              : 'Sincronizados con el servidor'}
           </p>
         </div>
 
@@ -500,7 +648,7 @@ export default function ReproductionPage() {
             <Baby size={16} className="text-emerald-600" />
           </div>
           <p className="text-2xl font-condensed font-bold text-emerald-700 mt-1">{stats.partos}</p>
-          <p className="text-[11px] text-brand-slate/60 mt-0.5">Nacimientos, abortos y destetes</p>
+          <p className="text-[11px] text-brand-slate/60 mt-0.5">Nacimientos, pérdidas y destetes</p>
         </div>
       </div>
 
@@ -626,7 +774,9 @@ export default function ReproductionPage() {
               getKey={(ev) => ev.id}
               renderCardHeader={(ev) => {
                 const animal = animalById.get(ev.idAnimal);
+                const semental = ev.idSemental ? animalById.get(ev.idSemental) : undefined;
                 const stage = classifyReproductionStage(ev.tipo, ev.resultado);
+                const issue = syncIssues[ev.id];
                 return (
                   <div className="space-y-1">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -636,7 +786,15 @@ export default function ReproductionPage() {
                     </div>
                     <p className="text-[12px] text-brand-slate/75">
                       {animal ? `${animal.arete} · ${animal.raza} (${animal.sexo})` : ev.idAnimal}
+                      {ev.idSemental
+                        ? ` · Semental: ${semental ? semental.arete : ev.idSemental.slice(0, 8)}`
+                        : ''}
                     </p>
+                    {issue && (
+                      <p className="text-[11px] text-status-danger font-medium">
+                        {issue.mensaje}
+                      </p>
+                    )}
                   </div>
                 );
               }}
@@ -653,7 +811,7 @@ export default function ReproductionPage() {
               title: 'Servicios e Inseminaciones',
               accent: 'border-t-sky-500',
               headerBg: 'bg-surface-secondary/50',
-              defaultTipo: 'Inseminación Artificial',
+              defaultTipo: 'Inseminación',
               icon: Sparkles,
               emptyMsg: 'Sin servicios o celos registrados aún.',
               items: boardColumns.servicios
@@ -663,7 +821,7 @@ export default function ReproductionPage() {
               title: 'Gestaciones Confirmadas',
               accent: 'border-t-pink-500',
               headerBg: 'bg-pink-50/40',
-              defaultTipo: 'Gestación Confirmada',
+              defaultTipo: 'Confirmación de gestación',
               icon: HeartPulse,
               emptyMsg: 'Las palpaciones y diagnósticos de gestación aparecerán aquí.',
               items: boardColumns.gestaciones
@@ -722,6 +880,9 @@ export default function ReproductionPage() {
                 ) : (
                   col.items.map((ev) => {
                     const animal = animalById.get(ev.idAnimal);
+                    const semental = ev.idSemental ? animalById.get(ev.idSemental) : undefined;
+                    const issue = syncIssues[ev.id];
+                    const isFailed = ev.syncStatus === 'error' || issue?.estado === 'fallido';
                     return (
                       <article
                         key={ev.id}
@@ -732,6 +893,9 @@ export default function ReproductionPage() {
                             <p className="font-bold text-[13px] text-brand-forest">{ev.tipo}</p>
                             <p className="text-[12px] text-brand-slate/75">
                               {animal ? `${animal.arete} · ${animal.raza}` : ev.idAnimal.slice(0, 8)}
+                              {ev.idSemental
+                                ? ` · Semental: ${semental ? semental.arete : ev.idSemental.slice(0, 8)}`
+                                : ''}
                             </p>
                           </div>
                           {renderSyncBadge(ev.syncStatus)}
@@ -749,7 +913,22 @@ export default function ReproductionPage() {
                             {ev.observaciones}
                           </p>
                         )}
+                        {issue && (
+                          <p className="text-[11px] text-status-danger font-medium">
+                            {issue.mensaje}
+                          </p>
+                        )}
                         <div className="pt-1 border-t border-border-light/70 flex items-center justify-end gap-2">
+                          {isFailed && (
+                            <button
+                              type="button"
+                              onClick={() => void handleRetrySync(ev)}
+                              disabled={retryingEventId === ev.id}
+                              className="text-[11px] font-semibold text-amber-800 hover:underline inline-flex items-center gap-1"
+                            >
+                              <RotateCcw size={12} /> Reintentar
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => setModalState({ open: true, mode: 'edit', event: ev })}
@@ -782,6 +961,7 @@ export default function ReproductionPage() {
           initialEvent={modalState.mode === 'edit' ? modalState.event : undefined}
           defaultTipo={modalState.mode === 'create' ? modalState.defaultTipo : undefined}
           animals={animals}
+          existingEvents={events}
           isOnline={isOnline}
           onClose={() => setModalState({ open: false })}
           onSubmit={handleSave}
@@ -809,8 +989,8 @@ export default function ReproductionPage() {
             </h2>
             <p className="text-[13px] text-brand-slate/80">
               ¿Deseas desactivar el evento <strong>{confirmDeactivate.tipo}</strong> registrado el{' '}
-              {formatDateTimeDisplay(confirmDeactivate.fecha)}? Se aplicará baja lógica local en
-              IndexedDB.
+              {formatDateTimeDisplay(confirmDeactivate.fecha)}? Se aplicará baja lógica y se
+              sincronizará con el servidor.
             </p>
             <div className="flex justify-end gap-2 pt-2">
               <button

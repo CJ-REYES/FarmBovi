@@ -311,7 +311,7 @@ public sealed class SyncPullTests
     {
         await using var db = CreateDb(Guid.NewGuid().ToString("N"));
         var (userA, _, ranchA, _) = await SeedAsync(db);
-        foreach (var entity in new[] { "genealogy", "reproductionRecords", "media" })
+        foreach (var entity in new[] { "media" })
         {
             var result = await Controller(db, userA).GetCambios(entity, ranchA, null, null, null, 10);
             Assert.IsType<BadRequestObjectResult>(result.Result);

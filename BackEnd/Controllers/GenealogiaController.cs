@@ -11,6 +11,23 @@ namespace FarmBovi.Api.Controllers;
 [Route("api/genealogia")]
 public sealed class GenealogiaController(GenealogiaService genealogia) : ControllerBase
 {
+    [HttpGet]
+    [ProducesResponseType(typeof(IReadOnlyList<GenealogiaRegistroDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> Listar(
+        [FromQuery] Guid? idRancho = null,
+        [FromQuery] bool incluirEliminados = false,
+        CancellationToken ct = default)
+    {
+        if (RanchAccessService.GetUserId(User) is not { } userId)
+            return UnauthorizedProblem();
+
+        var result = await genealogia.ListarAsync(userId, idRancho, incluirEliminados, ct);
+        return ToActionResult(result);
+    }
+
     [HttpPost]
     [ProducesResponseType(typeof(GenealogiaRegistroDto), StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(GenealogiaRegistroDto), StatusCodes.Status200OK)]

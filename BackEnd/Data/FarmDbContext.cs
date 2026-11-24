@@ -39,6 +39,7 @@ public sealed class FarmDbContext(
     public DbSet<Pesaje> Pesajes => Set<Pesaje>();
     public DbSet<Alimentacion> Alimentaciones => Set<Alimentacion>();
     public DbSet<EventoSanitario> EventosSanitarios => Set<EventoSanitario>();
+    public DbSet<EventoReproductivo> EventosReproductivos => Set<EventoReproductivo>();
     public DbSet<Tratamiento> Tratamientos => Set<Tratamiento>();
     public DbSet<Recordatorio> Recordatorios => Set<Recordatorio>();
     public DbSet<ArchivoMultimedia> ArchivosMultimedia => Set<ArchivoMultimedia>();
@@ -180,7 +181,7 @@ public sealed class FarmDbContext(
 
     private static bool IsSynchronizableEntity(object entity) =>
         entity is Animal or Lote or Rancho or Alimentacion or MovimientoAnimal
-            or Pesaje or EventoSanitario or Tratamiento or Recordatorio or GenealogiaAnimal;
+            or Pesaje or EventoSanitario or EventoReproductivo or Tratamiento or Recordatorio or GenealogiaAnimal;
 
     private CambioServidor? BuildApiChangeRecord(EntityEntry entry, Guid idRancho, DateTime ahora)
     {
@@ -676,6 +677,29 @@ public sealed class FarmDbContext(
             e.HasIndex(x => x.IdAnimal);
             e.HasIndex(x => x.Fecha);
             e.HasOne<Animal>().WithMany().HasForeignKey(x => x.IdAnimal).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Usuario>().WithMany().HasForeignKey(x => x.IdAutor).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<EventoReproductivo>(e =>
+        {
+            e.ToTable("EventoReproductivo");
+            e.HasKey(x => x.IdEventoReproductivo);
+            e.Property(x => x.IdEventoReproductivo).HasColumnType("char(36)").ValueGeneratedNever();
+            e.Property(x => x.IdAnimal).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.IdSemental).HasColumnType("char(36)");
+            e.Property(x => x.Tipo).HasMaxLength(60).IsRequired();
+            e.Property(x => x.Fecha).IsRequired();
+            e.Property(x => x.Resultado).HasMaxLength(120);
+            e.Property(x => x.Observaciones).HasMaxLength(1000);
+            e.Property(x => x.IdAutor).HasColumnType("char(36)").IsRequired();
+            e.Property(x => x.CreadoEn).IsRequired();
+            e.Property(x => x.VersionRegistro).IsConcurrencyToken();
+            e.HasIndex(x => x.IdAnimal);
+            e.HasIndex(x => x.IdSemental);
+            e.HasIndex(x => x.Fecha);
+            e.HasIndex(x => new { x.IdAnimal, x.Fecha });
+            e.HasOne<Animal>().WithMany().HasForeignKey(x => x.IdAnimal).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Animal>().WithMany().HasForeignKey(x => x.IdSemental).OnDelete(DeleteBehavior.Restrict);
             e.HasOne<Usuario>().WithMany().HasForeignKey(x => x.IdAutor).OnDelete(DeleteBehavior.Restrict);
         });
     }

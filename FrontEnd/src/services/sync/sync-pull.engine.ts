@@ -51,6 +51,8 @@ export interface PullOptions {
 export const PULL_ENTITY_ORDER: readonly SyncEntityName[] = [
   'lots',
   'cattle',
+  'genealogy',
+  'reproductionRecords',
   'weighings',
   'healthRecords',
   'feedingRecords',
@@ -131,7 +133,7 @@ export const SyncPullEngine = {
       let skippedPendingCount = 0;
 
       for (const change of params.response.cambios) {
-        const existing = await this.findExistingLocalRecord(entityTable, change);
+        const existing = await this.findExistingLocalRecord(entityTable, change, params.entidad);
         const pendingOps = existing
           ? await this.findUnconfirmedOutboxOps(params.entidad, existing.id)
           : [];
@@ -164,6 +166,19 @@ export const SyncPullEngine = {
             skippedPendingCount++;
           }
           continue;
+        }
+
+        // Protección monotónica contra reintentos o repeticiones de versiones ya superadas
+        if (existing && existing.serverVersion !== null && existing.serverVersion !== undefined) {
+          const existingNumericVersion = Number(existing.serverVersion);
+          const incomingNumericVersion = Number(change.versionServidor);
+          if (
+            Number.isFinite(existingNumericVersion) &&
+            Number.isFinite(incomingNumericVersion) &&
+            incomingNumericVersion < existingNumericVersion
+          ) {
+            continue;
+          }
         }
 
         if (isRemoteDelete) {
@@ -216,7 +231,8 @@ export const SyncPullEngine = {
 
   async findExistingLocalRecord(
     entityTable: Table<BaseLocalEntity, string>,
-    change: SyncRemoteChangeItemDto<Record<string, unknown>>
+    change: SyncRemoteChangeItemDto<Record<string, unknown>>,
+    entidad?: SyncEntityName
   ): Promise<BaseLocalEntity | undefined> {
     const byRemoteId = await entityTable.where('remoteId').equals(change.remoteId).first();
     if (byRemoteId) return byRemoteId;
@@ -231,6 +247,16 @@ export const SyncPullEngine = {
     if (typeof change.remoteId === 'string' && change.remoteId.trim().length > 0) {
       const byPrimaryId = await entityTable.get(change.remoteId.trim());
       if (byPrimaryId) return byPrimaryId;
+    }
+
+    // Unicidad por animal en genealogía: evita crear dos registros para el mismo `cattleId`
+    // y detecta colisiones si el dispositivo local tenía cambios pendientes para el mismo ejemplar.
+    if (entidad === 'genealogy' && change.datos && typeof change.datos === 'object') {
+      const rawAnimalId = change.datos.idAnimal ?? change.datos.cattleId ?? change.datos.animalId;
+      if (typeof rawAnimalId === 'string' && rawAnimalId.trim().length > 0) {
+        const byAnimal = await db.genealogy.where('cattleId').equals(rawAnimalId.trim()).first();
+        if (byAnimal) return byAnimal as unknown as BaseLocalEntity;
+      }
     }
 
     return undefined;

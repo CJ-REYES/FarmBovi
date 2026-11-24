@@ -297,6 +297,61 @@ namespace FarmBovi.Api.Migrations
                     b.ToTable("CambioServidor", (string)null);
                 });
 
+            modelBuilder.Entity("FarmBovi.Api.Models.EventoReproductivo", b =>
+                {
+                    b.Property<Guid>("IdEventoReproductivo")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreadoEn")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("EliminadoEn")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("Fecha")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("IdAnimal")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("IdAutor")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("IdSemental")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("Observaciones")
+                        .HasMaxLength(1000)
+                        .HasColumnType("varchar(1000)");
+
+                    b.Property<string>("Resultado")
+                        .HasMaxLength(120)
+                        .HasColumnType("varchar(120)");
+
+                    b.Property<string>("Tipo")
+                        .IsRequired()
+                        .HasMaxLength(60)
+                        .HasColumnType("varchar(60)");
+
+                    b.Property<long>("VersionRegistro")
+                        .IsConcurrencyToken()
+                        .HasColumnType("bigint");
+
+                    b.HasKey("IdEventoReproductivo");
+
+                    b.HasIndex("Fecha");
+
+                    b.HasIndex("IdAnimal");
+
+                    b.HasIndex("IdAutor");
+
+                    b.HasIndex("IdSemental");
+
+                    b.HasIndex("IdAnimal", "Fecha");
+
+                    b.ToTable("EventoReproductivo", (string)null);
+                });
+
             modelBuilder.Entity("FarmBovi.Api.Models.EventoSanitario", b =>
                 {
                     b.Property<Guid>("IdEventoSanitario")
@@ -957,6 +1012,26 @@ namespace FarmBovi.Api.Migrations
                     b.HasOne("FarmBovi.Api.Models.Usuario", null)
                         .WithMany()
                         .HasForeignKey("IdUsuario")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("FarmBovi.Api.Models.EventoReproductivo", b =>
+                {
+                    b.HasOne("FarmBovi.Api.Models.Animal", null)
+                        .WithMany()
+                        .HasForeignKey("IdAnimal")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("FarmBovi.Api.Models.Usuario", null)
+                        .WithMany()
+                        .HasForeignKey("IdAutor")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("FarmBovi.Api.Models.Animal", null)
+                        .WithMany()
+                        .HasForeignKey("IdSemental")
                         .OnDelete(DeleteBehavior.Restrict);
                 });
 

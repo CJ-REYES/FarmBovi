@@ -164,10 +164,12 @@ export interface LocalFeedingRecord extends BaseLocalEntity {
 
 export interface LocalReproductionRecord extends BaseLocalEntity {
   cattleId: string;
-  /** Tipo de evento reproductivo (alias `tipo` en contrato futuro `EventoReproductivo`). */
+  /** Semental opcional asociado al evento (Backend: `IdSemental`). */
+  sementalId?: string | null;
+  /** Tipo de evento reproductivo (Backend: `Tipo`). */
   evento: string;
   fecha: string;
-  /** Resultado del evento reproductivo (campo `Resultado` documentado en contrato de sincronización). */
+  /** Resultado del evento reproductivo (Backend: `Resultado`). */
   resultado?: string | null;
   observaciones?: string;
 }
@@ -195,6 +197,7 @@ export interface LocalGenealogy extends BaseLocalEntity {
   cattleId: string;
   padreId?: string;
   madreId?: string;
+  observaciones?: string | null;
 }
 
 export interface LocalAlert extends BaseLocalEntity {

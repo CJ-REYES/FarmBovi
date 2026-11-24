@@ -63,7 +63,7 @@ const CLIENT_ENTITY_TO_BACKEND: Partial<Record<SyncEntityName, string>> = {
   ranches: 'Rancho',
   lots: 'Lote',
   cattle: 'Animal',
-  genealogy: 'Genealogia',
+  genealogy: 'GenealogiaAnimal',
   weighings: 'Pesaje',
   healthRecords: 'EventoSanitario',
   treatments: 'Tratamiento',
@@ -609,6 +609,25 @@ function normalizeTreatmentPayloadForBackend(
   return backendPayload;
 }
 
+function normalizeReproductionDateForBackend(rawFecha: string): string {
+  const trimmed = rawFecha.trim();
+  if (!trimmed) return trimmed;
+  // Fecha calendario pura ("yyyy-MM-dd") se conserva intacta
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return trimmed;
+  }
+  // Si ya incluye zona horaria explícita ("Z" o "±HH:MM"), conservarla
+  if (/(?:Z|[+-]\d{2}:\d{2})$/i.test(trimmed)) {
+    return trimmed;
+  }
+  // Cadena local proveniente de datetime-local o registros previos en cola (ej. "2026-11-05T08:12:00")
+  const parsed = new Date(trimmed);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toISOString();
+  }
+  return trimmed;
+}
+
 function normalizeReproductionPayloadForBackend(
   rawPayload: unknown,
   idRegistro: string,
@@ -638,22 +657,30 @@ function normalizeReproductionPayloadForBackend(
   const backendPayload: Record<string, unknown> = {};
   if (tipoOperacion === 'CREATE') {
     backendPayload.idEventoReproductivo = idRegistro;
-    const idAnimal = readTextOrNull(['idAnimal', 'cattleId']);
-    if (typeof idAnimal === 'string') {
-      backendPayload.idAnimal = idAnimal;
-    }
   }
 
-  const tipo = readTextOrNull(['tipo', 'evento']);
+  const idAnimal = readTextOrNull(['idAnimal', 'cattleId', 'animalId']);
+  if (typeof idAnimal === 'string') {
+    backendPayload.idAnimal = idAnimal;
+  }
+
+  const idSemental = readTextOrNull(['idSemental', 'sementalId', 'sireId']);
+  if (idSemental !== undefined) {
+    backendPayload.idSemental = idSemental;
+  }
+
+  const tipo = readTextOrNull(['tipo', 'evento', 'event']);
   if (typeof tipo === 'string') backendPayload.tipo = tipo;
 
-  const fecha = readTextOrNull(['fecha']);
-  if (typeof fecha === 'string') backendPayload.fecha = fecha;
+  const fecha = readTextOrNull(['fecha', 'date']);
+  if (typeof fecha === 'string') {
+    backendPayload.fecha = normalizeReproductionDateForBackend(fecha);
+  }
 
-  const resultado = readTextOrNull(['resultado']);
+  const resultado = readTextOrNull(['resultado', 'result']);
   if (resultado !== undefined) backendPayload.resultado = resultado;
 
-  const observaciones = readTextOrNull(['observaciones']);
+  const observaciones = readTextOrNull(['observaciones', 'notes']);
   if (observaciones !== undefined) backendPayload.observaciones = observaciones;
 
   return backendPayload;
@@ -685,6 +712,20 @@ function normalizeGenealogyPayloadForBackend(
     return undefined;
   };
 
+  const readTextOrNull = (keys: readonly string[]): string | null | undefined => {
+    for (const key of keys) {
+      if (rawPayload[key] !== undefined) {
+        const val = rawPayload[key];
+        if (val === null) return null;
+        if (typeof val === 'string') {
+          const trimmed = val.trim();
+          return trimmed.length > 0 ? trimmed : null;
+        }
+      }
+    }
+    return undefined;
+  };
+
   const backendPayload: Record<string, unknown> = {};
   if (tipoOperacion === 'CREATE') {
     backendPayload.idGenealogia = idRegistro;
@@ -699,6 +740,9 @@ function normalizeGenealogyPayloadForBackend(
 
   const idMadre = readGuidOrNull(['idMadre', 'madreId']);
   if (idMadre !== undefined) backendPayload.idMadre = idMadre;
+
+  const observaciones = readTextOrNull(['observaciones']);
+  if (observaciones !== undefined) backendPayload.observaciones = observaciones;
 
   return backendPayload;
 }

@@ -72,18 +72,10 @@ export const REPORT_BACKEND_DEPENDENCIES: readonly ReportBackendDependency[] = [
   {
     id: 'pesajes-rest',
     indicador: 'Evolución de peso',
-    fuenteActual: 'IndexedDB local (db.weighings) + cola de sincronización Push',
+    fuenteActual: 'IndexedDB local (db.weighings) + sincronización Push/Pull',
     endpointFaltante: 'GET /api/pesajes (PesajesController inexistente)',
     detalle:
-      'La evolución de peso refleja exclusivamente pesajes reales de báscula guardados en este dispositivo hasta que el Backend publique la entidad y controlador de Pesajes.'
-  },
-  {
-    id: 'reproduccion-rest',
-    indicador: 'Eventos reproductivos',
-    fuenteActual: 'IndexedDB local (db.reproductionRecords) + cola de sincronización',
-    endpointFaltante: 'GET /api/eventos-reproductivos (EventosReproductivosController inexistente)',
-    detalle:
-      'Los indicadores reproductivos muestran los eventos registrados localmente en IndexedDB; la sincronización remota se habilitará cuando el Backend publique EventoReproductivo.'
+      'La evolución de peso refleja pesajes reales de báscula sincronizados mediante Push/Pull y guardados en IndexedDB.'
   },
   {
     id: 'animal-categoria',

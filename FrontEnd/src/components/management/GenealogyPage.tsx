@@ -18,10 +18,10 @@ import {
 } from 'lucide-react';
 import { useConnectivity } from '../../hooks/useConnectivity';
 import type { Cattle } from '../../types/cattle';
-import {
-  GENEALOGY_BACKEND_DEPENDENCY,
-  type GenealogyInput,
-  type GenealogyRecord
+import type {
+  AnimalGenealogyProfile,
+  GenealogyInput,
+  GenealogyRecord
 } from '../../types/genealogy';
 import {
   GenealogyService,
@@ -70,9 +70,7 @@ export default function GenealogyPage() {
   const [animals, setAnimals] = useState<Cattle[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
-  const [backendNotice, setBackendNotice] = useState<string | null>(
-    GENEALOGY_BACKEND_DEPENDENCY.summaryMessage
-  );
+  const [warning, setWarning] = useState<string | null>(null);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
 
   const [selectedAnimalId, setSelectedAnimalId] = useState<string>(
@@ -80,6 +78,15 @@ export default function GenealogyPage() {
   );
   const [directorySearch, setDirectorySearch] = useState<string>('');
   const [includeDeleted, setIncludeDeleted] = useState<boolean>(false);
+
+  const [treeState, setTreeState] = useState<{
+    animalId: string;
+    profile: AnimalGenealogyProfile | null;
+    source?: 'server' | 'cache';
+    error: string | null;
+    loading: boolean;
+  } | null>(null);
+  const [treeRefreshTick, setTreeRefreshTick] = useState<number>(0);
 
   const [modalState, setModalState] = useState<ModalState>({ open: false });
   const [confirmDeactivate, setConfirmDeactivate] = useState<GenealogyRecord | null>(null);
@@ -92,7 +99,8 @@ export default function GenealogyPage() {
       const result = await GenealogyService.getAll({ includeDeleted: withDeleted });
       setRecords(result.records);
       setAnimals(result.animals);
-      setBackendNotice(result.backendNotice);
+      setWarning(result.warning);
+      setTreeRefreshTick((t) => t + 1);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : 'No se pudo cargar la información genealógica.'
@@ -110,7 +118,7 @@ export default function GenealogyPage() {
         if (!active) return;
         setRecords(result.records);
         setAnimals(result.animals);
-        setBackendNotice(result.backendNotice);
+        setWarning(result.warning);
         setError(null);
       } catch (err) {
         if (!active) return;
@@ -125,10 +133,27 @@ export default function GenealogyPage() {
     })();
 
     let previousSyncAt = SyncScheduler.getSnapshot().lastCompletedSyncAt;
+    let previousCycleFinishedAt = SyncScheduler.getSnapshot().lastCycleResult?.finishedAt ?? null;
     const unsubscribe = SyncScheduler.subscribe(() => {
-      const nextSyncAt = SyncScheduler.getSnapshot().lastCompletedSyncAt;
-      if (nextSyncAt && nextSyncAt !== previousSyncAt) {
+      const snap = SyncScheduler.getSnapshot();
+      const nextSyncAt = snap.lastCompletedSyncAt;
+      const nextCycle = snap.lastCycleResult;
+      const nextCycleFinishedAt = nextCycle?.finishedAt ?? null;
+
+      const fullSyncAdvanced = Boolean(nextSyncAt && nextSyncAt !== previousSyncAt);
+      const relevantPullApplied =
+        Boolean(nextCycleFinishedAt && nextCycleFinishedAt !== previousCycleFinishedAt) &&
+        Boolean(
+          nextCycle?.pull.some(
+            (item) =>
+              (item.entidad === 'genealogy' || item.entidad === 'cattle') &&
+              (item.appliedCount > 0 || item.deletedCount > 0 || item.conflictCount > 0)
+          )
+        );
+
+      if (fullSyncAdvanced || relevantPullApplied) {
         previousSyncAt = nextSyncAt;
+        previousCycleFinishedAt = nextCycleFinishedAt;
         void loadData(includeDeleted);
       }
     });
@@ -153,17 +178,67 @@ export default function GenealogyPage() {
     return map;
   }, [activeRecords]);
 
-  // Resolver animal seleccionado efectivo (si viene por URL o seleccionado; si no, muestra selector sin inventar nada)
+  // Resolver animal seleccionado efectivo (URL o seleccionado; si no, enfoca el primer vínculo activo)
   const effectiveAnimalId = useMemo(() => {
-    if (selectedAnimalId && animalById.has(selectedAnimalId)) {
+    if (selectedAnimalId) {
       return selectedAnimalId;
     }
-    // Si ya hay un vínculo genealógico registrado, enfocar el primero para consulta inmediata
     if (activeRecords.length > 0 && animalById.has(activeRecords[0].idAnimal)) {
       return activeRecords[0].idAnimal;
     }
     return '';
   }, [selectedAnimalId, animalById, activeRecords]);
+
+  useEffect(() => {
+    if (!effectiveAnimalId) {
+      return;
+    }
+
+    let active = true;
+
+    void (async () => {
+      try {
+        const treeRes = await GenealogyService.getAnimalTree(effectiveAnimalId, {
+          profundidad: 3,
+          animals
+        });
+        if (!active) return;
+        setTreeState({
+          animalId: effectiveAnimalId,
+          profile: treeRes.profile,
+          source: treeRes.source,
+          error: null,
+          loading: false
+        });
+        if (treeRes.warning) {
+          setWarning((prev) => prev ?? treeRes.warning);
+        }
+      } catch (err) {
+        if (!active) return;
+        setTreeState({
+          animalId: effectiveAnimalId,
+          profile: null,
+          source: undefined,
+          error:
+            err instanceof Error
+              ? err.message
+              : 'No se pudo consultar el árbol genealógico del ejemplar.',
+          loading: false
+        });
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [effectiveAnimalId, animals, treeRefreshTick]);
+
+  const activeTreeState =
+    effectiveAnimalId && treeState?.animalId === effectiveAnimalId ? treeState : null;
+  const treeProfile = activeTreeState?.profile ?? null;
+  const treeSource = activeTreeState?.source;
+  const treeError = activeTreeState?.error ?? null;
+  const treeLoading = Boolean(effectiveAnimalId && (!activeTreeState || activeTreeState.loading));
 
   const handleSelectAnimal = (animalId: string) => {
     setSelectedAnimalId(animalId);
@@ -185,10 +260,18 @@ export default function GenealogyPage() {
     [animals]
   );
 
-  const focalProfile = useMemo(() => {
+  const localFallbackProfile = useMemo(() => {
     if (!effectiveAnimalId) return null;
-    return buildAnimalGenealogyProfile(effectiveAnimalId, animals, activeRecords);
+    return buildAnimalGenealogyProfile(effectiveAnimalId, animals, activeRecords, 3);
   }, [effectiveAnimalId, animals, activeRecords]);
+
+  const focalProfile = useMemo(() => {
+    if (treeError) return null;
+    if (treeProfile && treeProfile.animal.id === effectiveAnimalId) {
+      return treeProfile;
+    }
+    return localFallbackProfile;
+  }, [treeError, treeProfile, effectiveAnimalId, localFallbackProfile]);
 
   const descendantsCountByAnimalId = useMemo(() => {
     const map = new Map<string, Set<string>>();
@@ -236,7 +319,9 @@ export default function GenealogyPage() {
   }, [records, includeDeleted, directorySearch, animalById]);
 
   const openRegisterOrEditForAnimal = (animalId: string) => {
-    const existing = activeRecordByAnimalId.get(animalId);
+    const existing =
+      activeRecordByAnimalId.get(animalId) ??
+      (focalProfile?.animal.id === animalId ? focalProfile.record : null);
     if (existing) {
       setModalState({ open: true, mode: 'edit', record: existing });
     } else {
@@ -394,12 +479,6 @@ export default function GenealogyPage() {
           </span>
         );
       }
-    },
-    {
-      key: 'acciones',
-      header: 'Acciones',
-      hideOnCard: true,
-      renderCell: (rec) => renderRecordActions(rec)
     }
   ];
 
@@ -446,17 +525,15 @@ export default function GenealogyPage() {
         </div>
       </header>
 
-      {backendNotice && (
+      {warning && (
         <div
           role="status"
           className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-brand-slate text-[12px] flex items-start gap-2.5"
         >
           <Info size={16} className="text-amber-700 shrink-0 mt-0.5" />
           <div className="space-y-1">
-            <p className="font-semibold text-brand-forest">
-              Dependencia de Backend documentada ({GENEALOGY_BACKEND_DEPENDENCY.entityName})
-            </p>
-            <p>{backendNotice}</p>
+            <p className="font-semibold text-brand-forest">Consulta en modo caché local</p>
+            <p>{warning}</p>
           </div>
         </div>
       )}
@@ -559,7 +636,18 @@ export default function GenealogyPage() {
         <div className="bg-surface-white border border-border-light rounded-xl p-10 text-center text-brand-slate/60 text-[13px]">
           Cargando datos genealógicos...
         </div>
-      ) : animals.length === 0 ? (
+      ) : treeError ? (
+        <div
+          role="alert"
+          className="bg-surface-white border border-status-danger/35 rounded-xl p-6 shadow-sm flex items-start gap-3 text-status-danger"
+        >
+          <AlertCircle size={18} className="shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <p className="font-bold text-[14px]">No se pudo consultar el árbol genealógico</p>
+            <p className="text-[13px]">{treeError}</p>
+          </div>
+        </div>
+      ) : animals.length === 0 && !focalProfile ? (
         <div className="bg-surface-white border border-border-light rounded-xl p-6 shadow-sm">
           <EmptyState
             title="No hay animales registrados en el hato"
@@ -578,9 +666,15 @@ export default function GenealogyPage() {
       ) : focalProfile ? (
         <GenealogyTreeView
           profile={focalProfile}
+          source={treeSource}
+          loading={treeLoading}
           onSelectAnimal={handleSelectAnimal}
           onRegisterOrEdit={openRegisterOrEditForAnimal}
         />
+      ) : treeLoading ? (
+        <div className="bg-surface-white border border-border-light rounded-xl p-10 text-center text-brand-slate/60 text-[13px]">
+          Consultando árbol genealógico...
+        </div>
       ) : (
         <div className="bg-surface-white border border-border-light rounded-xl p-6 shadow-sm">
           <EmptyState
@@ -720,7 +814,9 @@ export default function GenealogyPage() {
                 {animalById.get(confirmDeactivate.idAnimal)?.arete ||
                   confirmDeactivate.idAnimal.slice(0, 8)}
               </strong>
-              ? Se aplicará baja lógica local en IndexedDB.
+              ? {isOnline
+                ? 'Se aplicará baja lógica en el servidor y en la copia local.'
+                : 'Se aplicará baja lógica local en IndexedDB y quedará pendiente de sincronización.'}
             </p>
             <div className="flex justify-end gap-2 pt-2">
               <button

@@ -569,12 +569,6 @@ export default function AlertsPage() {
       renderCell: (a) => (
         <span className="text-[12px] font-semibold text-brand-slate">{a.estado}</span>
       )
-    },
-    {
-      key: 'acciones',
-      header: 'Acciones',
-      hideOnCard: true,
-      renderCell: (a) => renderAlertActions(a)
     }
   ];
 
