@@ -11,18 +11,48 @@ namespace FarmBovi.Api.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            // 1. Soltar FKs existentes hacia Usuario antes de modificar columnas/PK
-            migrationBuilder.DropForeignKey(name: "FK_Alimentacion_Usuario_IdAutor", table: "Alimentacion");
-            migrationBuilder.DropForeignKey(name: "FK_Animal_Usuario_IdAutor", table: "Animal");
-            migrationBuilder.DropForeignKey(name: "FK_EventoSanitario_Usuario_IdAutor", table: "EventoSanitario");
-            migrationBuilder.DropForeignKey(name: "FK_Lote_Usuario_IdAutor", table: "Lote");
-            migrationBuilder.DropForeignKey(name: "FK_MovimientoAnimal_Usuario_IdAutor", table: "MovimientoAnimal");
-            migrationBuilder.DropForeignKey(name: "FK_Rancho_Usuario_IdAutor", table: "Rancho");
-            migrationBuilder.DropForeignKey(name: "FK_Recordatorio_Usuario_IdAutor", table: "Recordatorio");
-            migrationBuilder.DropForeignKey(name: "FK_Recordatorio_Usuario_IdResponsable", table: "Recordatorio");
-            migrationBuilder.DropForeignKey(name: "FK_RegistroSyncServidor_Usuario_IdUsuario", table: "RegistroSyncServidor");
-            migrationBuilder.DropForeignKey(name: "FK_Tratamiento_Usuario_IdAutor", table: "Tratamiento");
-            migrationBuilder.DropForeignKey(name: "FK_UsuarioRancho_Usuario_IdUsuario", table: "UsuarioRancho");
+            // 1. Soltar FKs existentes hacia Usuario/usuario de forma segura si existen
+            migrationBuilder.Sql(@"
+                DROP PROCEDURE IF EXISTS `_sp_drop_fks_usuario_seguro`;
+            ");
+            migrationBuilder.Sql(@"
+                CREATE PROCEDURE `_sp_drop_fks_usuario_seguro`()
+                BEGIN
+                    DECLARE done INT DEFAULT FALSE;
+                    DECLARE v_table_name VARCHAR(128);
+                    DECLARE v_constraint_name VARCHAR(128);
+                    DECLARE cur CURSOR FOR
+                        SELECT tc.TABLE_NAME, tc.CONSTRAINT_NAME
+                        FROM information_schema.TABLE_CONSTRAINTS tc
+                        INNER JOIN information_schema.KEY_COLUMN_USAGE kcu
+                            ON tc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA
+                           AND tc.TABLE_NAME = kcu.TABLE_NAME
+                           AND tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+                        WHERE tc.CONSTRAINT_SCHEMA = DATABASE()
+                          AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
+                          AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
+                          AND LOWER(kcu.REFERENCED_TABLE_NAME) = 'usuario';
+                    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
+
+                    OPEN cur;
+                    read_loop: LOOP
+                        FETCH cur INTO v_table_name, v_constraint_name;
+                        IF done THEN
+                            LEAVE read_loop;
+                        END IF;
+                        SET @sql = CONCAT(
+                            'ALTER TABLE `', REPLACE(v_table_name, '`', '``'),
+                            '` DROP FOREIGN KEY `', REPLACE(v_constraint_name, '`', '``'), '`;'
+                        );
+                        PREPARE stmt FROM @sql;
+                        EXECUTE stmt;
+                        DEALLOCATE PREPARE stmt;
+                    END LOOP;
+                    CLOSE cur;
+                END;
+            ");
+            migrationBuilder.Sql("CALL `_sp_drop_fks_usuario_seguro`();");
+            migrationBuilder.Sql("DROP PROCEDURE IF EXISTS `_sp_drop_fks_usuario_seguro`;");
 
             // Soltar FK de GenealogiaAnimal si existe la tabla y la restricción
             migrationBuilder.Sql(@"
