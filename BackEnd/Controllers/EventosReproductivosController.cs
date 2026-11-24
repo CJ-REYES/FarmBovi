@@ -29,7 +29,7 @@ public sealed class EventosReproductivosController(
         [FromQuery] bool incluirEliminados = false,
         CancellationToken ct = default)
     {
-        var userId = RanchAccessService.GetUserId(User) ?? Guid.Empty;
+        var userId = RanchAccessService.GetUserId(User) ?? 0;
 
         if (idRancho is { } requestedRanchId)
         {
@@ -129,7 +129,7 @@ public sealed class EventosReproductivosController(
                 : this.ConflictProblem("Ya existe un evento reproductivo con el identificador proporcionado y contenido diferente o eliminado.");
         }
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? 0, ct);
         if (authorError is not null)
             return this.ValidationError(authorError, nameof(dto.IdAutor));
 
@@ -206,7 +206,7 @@ public sealed class EventosReproductivosController(
         if (dto.VersionRegistro.HasValue && dto.VersionRegistro.Value != item.VersionRegistro)
             return this.ConflictProblem("El evento reproductivo fue modificado por otro usuario o dispositivo. Recarga los datos e intenta nuevamente.");
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? 0, ct);
         if (authorError is not null)
             return this.ValidationError(authorError, nameof(dto.IdAutor));
 

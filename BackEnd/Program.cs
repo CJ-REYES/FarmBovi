@@ -94,6 +94,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             }
         };
     });
+
 // Política global: todo endpoint exige JWT salvo los marcados explícitamente con [AllowAnonymous].
 builder.Services.AddAuthorization(options =>
 {
@@ -146,8 +147,13 @@ if (app.Environment.IsDevelopment())
 {
     app.UseDeveloperExceptionPage();
 
-    await using var scope = app.Services.CreateAsyncScope();
-    await scope.ServiceProvider.GetRequiredService<FarmDbContext>().Database.MigrateAsync();
+    var applyMigrationsOnStartup = builder.Configuration.GetValue<bool>("Database:ApplyMigrationsOnStartup");
+    if (applyMigrationsOnStartup)
+    {
+        await using var scope = app.Services.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FarmDbContext>();
+        await dbContext.Database.MigrateAsync();
+    }
 
     app.UseSwagger();
     app.UseSwaggerUI();
@@ -187,6 +193,7 @@ app.UseCors("Frontend");
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers().RequireAuthorization();
+
 // Excepción pública: sonda de salud para despliegue/monitoreo (no expone datos de negocio).
 app.MapHealthChecks("/health").AllowAnonymous();
 

@@ -42,7 +42,7 @@ public sealed class TratamientoCreateDto : IValidatableObject
     public string Estado { get; set; } = string.Empty;
 
     [NotEmptyGuid(AllowNull = true)]
-    public Guid? IdAutor { get; set; }
+    public int? IdAutor { get; set; }
 
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
     {
@@ -91,7 +91,7 @@ public sealed class TratamientoUpdateDto : IValidatableObject
     public string Estado { get; set; } = string.Empty;
 
     [NotEmptyGuid(AllowNull = true)]
-    public Guid? IdAutor { get; set; }
+    public int? IdAutor { get; set; }
 
     [ValidDateRange(AllowNull = true)]
     public DateTime? EliminadoEn { get; set; }
@@ -121,7 +121,7 @@ public sealed class TratamientoResponseDto
     public string Responsable { get; set; } = string.Empty;
     public string? PrescripcionUri { get; set; }
     public string Estado { get; set; } = string.Empty;
-    public Guid IdAutor { get; set; }
+    public int IdAutor { get; set; }
     public DateTime CreadoEn { get; set; }
     public long VersionRegistro { get; set; }
     public DateTime? EliminadoEn { get; set; }

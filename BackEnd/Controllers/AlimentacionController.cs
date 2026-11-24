@@ -1,189 +1,179 @@
 using FarmBovi.Api.Data;
-using FarmBovi.Api.DTOs;
 using FarmBovi.Api.Models;
 using FarmBovi.Api.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 namespace FarmBovi.Api.Controllers;
 
+[Authorize]
 [ApiController]
 [Route("api/alimentacion")]
-[RanchScope(RanchResource.Alimentacion)]
-public sealed class AlimentacionController(FarmDbContext db, FarmDomainValidationService validator) : ControllerBase
+[Route("api/feeding")]
+public sealed class AlimentacionController(FarmDbContext db, RanchAccessService access) : ControllerBase
 {
+    private async Task<(Guid? RanchId, IActionResult? Error)> ResolveAndValidateTargetRanchAsync(
+        int userId,
+        Guid? idAnimal,
+        Guid? idLote,
+        CancellationToken ct)
+    {
+        Guid? animalRanchId = null;
+        if (idAnimal.HasValue && idAnimal.Value != Guid.Empty)
+        {
+            animalRanchId = await db.Animales.AsNoTracking()
+                .Where(a => a.IdAnimal == idAnimal.Value)
+                .Select(a => (Guid?)a.IdRancho)
+                .FirstOrDefaultAsync(ct);
+
+            if (!animalRanchId.HasValue || animalRanchId.Value == Guid.Empty)
+                return (null, BadRequest("El animal indicado no existe."));
+        }
+
+        Guid? loteRanchId = null;
+        if (idLote.HasValue && idLote.Value != Guid.Empty)
+        {
+            loteRanchId = await db.Lotes.AsNoTracking()
+                .Where(l => l.IdLote == idLote.Value)
+                .Select(l => (Guid?)l.IdRancho)
+                .FirstOrDefaultAsync(ct);
+
+            if (!loteRanchId.HasValue || loteRanchId.Value == Guid.Empty)
+                return (null, BadRequest("El lote indicado no existe."));
+        }
+
+        if (animalRanchId.HasValue && loteRanchId.HasValue && animalRanchId.Value != loteRanchId.Value)
+            return (null, BadRequest("El animal y el lote indicados pertenecen a ranchos distintos."));
+
+        var targetRanchId = animalRanchId ?? loteRanchId;
+        if (!targetRanchId.HasValue)
+            return (null, BadRequest("Debe indicar un idAnimal o idLote válido."));
+
+        if (!await access.CanAccessAsync(userId, targetRanchId.Value, ct))
+            return (null, Forbid());
+
+        return (targetRanchId.Value, null);
+    }
+
     [HttpGet]
-    [ProducesResponseType(typeof(List<AlimentacionResponseDto>), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
-    public async Task<ActionResult<List<AlimentacionResponseDto>>> GetAll(
-        [FromServices] RanchAccessService access,
-        [FromQuery] Guid? idRancho = null,
+    public async Task<ActionResult<List<Alimentacion>>> GetAll(
+        [FromQuery] Guid? idRancho,
         [FromQuery] bool incluirEliminados = false,
         CancellationToken ct = default)
     {
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
+
+        var ranchosAutorizadosIds = await access.ActiveRanchIds(userId.Value).Distinct().ToListAsync(ct);
+
         var query = db.Alimentaciones.AsNoTracking();
         if (!incluirEliminados)
             query = query.Where(a => a.EliminadoEn == null);
 
-        var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
-        if (idRancho is { } targetRanch && targetRanch != Guid.Empty)
+        if (idRancho.HasValue && idRancho.Value != Guid.Empty)
         {
-            query = query.Where(x =>
-                (x.IdAnimal != null && db.Animales.Any(a => a.IdAnimal == x.IdAnimal && a.IdRancho == targetRanch)) ||
-                (x.IdAnimal == null && x.IdLote != null && db.Lotes.Any(l => l.IdLote == x.IdLote && l.IdRancho == targetRanch)));
+            if (!ranchosAutorizadosIds.Contains(idRancho.Value))
+                return Forbid();
+
+            query = query.Where(a =>
+                (a.IdAnimal.HasValue && db.Animales.Any(an => an.IdAnimal == a.IdAnimal.Value && an.IdRancho == idRancho.Value)) ||
+                (a.IdLote.HasValue && db.Lotes.Any(l => l.IdLote == a.IdLote.Value && l.IdRancho == idRancho.Value))
+            );
         }
         else
         {
-            query = query.Where(x =>
-                (x.IdAnimal != null && db.Animales.Any(a => a.IdAnimal == x.IdAnimal && ranchIds.Contains(a.IdRancho))) ||
-                (x.IdAnimal == null && x.IdLote != null && db.Lotes.Any(l => l.IdLote == x.IdLote && ranchIds.Contains(l.IdRancho))));
+            query = query.Where(a =>
+                (a.IdAnimal.HasValue && db.Animales.Any(an => an.IdAnimal == a.IdAnimal.Value && ranchosAutorizadosIds.Contains(an.IdRancho))) ||
+                (a.IdLote.HasValue && db.Lotes.Any(l => l.IdLote == a.IdLote.Value && ranchosAutorizadosIds.Contains(l.IdRancho)))
+            );
         }
 
-        var items = await query.ToListAsync(ct);
-        return Ok(items.Select(ToResponseDto).ToList());
+        var lista = await query.ToListAsync(ct);
+        return Ok(lista);
     }
 
     [HttpGet("{id:guid}")]
-    [ProducesResponseType(typeof(AlimentacionResponseDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<AlimentacionResponseDto>> Get(Guid id, CancellationToken ct) =>
-        await db.Alimentaciones.AsNoTracking().FirstOrDefaultAsync(a => a.IdAlimentacion == id, ct) is { } item
-            ? Ok(ToResponseDto(item))
-            : this.NotFoundProblem("El registro de alimentación solicitado no existe.");
+    public async Task<IActionResult> Get(Guid id, CancellationToken ct)
+    {
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
+
+        var item = await db.Alimentaciones.AsNoTracking().FirstOrDefaultAsync(a => a.IdAlimentacion == id, ct);
+        if (item is null) return NotFound();
+
+        var (_, error) = await ResolveAndValidateTargetRanchAsync(userId.Value, item.IdAnimal, item.IdLote, ct);
+        if (error is not null) return error;
+
+        return Ok(item);
+    }
 
     [HttpPost]
-    [ProducesResponseType(typeof(AlimentacionResponseDto), StatusCodes.Status201Created)]
-    [ProducesResponseType(typeof(AlimentacionResponseDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
-    public async Task<ActionResult<AlimentacionResponseDto>> Create(
-        [FromServices] RanchAccessService access,
-        AlimentacionCreateDto dto,
-        CancellationToken ct)
+    public async Task<IActionResult> Create(Alimentacion item, CancellationToken ct)
     {
-        var id = dto.IdAlimentacion ?? Guid.NewGuid();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
-        var existing = await db.Alimentaciones.AsNoTracking().FirstOrDefaultAsync(a => a.IdAlimentacion == id, ct);
+        var (_, error) = await ResolveAndValidateTargetRanchAsync(userId.Value, item.IdAnimal, item.IdLote, ct);
+        if (error is not null) return error;
+
+        if (item.IdAlimentacion == Guid.Empty)
+            item.IdAlimentacion = Guid.NewGuid();
+
+        var existing = await db.Alimentaciones.AsNoTracking()
+            .FirstOrDefaultAsync(a => a.IdAlimentacion == item.IdAlimentacion, ct);
         if (existing is not null)
-        {
-            return existing.EliminadoEn is null && MatchesAlimentacion(existing, dto)
-                ? Ok(ToResponseDto(existing))
-                : this.ConflictProblem("Ya existe un registro de alimentación con el identificador proporcionado y contenido diferente o eliminado.");
-        }
+            return Ok(existing);
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
-        if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
+        item.IdAutor = userId.Value;
+        item.Alimento = item.Alimento.Trim();
+        item.Racion = item.Racion.Trim();
+        item.Unidad = item.Unidad.Trim();
+        item.Frecuencia = item.Frecuencia.Trim();
+        if (item.Inicio == default) item.Inicio = DateTime.UtcNow;
+        if (item.CreadoEn == default) item.CreadoEn = DateTime.UtcNow;
+        if (item.VersionRegistro <= 0) item.VersionRegistro = 1;
 
-        var inicio = ApiProblemResults.EnsureUtc(dto.Inicio);
-        var fin = ApiProblemResults.EnsureUtc(dto.Fin);
-        var validationError = await validator.ValidateAlimentacionAsync(dto.IdAnimal, dto.IdLote, dto.Cantidad, inicio, fin, ct);
-        if (validationError is not null) return this.ValidationError(validationError);
-
-        var alimentacion = new Alimentacion
-        {
-            IdAlimentacion = id,
-            IdAnimal = dto.IdAnimal,
-            IdLote = dto.IdLote,
-            Alimento = dto.Alimento.Trim(),
-            Racion = dto.Racion.Trim(),
-            Cantidad = dto.Cantidad,
-            Unidad = dto.Unidad.Trim(),
-            Frecuencia = dto.Frecuencia.Trim(),
-            Inicio = inicio,
-            Fin = fin,
-            CambioDieta = dto.CambioDieta?.Trim(),
-            IdAutor = authorId,
-            CreadoEn = DateTime.UtcNow,
-            VersionRegistro = 1
-        };
-
-        db.Alimentaciones.Add(alimentacion);
+        db.Alimentaciones.Add(item);
         try
         {
             await db.SaveChangesAsync(ct);
         }
         catch (DbUpdateException)
         {
-            var collision = await db.Alimentaciones.AsNoTracking().FirstOrDefaultAsync(a => a.IdAlimentacion == id, ct);
-            if (collision is not null)
-            {
-                var userId = RanchAccessService.GetUserId(User);
-                var collisionRanch = await access.RanchOfAlimentacionAsync(collision.IdAlimentacion, ct);
-                if (userId is { } uid && collisionRanch is { } ranchId && ranchId != Guid.Empty &&
-                    await access.CanAccessAsync(uid, ranchId, ct))
-                {
-                    return collision.EliminadoEn is null && MatchesAlimentacion(collision, dto)
-                        ? Ok(ToResponseDto(collision))
-                        : this.ConflictProblem("Ya existe un registro de alimentación con el identificador proporcionado y contenido diferente o eliminado.");
-                }
-
-                return this.ConflictProblem("Conflicto con un recurso existente.");
-            }
-
-            return this.ConflictProblem("No se pudo registrar la alimentación; verifica las referencias.");
+            return Conflict("No se pudo registrar la alimentación; verifica las referencias.");
         }
 
-        return CreatedAtAction(nameof(Get), new { id = alimentacion.IdAlimentacion }, ToResponseDto(alimentacion));
+        return CreatedAtAction(nameof(Get), new { id = item.IdAlimentacion }, item);
     }
 
     [HttpPut("{id:guid}")]
-    [ProducesResponseType(StatusCodes.Status204NoContent)]
-    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
-    public async Task<IActionResult> Update(
-        [FromServices] RanchAccessService access,
-        Guid id,
-        AlimentacionUpdateDto dto,
-        CancellationToken ct)
+    public async Task<IActionResult> Update(Guid id, Alimentacion input, CancellationToken ct)
     {
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
+
         var item = await db.Alimentaciones.FindAsync([id], ct);
-        if (item is null) return this.NotFoundProblem("El registro de alimentación solicitado no existe.");
+        if (item is null) return NotFound();
 
-        if (item.EliminadoEn is not null)
-            return this.ConflictProblem("No se puede actualizar un registro de alimentación eliminado.");
+        var (_, existingError) = await ResolveAndValidateTargetRanchAsync(userId.Value, item.IdAnimal, item.IdLote, ct);
+        if (existingError is not null) return existingError;
 
-        if (dto.EliminadoEn.HasValue)
-            return this.ValidationError("Para eliminar un registro de alimentación utiliza el endpoint DELETE.", nameof(dto.EliminadoEn));
+        var (_, newError) = await ResolveAndValidateTargetRanchAsync(userId.Value, input.IdAnimal, input.IdLote, ct);
+        if (newError is not null) return newError;
 
-        var currentRanch = await access.RanchOfAlimentacionAsync(id, ct);
-        Guid? targetRanch = dto.IdAnimal.HasValue
-            ? await access.RanchOfAnimalAsync(dto.IdAnimal.Value, ct)
-            : dto.IdLote.HasValue
-                ? await access.RanchOfLoteAsync(dto.IdLote.Value, ct)
-                : null;
-        if (currentRanch is { } curRanch && curRanch != Guid.Empty &&
-            targetRanch is { } dstRanch && dstRanch != curRanch)
-        {
-            return this.ValidationError("No se permite reasignar una alimentación a un animal o lote de otro rancho.");
-        }
-
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
-        if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
-
-        var inicio = ApiProblemResults.EnsureUtc(dto.Inicio);
-        var fin = ApiProblemResults.EnsureUtc(dto.Fin);
-        var validationError = await validator.ValidateAlimentacionAsync(dto.IdAnimal, dto.IdLote, dto.Cantidad, inicio, fin, ct);
-        if (validationError is not null) return this.ValidationError(validationError);
-
-        item.IdAnimal = dto.IdAnimal;
-        item.IdLote = dto.IdLote;
-        item.Alimento = dto.Alimento.Trim();
-        item.Racion = dto.Racion.Trim();
-        item.Cantidad = dto.Cantidad;
-        item.Unidad = dto.Unidad.Trim();
-        item.Frecuencia = dto.Frecuencia.Trim();
-        item.Inicio = inicio;
-        item.Fin = fin;
-        item.CambioDieta = dto.CambioDieta?.Trim();
-        item.IdAutor = authorId;
+        item.IdAnimal = input.IdAnimal;
+        item.IdLote = input.IdLote;
+        item.Alimento = input.Alimento.Trim();
+        item.Racion = input.Racion.Trim();
+        item.Cantidad = input.Cantidad;
+        item.Unidad = input.Unidad.Trim();
+        item.Frecuencia = input.Frecuencia.Trim();
+        item.Inicio = input.Inicio;
+        item.Fin = input.Fin;
+        item.CambioDieta = input.CambioDieta;
+        item.IdAutor = userId.Value;
+        item.EliminadoEn = input.EliminadoEn;
         item.VersionRegistro++;
 
         try
@@ -192,21 +182,23 @@ public sealed class AlimentacionController(FarmDbContext db, FarmDomainValidatio
         }
         catch (DbUpdateException)
         {
-            return this.ConflictProblem("No se pudo actualizar la alimentación; verifica las referencias.");
+            return Conflict("No se pudo actualizar el registro de alimentación.");
         }
 
         return NoContent();
     }
 
     [HttpDelete("{id:guid}")]
-    [ProducesResponseType(StatusCodes.Status204NoContent)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
+
         var item = await db.Alimentaciones.FindAsync([id], ct);
-        if (item is null) return this.NotFoundProblem("El registro de alimentación solicitado no existe.");
+        if (item is null) return NotFound();
+
+        var (_, error) = await ResolveAndValidateTargetRanchAsync(userId.Value, item.IdAnimal, item.IdLote, ct);
+        if (error is not null) return error;
 
         if (item.EliminadoEn is null)
         {
@@ -217,35 +209,4 @@ public sealed class AlimentacionController(FarmDbContext db, FarmDomainValidatio
 
         return NoContent();
     }
-
-    private static bool MatchesAlimentacion(Alimentacion existing, AlimentacionCreateDto dto) =>
-        existing.IdAnimal == dto.IdAnimal &&
-        existing.IdLote == dto.IdLote &&
-        ApiProblemResults.SameText(existing.Alimento, dto.Alimento) &&
-        ApiProblemResults.SameText(existing.Racion, dto.Racion) &&
-        existing.Cantidad == dto.Cantidad &&
-        ApiProblemResults.SameText(existing.Unidad, dto.Unidad) &&
-        ApiProblemResults.SameText(existing.Frecuencia, dto.Frecuencia) &&
-        ApiProblemResults.SameUtcInstant(existing.Inicio, dto.Inicio) &&
-        ApiProblemResults.SameUtcInstant(existing.Fin, dto.Fin) &&
-        ApiProblemResults.SameText(existing.CambioDieta, dto.CambioDieta);
-
-    internal static AlimentacionResponseDto ToResponseDto(Alimentacion a) => new()
-    {
-        IdAlimentacion = a.IdAlimentacion,
-        IdAnimal = a.IdAnimal,
-        IdLote = a.IdLote,
-        Alimento = a.Alimento,
-        Racion = a.Racion,
-        Cantidad = a.Cantidad,
-        Unidad = a.Unidad,
-        Frecuencia = a.Frecuencia,
-        Inicio = a.Inicio,
-        Fin = a.Fin,
-        CambioDieta = a.CambioDieta,
-        IdAutor = a.IdAutor,
-        CreadoEn = a.CreadoEn,
-        VersionRegistro = a.VersionRegistro,
-        EliminadoEn = a.EliminadoEn
-    };
 }

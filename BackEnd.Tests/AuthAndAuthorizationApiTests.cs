@@ -15,7 +15,6 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
-using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
 using Xunit;
@@ -89,7 +88,7 @@ public sealed class FarmBoviApiFactory : WebApplicationFactory<Program>
         await db.SaveChangesAsync();
     }
 
-    public static string CreateToken(Guid userId, DateTime? expires = null, string signingKey = SigningKey,
+    public static string CreateToken(int userId, DateTime? expires = null, string signingKey = SigningKey,
         string issuer = Issuer, DateTime? notBefore = null)
     {
         var credentials = new SigningCredentials(
@@ -110,10 +109,10 @@ public sealed class AuthAndAuthorizationApiTests : IAsyncLifetime
     private const string Password = "ClaveSegura123";
 
     private readonly FarmBoviApiFactory _factory = new();
-    private readonly Guid _adminA = Guid.NewGuid();
-    private readonly Guid _workerA = Guid.NewGuid();
-    private readonly Guid _adminB = Guid.NewGuid();
-    private readonly Guid _inactive = Guid.NewGuid();
+    private readonly int _adminA = 1;
+    private readonly int _workerA = 2;
+    private readonly int _adminB = 3;
+    private readonly int _inactive = 4;
     private readonly Guid _ranchA = Guid.NewGuid();
     private readonly Guid _ranchB = Guid.NewGuid();
     private readonly Guid _loteA = Guid.NewGuid();
@@ -124,9 +123,9 @@ public sealed class AuthAndAuthorizationApiTests : IAsyncLifetime
     {
         await _factory.SeedAsync(db =>
         {
-            Usuario User(Guid id, string name, string estado = "Activo")
+            Usuario User(int id, string name, string estado = "Activo")
             {
-                var u = new Usuario { IdUsuario = id, Nombre = name, Correo = $"{name.ToLowerInvariant()}@farmbovi.test", Estado = estado };
+                var u = new Usuario { Id = id, Nombre = name, Correo = $"{name.ToLowerInvariant()}@farmbovi.test", Estado = estado };
                 u.Contrasena = Hasher.HashPassword(u, Password);
                 return u;
             }
@@ -162,7 +161,7 @@ public sealed class AuthAndAuthorizationApiTests : IAsyncLifetime
         return Task.CompletedTask;
     }
 
-    private HttpClient Client(Guid? userId = null)
+    private HttpClient Client(int? userId = null)
     {
         var client = _factory.CreateClient();
         if (userId is { } id)
@@ -309,11 +308,11 @@ public sealed class AuthAndAuthorizationApiTests : IAsyncLifetime
 
         // Solo ve su propio perfil.
         var visibleToWorker = await worker.GetFromJsonAsync<JsonElement>("/api/usuarios");
-        Assert.Equal(_workerA, Assert.Single(visibleToWorker.EnumerateArray()).GetProperty("idUsuario").GetGuid());
+        Assert.Equal(_workerA, Assert.Single(visibleToWorker.EnumerateArray()).GetProperty("id").GetInt32());
 
         // El administrador del rancho A ve a los usuarios de A, pero no a los de B.
         var visibleToAdmin = (await admin.GetFromJsonAsync<JsonElement>("/api/usuarios"))
-            .EnumerateArray().Select(u => u.GetProperty("idUsuario").GetGuid()).ToList();
+            .EnumerateArray().Select(u => u.GetProperty("id").GetInt32()).ToList();
         Assert.Contains(_workerA, visibleToAdmin);
         Assert.DoesNotContain(_adminB, visibleToAdmin);
         Assert.Equal(HttpStatusCode.Forbidden, (await admin.GetAsync($"/api/usuarios/{_adminB}")).StatusCode);

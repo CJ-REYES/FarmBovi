@@ -12,14 +12,14 @@ namespace FarmBovi.Api.Migrations
         {
             migrationBuilder.AddColumn<string>(
                 name: "ConfiguracionJson",
-                table: "Usuario",
+                table: "usuario",
                 type: "varchar(4000)",
                 maxLength: 4000,
                 nullable: true);
 
             migrationBuilder.AddColumn<string>(
                 name: "FotoPerfilRuta",
-                table: "Usuario",
+                table: "usuario",
                 type: "varchar(500)",
                 maxLength: 500,
                 nullable: true);
@@ -30,11 +30,11 @@ namespace FarmBovi.Api.Migrations
         {
             migrationBuilder.DropColumn(
                 name: "ConfiguracionJson",
-                table: "Usuario");
+                table: "usuario");
 
             migrationBuilder.DropColumn(
                 name: "FotoPerfilRuta",
-                table: "Usuario");
+                table: "usuario");
         }
     }
 }

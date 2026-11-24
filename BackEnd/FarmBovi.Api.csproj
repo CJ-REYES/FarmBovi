@@ -4,8 +4,17 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <OutputPath>bin\CustomBuild\</OutputPath>
+    <SignAssemblyOnBuild Condition="'$(SignAssemblyOnBuild)' == ''">false</SignAssemblyOnBuild>
     <UserSecretsId>0666c1d7-4fc1-4c3f-bc8b-3f2cbf7d3db7</UserSecretsId>
   </PropertyGroup>
+
+  
+<Target Name="SignMyAssembly"
+          AfterTargets="Build"
+          Condition="'$(OS)' == 'Windows_NT' and '$(SignAssemblyOnBuild)' == 'true' and Exists('$(TargetPath)')">
+    <Exec Command="powershell -NoProfile -NonInteractive -Command &quot;&amp; { $cert = Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Subject -like '*FarmBoviLocalCert*' } | Select-Object -First 1; Set-AuthenticodeSignature -FilePath '$(TargetPath)' -Certificate $cert }&quot;" />
+  </Target>
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.12" />
     <PackageReference Include="MySql.EntityFrameworkCore" Version="10.0.12" />

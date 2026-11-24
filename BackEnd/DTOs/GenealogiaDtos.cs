@@ -32,7 +32,7 @@ public sealed record GenealogiaRegistroDto(
     Guid? IdPadre,
     Guid? IdMadre,
     string? Observaciones,
-    Guid IdAutor,
+    int IdAutor,
     DateTime CreadoEn,
     long VersionRegistro);
 

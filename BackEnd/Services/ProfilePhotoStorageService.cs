@@ -93,6 +93,22 @@ public sealed class ProfilePhotoStorageService
     }
 
     /// <summary>
+    /// Guarda la foto de perfil de usuario (ID entero) en `public/imagenes/perfil-usuario/{userId}/...`
+    /// devolviendo únicamente la ruta relativa para persistir en la BD.
+    /// </summary>
+    public Task<(bool Ok, string? RelativePath, string? Error)> SaveUserProfilePhotoAsync(
+        int userId,
+        IFormFile? file,
+        CancellationToken ct) =>
+        SaveImageInCategoryAsync(
+            categoryFolder: "perfil-usuario",
+            ownerFolder: userId.ToString(),
+            filePrefix: "perfil",
+            file: file,
+            maxBytes: MaxProfilePhotoBytes,
+            ct: ct);
+
+    /// <summary>
     /// Guarda la foto de perfil de usuario en `public/imagenes/perfil-usuario/{userId}/...`
     /// devolviendo únicamente la ruta relativa para persistir en la BD.
     /// </summary>

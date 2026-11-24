@@ -80,7 +80,7 @@ public sealed class BoviScaleEstimationService(
     private const string OrigenBoviScaleIa = "boviscale_ia";
 
     public async Task<BoviScaleServiceOutcome> GetBySolicitudAsync(
-        Guid userId,
+        int userId,
         Guid idSolicitud,
         CancellationToken ct = default)
     {
@@ -121,7 +121,7 @@ public sealed class BoviScaleEstimationService(
     }
 
     public async Task<BoviScaleServiceOutcome> EstimateAndRecordAsync(
-        Guid userId,
+        int userId,
         SolicitarEstimacionPesoRequestDto request,
         CancellationToken ct = default)
     {
@@ -299,7 +299,7 @@ public sealed class BoviScaleEstimationService(
 
         // 7. Resolver nombre del responsable y persistir en la tabla existente Pesaje
         var userName = await db.Usuarios.AsNoTracking()
-            .Where(u => u.IdUsuario == userId)
+            .Where(u => u.Id == userId)
             .Select(u => u.Nombre)
             .FirstOrDefaultAsync(ct);
 
@@ -406,7 +406,7 @@ public sealed class BoviScaleEstimationService(
     }
 
     private async Task<BoviScaleServiceOutcome?> TryResolveExistingBySolicitudAsync(
-        Guid userId,
+        int userId,
         SolicitarEstimacionPesoRequestDto request,
         CancellationToken ct)
     {

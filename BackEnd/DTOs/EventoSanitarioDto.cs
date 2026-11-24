@@ -35,7 +35,7 @@ public sealed class EventoSanitarioCreateDto
     public string? Observaciones { get; set; }
 
     [NotEmptyGuid(AllowNull = true)]
-    public Guid? IdAutor { get; set; }
+    public int? IdAutor { get; set; }
 }
 
 public sealed class EventoSanitarioUpdateDto
@@ -68,7 +68,7 @@ public sealed class EventoSanitarioUpdateDto
     public string? Observaciones { get; set; }
 
     [NotEmptyGuid(AllowNull = true)]
-    public Guid? IdAutor { get; set; }
+    public int? IdAutor { get; set; }
 
     [ValidDateRange(AllowNull = true)]
     public DateTime? EliminadoEn { get; set; }
@@ -86,7 +86,7 @@ public sealed class EventoSanitarioResponseDto
     public string? EvidenciaDiagnosticoUri { get; set; }
     public string Responsable { get; set; } = string.Empty;
     public string? Observaciones { get; set; }
-    public Guid IdAutor { get; set; }
+    public int IdAutor { get; set; }
     public DateTime CreadoEn { get; set; }
     public long VersionRegistro { get; set; }
     public DateTime? EliminadoEn { get; set; }

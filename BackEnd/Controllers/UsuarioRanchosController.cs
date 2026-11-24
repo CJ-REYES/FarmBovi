@@ -1,153 +1,192 @@
 using FarmBovi.Api.Data;
-using FarmBovi.Api.DTOs;
 using FarmBovi.Api.Models;
 using FarmBovi.Api.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 namespace FarmBovi.Api.Controllers;
 
+[Authorize]
 [ApiController]
 [Route("api/usuario-ranchos")]
-[RanchScope(RanchResource.UsuarioRancho, AdminForCreate = true, AdminForUpdateDelete = true)]
-public sealed class UsuarioRanchosController(FarmDbContext db) : ControllerBase
+public sealed class UsuarioRanchosController(FarmDbContext db, RanchAccessService access) : ControllerBase
 {
-    [HttpGet]
-    [ProducesResponseType(typeof(List<UsuarioRanchoResponseDto>), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
-    public async Task<ActionResult<List<UsuarioRanchoResponseDto>>> GetAll(
-        [FromServices] RanchAccessService access,
-        CancellationToken ct)
+    private static readonly HashSet<string> AllowedRoles = new(StringComparer.OrdinalIgnoreCase)
     {
-        var userId = RanchAccessService.GetUserId(User) ?? Guid.Empty;
-        var adminRanchIds = access.AdminRanchIds(userId);
-        var items = await db.UsuarioRanchos.AsNoTracking()
-            .Where(ur => ur.IdUsuario == userId || adminRanchIds.Contains(ur.IdRancho))
-            .ToListAsync(ct);
+        "Administrador",
+        "Operador",
+        "Consulta"
+    };
 
-        return Ok(items.Select(ToResponseDto).ToList());
+    private static bool IsAdminRole(string? rol) =>
+        !string.IsNullOrWhiteSpace(rol) &&
+        RanchAccessService.AdminRoles.Contains(rol.Trim().ToLowerInvariant());
+
+    private static string NormalizeRole(string? rol)
+    {
+        if (string.IsNullOrWhiteSpace(rol)) return "Operador";
+        var trimmed = rol.Trim();
+        return trimmed.ToLowerInvariant() switch
+        {
+            "admin" or "administrador" or "propietario" => "Administrador",
+            "operador" => "Operador",
+            "consulta" => "Consulta",
+            _ => trimmed
+        };
+    }
+
+    [HttpGet]
+    public async Task<ActionResult<List<UsuarioRancho>>> GetAll([FromQuery] Guid? idRancho, CancellationToken ct = default)
+    {
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
+
+        var ranchosAutorizadosIds = await access.ActiveRanchIds(userId.Value).Distinct().ToListAsync(ct);
+
+        var query = db.UsuarioRanchos.AsNoTracking()
+            .Where(ur => ranchosAutorizadosIds.Contains(ur.IdRancho));
+
+        if (idRancho.HasValue && idRancho.Value != Guid.Empty)
+        {
+            if (!ranchosAutorizadosIds.Contains(idRancho.Value))
+                return Forbid();
+
+            query = query.Where(ur => ur.IdRancho == idRancho.Value);
+        }
+
+        var lista = await query.ToListAsync(ct);
+        return Ok(lista);
     }
 
     [HttpGet("{id:guid}")]
-    [ProducesResponseType(typeof(UsuarioRanchoResponseDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<UsuarioRanchoResponseDto>> Get(
-        [FromServices] RanchAccessService access,
-        Guid id,
-        CancellationToken ct)
+    public async Task<ActionResult<UsuarioRancho>> Get(Guid id, CancellationToken ct)
     {
-        var item = await db.UsuarioRanchos.AsNoTracking().FirstOrDefaultAsync(ur => ur.IdUsuarioRancho == id, ct);
-        if (item is null)
-            return this.NotFoundProblem("La asignación usuario-rancho solicitada no existe.");
-
         var userId = RanchAccessService.GetUserId(User);
-        if (userId is null)
-            return this.UnauthorizedProblem();
+        if (userId is null) return Unauthorized();
 
-        if (item.IdUsuario != userId.Value && !await access.IsAdminAsync(userId.Value, item.IdRancho, ct))
-            return this.ForbiddenProblem("Solo un administrador del rancho puede consultar membresías de otros usuarios.");
+        var item = await db.UsuarioRanchos.AsNoTracking().FirstOrDefaultAsync(ur => ur.IdUsuarioRancho == id, ct);
+        if (item is null) return NotFound();
 
-        return Ok(ToResponseDto(item));
+        if (!await access.CanAccessAsync(userId.Value, item.IdRancho, ct))
+            return Forbid();
+
+        return Ok(item);
     }
 
     [HttpPost]
-    [ProducesResponseType(typeof(UsuarioRanchoResponseDto), StatusCodes.Status201Created)]
-    [ProducesResponseType(typeof(UsuarioRanchoResponseDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
-    public async Task<ActionResult<UsuarioRanchoResponseDto>> Create(
-        [FromServices] RanchAccessService access,
-        UsuarioRanchoCreateDto dto,
-        CancellationToken ct)
+    public async Task<ActionResult<UsuarioRancho>> Create(UsuarioRancho item, CancellationToken ct)
     {
-        var id = dto.IdUsuarioRancho ?? Guid.NewGuid();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
-        var existing = await db.UsuarioRanchos.AsNoTracking().FirstOrDefaultAsync(ur => ur.IdUsuarioRancho == id, ct);
+        if (item.IdRancho == Guid.Empty || item.IdUsuario <= 0)
+            return BadRequest("IdRancho e IdUsuario son obligatorios.");
+
+        if (!await access.IsAdminAsync(userId.Value, item.IdRancho, ct))
+            return Forbid();
+
+        var normalizedRole = NormalizeRole(item.Rol);
+        if (!AllowedRoles.Contains(normalizedRole))
+            return BadRequest("Rol de membresía no válido.");
+
+        var targetUserExists = await db.Usuarios.AsNoTracking()
+            .AnyAsync(u => u.Id == item.IdUsuario, ct);
+        if (!targetUserExists)
+            return BadRequest("El usuario asignado no existe.");
+
+        var ranchExists = await db.Ranchos.AsNoTracking()
+            .AnyAsync(r => r.IdRancho == item.IdRancho && r.EliminadoEn == null, ct);
+        if (!ranchExists)
+            return NotFound("El rancho no existe o está eliminado.");
+
+        var existing = await db.UsuarioRanchos
+            .FirstOrDefaultAsync(ur => ur.IdUsuario == item.IdUsuario && ur.IdRancho == item.IdRancho, ct);
+
         if (existing is not null)
         {
-            return MatchesUsuarioRancho(existing, dto)
-                ? Ok(ToResponseDto(existing))
-                : this.ConflictProblem("Ya existe una asignación con el identificador proporcionado y contenido diferente.");
+            if (existing.FechaBaja is null && string.Equals(existing.Estado, "Activo", StringComparison.OrdinalIgnoreCase))
+                return Ok(existing);
+
+            existing.Rol = normalizedRole;
+            existing.Estado = "Activo";
+            existing.FechaBaja = null;
+            if (existing.FechaAlta == default) existing.FechaAlta = DateTime.UtcNow;
+
+            await db.SaveChangesAsync(ct);
+            return Ok(existing);
         }
 
-        var userExists = await db.Usuarios.AsNoTracking().AnyAsync(u => u.IdUsuario == dto.IdUsuario, ct);
-        if (!userExists) return this.ValidationError("El usuario especificado no existe.", nameof(dto.IdUsuario));
+        if (item.IdUsuarioRancho == Guid.Empty)
+            item.IdUsuarioRancho = Guid.NewGuid();
 
-        var ranchoExists = await db.Ranchos.AsNoTracking().AnyAsync(r => r.IdRancho == dto.IdRancho && r.EliminadoEn == null, ct);
-        if (!ranchoExists) return this.ValidationError("El rancho especificado no existe o está eliminado.", nameof(dto.IdRancho));
-
-        var item = new UsuarioRancho
-        {
-            IdUsuarioRancho = id,
-            IdUsuario = dto.IdUsuario,
-            IdRancho = dto.IdRancho,
-            Rol = dto.Rol.Trim(),
-            Estado = dto.Estado.Trim(),
-            FechaAlta = ApiProblemResults.EnsureUtc(dto.FechaAlta ?? DateTime.UtcNow),
-            FechaBaja = ApiProblemResults.EnsureUtc(dto.FechaBaja)
-        };
+        item.Rol = normalizedRole;
+        item.Estado = string.IsNullOrWhiteSpace(item.Estado) ? "Activo" : item.Estado.Trim();
+        item.FechaBaja = null;
+        if (item.FechaAlta == default) item.FechaAlta = DateTime.UtcNow;
 
         db.UsuarioRanchos.Add(item);
+
         try
         {
             await db.SaveChangesAsync(ct);
         }
         catch (DbUpdateException)
         {
-            var collision = await db.UsuarioRanchos.AsNoTracking().FirstOrDefaultAsync(ur => ur.IdUsuarioRancho == id, ct);
-            if (collision is not null)
-            {
-                var userId = RanchAccessService.GetUserId(User);
-                if (userId is { } uid &&
-                    (collision.IdUsuario == uid || await access.IsAdminAsync(uid, collision.IdRancho, ct)))
-                {
-                    return MatchesUsuarioRancho(collision, dto)
-                        ? Ok(ToResponseDto(collision))
-                        : this.ConflictProblem("Ya existe una asignación con el identificador proporcionado y contenido diferente.");
-                }
-
-                return this.ConflictProblem("Conflicto con un recurso existente.");
-            }
-
-            return this.ConflictProblem("La asignación ya existe o el usuario/rancho no existen.");
+            return Conflict("La asignación del usuario al rancho ya existe o las referencias no son válidas.");
         }
 
-        return CreatedAtAction(nameof(Get), new { id = item.IdUsuarioRancho }, ToResponseDto(item));
+        return CreatedAtAction(nameof(Get), new { id = item.IdUsuarioRancho }, item);
     }
 
     [HttpPut("{id:guid}")]
-    [ProducesResponseType(StatusCodes.Status204NoContent)]
-    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
-    public async Task<IActionResult> Update(Guid id, UsuarioRanchoUpdateDto dto, CancellationToken ct)
+    public async Task<IActionResult> Update(Guid id, UsuarioRancho input, CancellationToken ct)
     {
-        var item = await db.UsuarioRanchos.FindAsync([id], ct);
-        if (item is null) return this.NotFoundProblem("La asignación usuario-rancho solicitada no existe.");
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
-        if (dto.IdUsuario != item.IdUsuario)
-            return this.ValidationError("No se permite cambiar el usuario de una asignación usuario-rancho.", nameof(dto.IdUsuario));
+        var item = await db.UsuarioRanchos.FirstOrDefaultAsync(ur => ur.IdUsuarioRancho == id, ct);
+        if (item is null) return NotFound();
 
-        if (dto.IdRancho != item.IdRancho)
-            return this.ValidationError("No se permite cambiar el rancho de una asignación usuario-rancho.", nameof(dto.IdRancho));
+        if (!await access.IsAdminAsync(userId.Value, item.IdRancho, ct))
+            return Forbid();
 
-        var userExists = await db.Usuarios.AsNoTracking().AnyAsync(u => u.IdUsuario == dto.IdUsuario, ct);
-        if (!userExists) return this.ValidationError("El usuario especificado no existe.", nameof(dto.IdUsuario));
+        if (input.IdRancho != Guid.Empty && input.IdRancho != item.IdRancho)
+            return BadRequest("No se puede cambiar el rancho de una membresía.");
 
-        var ranchoExists = await db.Ranchos.AsNoTracking().AnyAsync(r => r.IdRancho == dto.IdRancho && r.EliminadoEn == null, ct);
-        if (!ranchoExists) return this.ValidationError("El rancho especificado no existe o está eliminado.", nameof(dto.IdRancho));
+        if (input.IdUsuario > 0 && input.IdUsuario != item.IdUsuario)
+            return BadRequest("No se puede cambiar el usuario de una membresía.");
 
-        item.Rol = dto.Rol.Trim();
-        item.Estado = dto.Estado.Trim();
-        if (dto.FechaAlta.HasValue) item.FechaAlta = ApiProblemResults.EnsureUtc(dto.FechaAlta.Value);
-        item.FechaBaja = ApiProblemResults.EnsureUtc(dto.FechaBaja);
+        var newRole = NormalizeRole(string.IsNullOrWhiteSpace(input.Rol) ? item.Rol : input.Rol);
+        if (!AllowedRoles.Contains(newRole))
+            return BadRequest("Rol de membresía no válido.");
+
+        var newEstado = string.IsNullOrWhiteSpace(input.Estado) ? item.Estado : input.Estado.Trim();
+        var willDeactivate = input.FechaBaja is not null ||
+                             !string.Equals(newEstado, "Activo", StringComparison.OrdinalIgnoreCase);
+
+        var currentlyActiveAdmin = item.FechaBaja is null &&
+                                   string.Equals(item.Estado, "Activo", StringComparison.OrdinalIgnoreCase) &&
+                                   IsAdminRole(item.Rol);
+
+        var staysActiveAdmin = !willDeactivate && IsAdminRole(newRole);
+
+        if (currentlyActiveAdmin && !staysActiveAdmin)
+        {
+            var otherActiveAdmins = await db.UsuarioRanchos.AsNoTracking()
+                .CountAsync(ur => ur.IdRancho == item.IdRancho
+                                && ur.IdUsuarioRancho != item.IdUsuarioRancho
+                                && ur.FechaBaja == null
+                                && ur.Estado.ToLower() == "activo"
+                                && RanchAccessService.AdminRoles.Contains(ur.Rol.ToLower()), ct);
+
+            if (otherActiveAdmins == 0)
+                return Conflict("No se puede quitar el rol de administrador ni desactivar al último administrador activo del rancho.");
+        }
+
+        item.Rol = newRole;
+        item.Estado = willDeactivate ? "Inactivo" : "Activo";
+        item.FechaBaja = willDeactivate ? (input.FechaBaja ?? DateTime.UtcNow) : null;
 
         try
         {
@@ -155,52 +194,44 @@ public sealed class UsuarioRanchosController(FarmDbContext db) : ControllerBase
         }
         catch (DbUpdateException)
         {
-            return this.ConflictProblem("La asignación ya existe o el usuario/rancho no existen.");
+            return Conflict("No se pudo actualizar la membresía.");
         }
 
         return NoContent();
     }
 
     [HttpDelete("{id:guid}")]
-    [ProducesResponseType(StatusCodes.Status204NoContent)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
-        var item = await db.UsuarioRanchos.FindAsync([id], ct);
-        if (item is null) return this.NotFoundProblem("La asignación usuario-rancho solicitada no existe.");
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
+
+        var item = await db.UsuarioRanchos.FirstOrDefaultAsync(ur => ur.IdUsuarioRancho == id, ct);
+        if (item is null) return NotFound();
+
+        if (!await access.IsAdminAsync(userId.Value, item.IdRancho, ct))
+            return Forbid();
+
+        var isActiveAdmin = item.FechaBaja is null &&
+                            string.Equals(item.Estado, "Activo", StringComparison.OrdinalIgnoreCase) &&
+                            IsAdminRole(item.Rol);
+
+        if (isActiveAdmin)
+        {
+            var otherActiveAdmins = await db.UsuarioRanchos.AsNoTracking()
+                .CountAsync(ur => ur.IdRancho == item.IdRancho
+                                && ur.IdUsuarioRancho != item.IdUsuarioRancho
+                                && ur.FechaBaja == null
+                                && ur.Estado.ToLower() == "activo"
+                                && RanchAccessService.AdminRoles.Contains(ur.Rol.ToLower()), ct);
+
+            if (otherActiveAdmins == 0)
+                return Conflict("No se puede eliminar al último administrador activo del rancho.");
+        }
 
         db.UsuarioRanchos.Remove(item);
-        try
-        {
-            await db.SaveChangesAsync(ct);
-        }
-        catch (DbUpdateException)
-        {
-            return this.ConflictProblem("No se pudo eliminar la asignación usuario-rancho por una restricción de integridad.");
-        }
+        await db.SaveChangesAsync(ct);
 
         return NoContent();
     }
-
-    private static bool MatchesUsuarioRancho(UsuarioRancho existing, UsuarioRanchoCreateDto dto) =>
-        existing.IdUsuario == dto.IdUsuario &&
-        existing.IdRancho == dto.IdRancho &&
-        ApiProblemResults.SameText(existing.Rol, dto.Rol) &&
-        ApiProblemResults.SameText(existing.Estado, dto.Estado) &&
-        ApiProblemResults.SameUtcInstant(existing.FechaAlta, dto.FechaAlta ?? existing.FechaAlta) &&
-        ApiProblemResults.SameUtcInstant(existing.FechaBaja, dto.FechaBaja);
-
-    internal static UsuarioRanchoResponseDto ToResponseDto(UsuarioRancho ur) => new()
-    {
-        IdUsuarioRancho = ur.IdUsuarioRancho,
-        IdUsuario = ur.IdUsuario,
-        IdRancho = ur.IdRancho,
-        Rol = ur.Rol,
-        Estado = ur.Estado,
-        FechaAlta = ur.FechaAlta,
-        FechaBaja = ur.FechaBaja
-    };
 }

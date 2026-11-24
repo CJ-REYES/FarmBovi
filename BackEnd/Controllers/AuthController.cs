@@ -20,7 +20,7 @@ public sealed record LoginRequest([Required, EmailAddress, StringLength(254)] st
 public sealed record LoginResponse(
     string Token,
     DateTime ExpiraEn,
-    Guid IdUsuario,
+    int IdUsuario,
     string Nombre,
     IReadOnlyList<LoginRancho> Ranchos,
     string? Correo = null,
@@ -31,7 +31,7 @@ public sealed record LoginRancho(Guid IdRancho, string Nombre, string Rol);
 
 public sealed record SessionInfoResponse(
     DateTime ExpiraEn,
-    Guid IdUsuario,
+    int IdUsuario,
     string Nombre,
     IReadOnlyList<LoginRancho> Ranchos,
     string? Correo = null,
@@ -76,7 +76,7 @@ public sealed class AuthController(
             return Unauthorized(new { mensaje = "Sesión no válida o expirada." });
 
         var usuario = await db.Usuarios.AsNoTracking()
-            .FirstOrDefaultAsync(u => u.IdUsuario == userId.Value && u.Estado.ToLower() == "activo", ct);
+            .FirstOrDefaultAsync(u => u.Id == userId.Value && u.Estado.ToLower() == "activo", ct);
         if (usuario is null)
             return Unauthorized(new { mensaje = "La cuenta ya no se encuentra activa." });
 
@@ -85,10 +85,10 @@ public sealed class AuthController(
             ? DateTimeOffset.FromUnixTimeSeconds(expSeconds).UtcDateTime
             : DateTime.UtcNow.AddMinutes(Math.Clamp(configuration.GetValue("Jwt:TokenMinutes", 60), 5, 1440));
 
-        var ranchos = await LoadActiveRanchesAsync(usuario.IdUsuario, ct);
+        var ranchos = await LoadActiveRanchesAsync(usuario.Id, ct);
         return Ok(new SessionInfoResponse(
             ExpiraEn: expiraEn,
-            IdUsuario: usuario.IdUsuario,
+            IdUsuario: usuario.Id,
             Nombre: usuario.Nombre,
             Ranchos: ranchos,
             Correo: usuario.Correo,
@@ -123,7 +123,6 @@ public sealed class AuthController(
 
         var usuario = new Usuario
         {
-            IdUsuario = Guid.NewGuid(),
             Nombre = nombre,
             Correo = correo,
             Estado = "Activo",
@@ -161,8 +160,8 @@ public sealed class AuthController(
         var expiration = now.AddMinutes(minutes);
         var claims = new[]
         {
-            new Claim(JwtRegisteredClaimNames.Sub, usuario.IdUsuario.ToString()),
-            new Claim(ClaimTypes.NameIdentifier, usuario.IdUsuario.ToString()),
+            new Claim(JwtRegisteredClaimNames.Sub, usuario.Id.ToString()),
+            new Claim(ClaimTypes.NameIdentifier, usuario.Id.ToString()),
             new Claim(ClaimTypes.Name, usuario.Nombre),
             new Claim(JwtRegisteredClaimNames.Email, usuario.Correo),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
@@ -170,12 +169,12 @@ public sealed class AuthController(
         var credentials = new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(signingKey)), SecurityAlgorithms.HmacSha256);
         var token = new JwtSecurityToken(issuer, audience, claims, now, expiration, credentials);
 
-        var ranchos = await LoadActiveRanchesAsync(usuario.IdUsuario, ct);
+        var ranchos = await LoadActiveRanchesAsync(usuario.Id, ct);
 
         return new LoginResponse(
             Token: new JwtSecurityTokenHandler().WriteToken(token),
             ExpiraEn: expiration,
-            IdUsuario: usuario.IdUsuario,
+            IdUsuario: usuario.Id,
             Nombre: usuario.Nombre,
             Ranchos: ranchos,
             Correo: usuario.Correo,
@@ -185,7 +184,7 @@ public sealed class AuthController(
             Configuracion: UserConfigDto.ParseOrDefault(usuario.ConfiguracionJson));
     }
 
-    private Task<List<LoginRancho>> LoadActiveRanchesAsync(Guid userId, CancellationToken ct) =>
+    private Task<List<LoginRancho>> LoadActiveRanchesAsync(int userId, CancellationToken ct) =>
         (from ur in db.UsuarioRanchos.AsNoTracking()
          join r in db.Ranchos.AsNoTracking() on ur.IdRancho equals r.IdRancho
          where ur.IdUsuario == userId && ur.FechaBaja == null &&

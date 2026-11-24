@@ -2,11 +2,13 @@ using FarmBovi.Api.Data;
 using FarmBovi.Api.DTOs;
 using FarmBovi.Api.Models;
 using FarmBovi.Api.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 namespace FarmBovi.Api.Controllers;
 
+[Authorize]
 [ApiController]
 [Route("api/animales")]
 [RanchScope(RanchResource.Animal)]
@@ -22,12 +24,17 @@ public sealed class AnimalsController(FarmDbContext db, FarmDomainValidationServ
         [FromQuery] bool incluirEliminados = false,
         CancellationToken ct = default)
     {
-        var query = db.Animales.AsNoTracking();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
+
+        var ranchIds = await access.ActiveRanchIds(userId.Value).Distinct().ToListAsync(ct);
+
+        var query = db.Animales.AsNoTracking()
+            .Where(a => ranchIds.Contains(a.IdRancho));
+
         if (!incluirEliminados)
             query = query.Where(a => a.EliminadoEn == null);
 
-        var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
-        query = query.Where(x => ranchIds.Contains(x.IdRancho));
         if (idRancho is { } targetRanch && targetRanch != Guid.Empty)
             query = query.Where(x => x.IdRancho == targetRanch);
 
@@ -67,9 +74,8 @@ public sealed class AnimalsController(FarmDbContext db, FarmDomainValidationServ
                 : this.ConflictProblem("Ya existe un animal con el identificador proporcionado y contenido diferente o eliminado.");
         }
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? 0, ct);
         if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
-
         var item = new Animal
         {
             IdAnimal = id,
@@ -109,7 +115,6 @@ public sealed class AnimalsController(FarmDbContext db, FarmDomainValidationServ
             OrigenExterno = item.Procedencia,
             Motivo = "Registro inicial del animal",
             IdAutor = authorId,
-            CreadoEn = DateTime.UtcNow,
             VersionRegistro = 1
         });
 
@@ -167,7 +172,7 @@ public sealed class AnimalsController(FarmDbContext db, FarmDomainValidationServ
                 nameof(dto.IdRancho));
         }
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
+        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? 0, ct);
         if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
 
         var candidate = new Animal
@@ -244,7 +249,6 @@ public sealed class AnimalsController(FarmDbContext db, FarmDomainValidationServ
                 Fecha = DateTime.UtcNow,
                 Motivo = "Actualización de lote en expediente",
                 IdAutor = authorId,
-                CreadoEn = DateTime.UtcNow,
                 VersionRegistro = 1
             });
         }
@@ -268,10 +272,19 @@ public sealed class AnimalsController(FarmDbContext db, FarmDomainValidationServ
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
+    public async Task<IActionResult> Delete(
+        [FromServices] RanchAccessService access,
+        Guid id,
+        CancellationToken ct)
     {
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
+
         var item = await db.Animales.FindAsync([id], ct);
         if (item is null) return this.NotFoundProblem("El animal solicitado no existe.");
+
+        if (!await access.CanAccessAsync(userId.Value, item.IdRancho, ct))
+            return Forbid();
 
         if (item.EliminadoEn is null)
         {

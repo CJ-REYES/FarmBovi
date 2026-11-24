@@ -1,89 +1,91 @@
 using FarmBovi.Api.Data;
-using FarmBovi.Api.DTOs;
 using FarmBovi.Api.Models;
 using FarmBovi.Api.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 namespace FarmBovi.Api.Controllers;
 
+[Authorize]
 [ApiController]
 [Route("api/lotes")]
-[RanchScope(RanchResource.Lote)]
-public sealed class LotesController(FarmDbContext db, FarmDomainValidationService validator) : ControllerBase
+public sealed class LotesController(FarmDbContext db, RanchAccessService access) : ControllerBase
 {
     [HttpGet]
-    [ProducesResponseType(typeof(List<LoteResponseDto>), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
-    public async Task<ActionResult<List<LoteResponseDto>>> GetAll(
-        [FromServices] RanchAccessService access,
-        [FromQuery] Guid? idRancho = null,
+    public async Task<ActionResult<List<Lote>>> GetAll(
+        [FromQuery] Guid? idRancho,
         [FromQuery] bool incluirEliminados = false,
         CancellationToken ct = default)
     {
-        var query = db.Lotes.AsNoTracking();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
+
+        var ranchosAutorizadosIds = await access.ActiveRanchIds(userId.Value).Distinct().ToListAsync(ct);
+
+        var query = db.Lotes.AsNoTracking()
+            .Where(l => ranchosAutorizadosIds.Contains(l.IdRancho));
+
         if (!incluirEliminados)
             query = query.Where(l => l.EliminadoEn == null);
 
-        var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
-        query = query.Where(x => ranchIds.Contains(x.IdRancho));
-        if (idRancho is { } targetRanch && targetRanch != Guid.Empty)
-            query = query.Where(x => x.IdRancho == targetRanch);
+        if (idRancho.HasValue && idRancho.Value != Guid.Empty)
+        {
+            if (!ranchosAutorizadosIds.Contains(idRancho.Value))
+                return Forbid();
 
-        var items = await query.ToListAsync(ct);
-        return Ok(items.Select(ToResponseDto).ToList());
+            query = query.Where(l => l.IdRancho == idRancho.Value);
+        }
+
+        var lista = await query.ToListAsync(ct);
+        return Ok(lista);
     }
 
     [HttpGet("{id:guid}")]
-    [ProducesResponseType(typeof(LoteResponseDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<LoteResponseDto>> Get(Guid id, CancellationToken ct) =>
-        await db.Lotes.AsNoTracking().FirstOrDefaultAsync(l => l.IdLote == id, ct) is { } item
-            ? Ok(ToResponseDto(item))
-            : this.NotFoundProblem("El lote solicitado no existe.");
+    public async Task<ActionResult<Lote>> Get(Guid id, CancellationToken ct)
+    {
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
+
+        var item = await db.Lotes.AsNoTracking().FirstOrDefaultAsync(l => l.IdLote == id, ct);
+        if (item is null) return NotFound();
+
+        if (!await access.CanAccessAsync(userId.Value, item.IdRancho, ct))
+            return Forbid();
+
+        return Ok(item);
+    }
 
     [HttpPost]
-    [ProducesResponseType(typeof(LoteResponseDto), StatusCodes.Status201Created)]
-    [ProducesResponseType(typeof(LoteResponseDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
-    public async Task<ActionResult<LoteResponseDto>> Create(
-        [FromServices] RanchAccessService access,
-        LoteCreateDto dto,
-        CancellationToken ct)
+    public async Task<ActionResult<Lote>> Create(Lote item, CancellationToken ct)
     {
-        var id = dto.IdLote ?? Guid.NewGuid();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
-        var existing = await db.Lotes.AsNoTracking().FirstOrDefaultAsync(l => l.IdLote == id, ct);
+        if (item.IdRancho == Guid.Empty || string.IsNullOrWhiteSpace(item.Nombre) || string.IsNullOrWhiteSpace(item.Estado))
+            return BadRequest("IdRancho, nombre y estado del lote son obligatorios.");
+
+        if (!await access.CanAccessAsync(userId.Value, item.IdRancho, ct))
+            return Forbid();
+
+        if (item.IdLote == Guid.Empty)
+            item.IdLote = Guid.NewGuid();
+
+        var existing = await db.Lotes.AsNoTracking().FirstOrDefaultAsync(l => l.IdLote == item.IdLote, ct);
         if (existing is not null)
-        {
-            return existing.EliminadoEn is null && MatchesLote(existing, dto)
-                ? Ok(ToResponseDto(existing))
-                : this.ConflictProblem("Ya existe un lote con el identificador proporcionado y contenido diferente o eliminado.");
-        }
+            return Ok(existing);
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
-        if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
+        var ranchoExists = await db.Ranchos.AsNoTracking()
+            .AnyAsync(r => r.IdRancho == item.IdRancho && r.EliminadoEn == null, ct);
+        if (!ranchoExists)
+            return BadRequest("El rancho especificado no existe o está eliminado.");
 
-        var ranchoExists = await db.Ranchos.AsNoTracking().AnyAsync(r => r.IdRancho == dto.IdRancho && r.EliminadoEn == null, ct);
-        if (!ranchoExists) return this.ValidationError("El rancho especificado no existe o está eliminado.", nameof(dto.IdRancho));
-
-        var item = new Lote
-        {
-            IdLote = id,
-            IdRancho = dto.IdRancho,
-            Nombre = dto.Nombre.Trim(),
-            Ubicacion = dto.Ubicacion?.Trim(),
-            Estado = dto.Estado.Trim(),
-            IdAutor = authorId,
-            CreadoEn = DateTime.UtcNow,
-            VersionRegistro = 1
-        };
+        int authorId = userId.Value;
+        item.IdAutor = authorId;
+        item.Nombre = item.Nombre.Trim();
+        item.Estado = item.Estado.Trim();
+        if (item.CreadoEn == default) item.CreadoEn = DateTime.UtcNow;
+        if (item.VersionRegistro <= 0) item.VersionRegistro = 1;
 
         db.Lotes.Add(item);
         try
@@ -92,57 +94,49 @@ public sealed class LotesController(FarmDbContext db, FarmDomainValidationServic
         }
         catch (DbUpdateException)
         {
-            var collision = await db.Lotes.AsNoTracking().FirstOrDefaultAsync(l => l.IdLote == id, ct);
-            if (collision is not null)
-            {
-                var userId = RanchAccessService.GetUserId(User);
-                if (userId is { } uid && await access.CanAccessAsync(uid, collision.IdRancho, ct))
-                {
-                    return collision.EliminadoEn is null && MatchesLote(collision, dto)
-                        ? Ok(ToResponseDto(collision))
-                        : this.ConflictProblem("Ya existe un lote con el identificador proporcionado y contenido diferente o eliminado.");
-                }
-
-                return this.ConflictProblem("Conflicto con un recurso existente.");
-            }
-
-            return this.ConflictProblem("Ya existe el nombre de lote en ese rancho o el rancho no existe.");
+            return Conflict("Ya existe el nombre de lote en ese rancho o el rancho no existe.");
         }
 
-        return CreatedAtAction(nameof(Get), new { id = item.IdLote }, ToResponseDto(item));
+        return CreatedAtAction(nameof(Get), new { id = item.IdLote }, item);
     }
 
     [HttpPut("{id:guid}")]
-    [ProducesResponseType(StatusCodes.Status204NoContent)]
-    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
-    public async Task<IActionResult> Update(Guid id, LoteUpdateDto dto, CancellationToken ct)
+    public async Task<IActionResult> Update(Guid id, Lote input, CancellationToken ct)
     {
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
+
         var item = await db.Lotes.FindAsync([id], ct);
-        if (item is null) return this.NotFoundProblem("El lote solicitado no existe.");
+        if (item is null) return NotFound();
 
-        if (item.EliminadoEn is not null)
-            return this.ConflictProblem("No se puede actualizar un lote eliminado.");
+        if (!await access.CanAccessAsync(userId.Value, item.IdRancho, ct))
+            return Forbid();
 
-        if (dto.EliminadoEn.HasValue)
-            return this.ValidationError("Para eliminar un lote utiliza el endpoint DELETE.", nameof(dto.EliminadoEn));
+        if (input.IdRancho != item.IdRancho)
+        {
+            if (input.IdRancho == Guid.Empty)
+                return BadRequest("IdRancho es obligatorio.");
 
-        if (dto.IdRancho != item.IdRancho)
-            return this.ValidationError("No se permite transferir un lote a otro rancho mediante actualización directa.", nameof(dto.IdRancho));
+            if (!await access.CanAccessAsync(userId.Value, input.IdRancho, ct))
+                return Forbid();
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
-        if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
+            var ranchoDestinoExiste = await db.Ranchos.AsNoTracking()
+                .AnyAsync(r => r.IdRancho == input.IdRancho && r.EliminadoEn == null, ct);
+            if (!ranchoDestinoExiste)
+                return BadRequest("El rancho destino no existe o está eliminado.");
+        }
 
-        var ranchoExists = await db.Ranchos.AsNoTracking().AnyAsync(r => r.IdRancho == dto.IdRancho && r.EliminadoEn == null, ct);
-        if (!ranchoExists) return this.ValidationError("El rancho especificado no existe o está eliminado.", nameof(dto.IdRancho));
+        if (string.IsNullOrWhiteSpace(input.Nombre) || string.IsNullOrWhiteSpace(input.Estado))
+            return BadRequest("Nombre y estado del lote son obligatorios.");
 
-        item.Nombre = dto.Nombre.Trim();
-        item.Ubicacion = dto.Ubicacion?.Trim();
-        item.Estado = dto.Estado.Trim();
+        int authorId = userId.Value;
+
+        item.IdRancho = input.IdRancho;
+        item.Nombre = input.Nombre.Trim();
+        item.Ubicacion = input.Ubicacion;
+        item.Estado = input.Estado.Trim();
         item.IdAutor = authorId;
+        item.EliminadoEn = input.EliminadoEn;
         item.VersionRegistro++;
 
         try
@@ -151,27 +145,28 @@ public sealed class LotesController(FarmDbContext db, FarmDomainValidationServic
         }
         catch (DbUpdateException)
         {
-            return this.ConflictProblem("Ya existe el nombre de lote en ese rancho o el rancho no existe.");
+            return Conflict("Ya existe el nombre de lote en ese rancho o el rancho no existe.");
         }
 
         return NoContent();
     }
 
     [HttpDelete("{id:guid}")]
-    [ProducesResponseType(StatusCodes.Status204NoContent)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
+
         var item = await db.Lotes.FindAsync([id], ct);
-        if (item is null) return this.NotFoundProblem("El lote solicitado no existe.");
+        if (item is null) return NotFound();
+
+        if (!await access.CanAccessAsync(userId.Value, item.IdRancho, ct))
+            return Forbid();
 
         var hasActiveAnimals = await db.Animales.AsNoTracking()
             .AnyAsync(a => a.IdLote == id && a.EliminadoEn == null, ct);
         if (hasActiveAnimals)
-            return this.ConflictProblem("No se puede eliminar un lote que tiene animales activos asociados.");
+            return Conflict("No se puede eliminar un lote que tiene animales activos asociados.");
 
         if (item.EliminadoEn is null)
         {
@@ -182,23 +177,4 @@ public sealed class LotesController(FarmDbContext db, FarmDomainValidationServic
 
         return NoContent();
     }
-
-    private static bool MatchesLote(Lote existing, LoteCreateDto dto) =>
-        existing.IdRancho == dto.IdRancho &&
-        ApiProblemResults.SameText(existing.Nombre, dto.Nombre) &&
-        ApiProblemResults.SameText(existing.Ubicacion, dto.Ubicacion) &&
-        ApiProblemResults.SameText(existing.Estado, dto.Estado);
-
-    internal static LoteResponseDto ToResponseDto(Lote l) => new()
-    {
-        IdLote = l.IdLote,
-        IdRancho = l.IdRancho,
-        Nombre = l.Nombre,
-        Ubicacion = l.Ubicacion,
-        Estado = l.Estado,
-        IdAutor = l.IdAutor,
-        CreadoEn = l.CreadoEn,
-        VersionRegistro = l.VersionRegistro,
-        EliminadoEn = l.EliminadoEn
-    };
 }

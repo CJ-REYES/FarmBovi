@@ -52,7 +52,7 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
 
     public async Task<GenealogiaOperationResult<GenealogiaRegistroDto>> RegistrarAsync(
         RegistrarGenealogiaRequest request,
-        Guid userId,
+        int userId,
         CancellationToken ct)
     {
         var (observaciones, obsError) = ValidateAndNormalizeObservaciones(request.Observaciones);
@@ -127,7 +127,7 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
     public async Task<GenealogiaOperationResult<GenealogiaRegistroDto>> ActualizarAsync(
         Guid idAnimal,
         ActualizarGenealogiaRequest request,
-        Guid userId,
+        int userId,
         CancellationToken ct)
     {
         if (request.VersionRegistro <= 0)
@@ -199,7 +199,7 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
 
     public async Task<GenealogiaOperationResult<bool>> EliminarAsync(
         Guid idAnimal,
-        Guid userId,
+        int userId,
         CancellationToken ct,
         long? expectedVersion = null)
     {
@@ -266,7 +266,7 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
     }
 
     public async Task<GenealogiaOperationResult<IReadOnlyList<GenealogiaRegistroDto>>> ListarAsync(
-        Guid userId,
+        int userId,
         Guid? idRancho,
         bool incluirEliminados,
         CancellationToken ct)
@@ -306,7 +306,7 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
 
     public async Task<GenealogiaOperationResult<GenealogiaRegistroDto>> ObtenerPorIdAsync(
         Guid idGenealogia,
-        Guid userId,
+        int userId,
         CancellationToken ct)
     {
         if (idGenealogia == Guid.Empty)
@@ -331,7 +331,7 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
     public async Task<GenealogiaOperationResult<PadresAnimalResponse>> ObtenerPadresAsync(
         Guid idAnimal,
         int profundidad,
-        Guid userId,
+        int userId,
         CancellationToken ct)
     {
         if (profundidad < 1 || profundidad > MaxProfundidad)
@@ -448,7 +448,7 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
     public async Task<GenealogiaOperationResult<DescendientesAnimalResponse>> ObtenerDescendientesAsync(
         Guid idAnimal,
         int profundidad,
-        Guid userId,
+        int userId,
         CancellationToken ct)
     {
         if (profundidad < 1 || profundidad > MaxProfundidad)
@@ -548,7 +548,7 @@ public sealed class GenealogiaService(FarmDbContext db, RanchAccessService acces
         Guid idAnimal,
         Guid? idPadre,
         Guid? idMadre,
-        Guid userId,
+        int userId,
         CancellationToken ct)
     {
         if (idAnimal == Guid.Empty)

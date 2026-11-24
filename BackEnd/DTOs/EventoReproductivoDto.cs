@@ -26,7 +26,7 @@ public sealed class EventoReproductivoCreateDto
     public string? Observaciones { get; set; }
 
     [NotEmptyGuid(AllowNull = true)]
-    public Guid? IdAutor { get; set; }
+    public int? IdAutor { get; set; }
 }
 
 public sealed class EventoReproductivoUpdateDto
@@ -50,7 +50,7 @@ public sealed class EventoReproductivoUpdateDto
     public string? Observaciones { get; set; }
 
     [NotEmptyGuid(AllowNull = true)]
-    public Guid? IdAutor { get; set; }
+    public int? IdAutor { get; set; }
 
     [Range(1, long.MaxValue, ErrorMessage = "La versión del registro debe ser mayor que cero.")]
     public long? VersionRegistro { get; set; }
@@ -68,7 +68,7 @@ public sealed class EventoReproductivoResponseDto
     public DateTime Fecha { get; set; }
     public string? Resultado { get; set; }
     public string? Observaciones { get; set; }
-    public Guid IdAutor { get; set; }
+    public int IdAutor { get; set; }
     public DateTime CreadoEn { get; set; }
     public long VersionRegistro { get; set; }
     public DateTime? EliminadoEn { get; set; }

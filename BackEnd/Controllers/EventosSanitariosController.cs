@@ -1,94 +1,114 @@
 using FarmBovi.Api.Data;
-using FarmBovi.Api.DTOs;
 using FarmBovi.Api.Models;
 using FarmBovi.Api.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 namespace FarmBovi.Api.Controllers;
 
+[Authorize]
 [ApiController]
 [Route("api/eventos-sanitarios")]
-[RanchScope(RanchResource.EventoSanitario)]
-public sealed class EventosSanitariosController(FarmDbContext db, FarmDomainValidationService validator) : ControllerBase
+public sealed class EventosSanitariosController(
+    FarmDbContext db,
+    FarmDomainValidationService validator,
+    RanchAccessService access) : ControllerBase
 {
+    private async Task<(Guid? RanchId, IActionResult? Error)> ResolveAnimalRanchAsync(
+        int userId,
+        Guid idAnimal,
+        CancellationToken ct)
+    {
+        if (idAnimal == Guid.Empty)
+            return (null, BadRequest("El campo idAnimal es obligatorio."));
+
+        var idRancho = await db.Animales.AsNoTracking()
+            .Where(a => a.IdAnimal == idAnimal)
+            .Select(a => (Guid?)a.IdRancho)
+            .FirstOrDefaultAsync(ct);
+
+        if (!idRancho.HasValue || idRancho.Value == Guid.Empty)
+            return (null, BadRequest("El animal indicado no existe."));
+
+        if (!await access.CanAccessAsync(userId, idRancho.Value, ct))
+            return (null, Forbid());
+
+        return (idRancho.Value, null);
+    }
+
     [HttpGet]
-    [ProducesResponseType(typeof(List<EventoSanitarioResponseDto>), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
-    public async Task<ActionResult<List<EventoSanitarioResponseDto>>> GetAll(
-        [FromServices] RanchAccessService access,
-        [FromQuery] Guid? idRancho = null,
+    public async Task<ActionResult<List<EventoSanitario>>> GetAll(
+        [FromQuery] Guid? idRancho,
         [FromQuery] bool incluirEliminados = false,
         CancellationToken ct = default)
     {
-        var query = db.EventosSanitarios.AsNoTracking();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
+
+        var ranchosAutorizadosIds = await access.ActiveRanchIds(userId.Value).Distinct().ToListAsync(ct);
+
+        var query = db.EventosSanitarios.AsNoTracking()
+            .Where(e => db.Animales.Any(a => a.IdAnimal == e.IdAnimal && ranchosAutorizadosIds.Contains(a.IdRancho)));
+
         if (!incluirEliminados)
             query = query.Where(e => e.EliminadoEn == null);
 
-        var ranchIds = access.ActiveRanchIds(RanchAccessService.GetUserId(User) ?? Guid.Empty);
-        query = idRancho is { } targetRanch && targetRanch != Guid.Empty
-            ? query.Where(x => db.Animales.Any(a => a.IdAnimal == x.IdAnimal && a.IdRancho == targetRanch))
-            : query.Where(x => db.Animales.Any(a => a.IdAnimal == x.IdAnimal && ranchIds.Contains(a.IdRancho)));
+        if (idRancho.HasValue && idRancho.Value != Guid.Empty)
+        {
+            if (!ranchosAutorizadosIds.Contains(idRancho.Value))
+                return Forbid();
 
-        var items = await query.ToListAsync(ct);
-        return Ok(items.Select(ToResponseDto).ToList());
+            query = query.Where(e => db.Animales.Any(a => a.IdAnimal == e.IdAnimal && a.IdRancho == idRancho.Value));
+        }
+
+        var lista = await query.ToListAsync(ct);
+        return Ok(lista);
     }
 
     [HttpGet("{id:guid}")]
-    [ProducesResponseType(typeof(EventoSanitarioResponseDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<EventoSanitarioResponseDto>> Get(Guid id, CancellationToken ct) =>
-        await db.EventosSanitarios.AsNoTracking().FirstOrDefaultAsync(e => e.IdEventoSanitario == id, ct) is { } item
-            ? Ok(ToResponseDto(item))
-            : this.NotFoundProblem("El evento sanitario solicitado no existe.");
+    public async Task<IActionResult> Get(Guid id, CancellationToken ct)
+    {
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
+
+        var item = await db.EventosSanitarios.AsNoTracking().FirstOrDefaultAsync(e => e.IdEventoSanitario == id, ct);
+        if (item is null) return NotFound();
+
+        var (_, error) = await ResolveAnimalRanchAsync(userId.Value, item.IdAnimal, ct);
+        if (error is not null) return error;
+
+        return Ok(item);
+    }
 
     [HttpPost]
-    [ProducesResponseType(typeof(EventoSanitarioResponseDto), StatusCodes.Status201Created)]
-    [ProducesResponseType(typeof(EventoSanitarioResponseDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
-    public async Task<ActionResult<EventoSanitarioResponseDto>> Create(
-        [FromServices] RanchAccessService access,
-        EventoSanitarioCreateDto dto,
-        CancellationToken ct)
+    public async Task<IActionResult> Create(EventoSanitario item, CancellationToken ct)
     {
-        var id = dto.IdEventoSanitario ?? Guid.NewGuid();
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
 
-        var existing = await db.EventosSanitarios.AsNoTracking().FirstOrDefaultAsync(e => e.IdEventoSanitario == id, ct);
+        var (_, ranchError) = await ResolveAnimalRanchAsync(userId.Value, item.IdAnimal, ct);
+        if (ranchError is not null) return ranchError;
+
+        if (item.IdEventoSanitario == Guid.Empty)
+            item.IdEventoSanitario = Guid.NewGuid();
+
+        var existing = await db.EventosSanitarios.AsNoTracking()
+            .FirstOrDefaultAsync(e => e.IdEventoSanitario == item.IdEventoSanitario, ct);
         if (existing is not null)
-        {
-            return existing.EliminadoEn is null && MatchesEventoSanitario(existing, dto)
-                ? Ok(ToResponseDto(existing))
-                : this.ConflictProblem("Ya existe un evento sanitario con el identificador proporcionado y contenido diferente o eliminado.");
-        }
+            return Ok(existing);
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
-        if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
-
-        var item = new EventoSanitario
-        {
-            IdEventoSanitario = id,
-            IdAnimal = dto.IdAnimal,
-            Tipo = dto.Tipo.Trim(),
-            Fecha = ApiProblemResults.EnsureUtc(dto.Fecha),
-            Sintomas = dto.Sintomas?.Trim(),
-            Diagnostico = dto.Diagnostico?.Trim(),
-            ProfesionalDiagnostico = dto.ProfesionalDiagnostico?.Trim(),
-            EvidenciaDiagnosticoUri = dto.EvidenciaDiagnosticoUri?.Trim(),
-            Responsable = dto.Responsable.Trim(),
-            Observaciones = dto.Observaciones?.Trim(),
-            IdAutor = authorId,
-            CreadoEn = DateTime.UtcNow,
-            VersionRegistro = 1
-        };
+        int authorId = userId.Value;
+        item.IdAutor = authorId;
 
         var validationError = await validator.ValidateEventoSanitarioAsync(item, ct);
-        if (validationError is not null) return this.ValidationError(validationError);
+        if (validationError is not null) return BadRequest(validationError);
+
+        item.Tipo = item.Tipo.Trim();
+        item.Responsable = item.Responsable.Trim();
+        if (item.CreadoEn == default) item.CreadoEn = DateTime.UtcNow;
+        if (item.VersionRegistro <= 0) item.VersionRegistro = 1;
+        if (item.Fecha == default) item.Fecha = DateTime.UtcNow;
 
         db.EventosSanitarios.Add(item);
         try
@@ -97,78 +117,46 @@ public sealed class EventosSanitariosController(FarmDbContext db, FarmDomainVali
         }
         catch (DbUpdateException)
         {
-            var collision = await db.EventosSanitarios.AsNoTracking().FirstOrDefaultAsync(e => e.IdEventoSanitario == id, ct);
-            if (collision is not null)
-            {
-                var userId = RanchAccessService.GetUserId(User);
-                var collisionRanch = await access.RanchOfAnimalAsync(collision.IdAnimal, ct);
-                if (userId is { } uid && collisionRanch is { } ranchId &&
-                    await access.CanAccessAsync(uid, ranchId, ct))
-                {
-                    return collision.EliminadoEn is null && MatchesEventoSanitario(collision, dto)
-                        ? Ok(ToResponseDto(collision))
-                        : this.ConflictProblem("Ya existe un evento sanitario con el identificador proporcionado y contenido diferente o eliminado.");
-                }
-
-                return this.ConflictProblem("Conflicto con un recurso existente.");
-            }
-
-            return this.ConflictProblem("No se pudo crear el evento sanitario; verifica que el animal exista.");
+            return Conflict("No se pudo crear el evento sanitario; verifica que el animal exista.");
         }
 
-        return CreatedAtAction(nameof(Get), new { id = item.IdEventoSanitario }, ToResponseDto(item));
+        return CreatedAtAction(nameof(Get), new { id = item.IdEventoSanitario }, item);
     }
 
     [HttpPut("{id:guid}")]
-    [ProducesResponseType(StatusCodes.Status204NoContent)]
-    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
-    public async Task<IActionResult> Update(Guid id, EventoSanitarioUpdateDto dto, CancellationToken ct)
+    public async Task<IActionResult> Update(Guid id, EventoSanitario input, CancellationToken ct)
     {
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
+
         var item = await db.EventosSanitarios.FindAsync([id], ct);
-        if (item is null) return this.NotFoundProblem("El evento sanitario solicitado no existe.");
+        if (item is null) return NotFound();
 
-        if (item.EliminadoEn is not null)
-            return this.ConflictProblem("No se puede actualizar un evento sanitario eliminado.");
+        var (currentRanchId, currentError) = await ResolveAnimalRanchAsync(userId.Value, item.IdAnimal, ct);
+        if (currentError is not null) return currentError;
 
-        if (dto.EliminadoEn.HasValue)
-            return this.ValidationError("Para eliminar un evento sanitario utiliza el endpoint DELETE.", nameof(dto.EliminadoEn));
+        var (newRanchId, newError) = await ResolveAnimalRanchAsync(userId.Value, input.IdAnimal, ct);
+        if (newError is not null) return newError;
 
-        if (dto.IdAnimal != item.IdAnimal)
-            return this.ValidationError("No se permite cambiar el animal asociado a un evento sanitario.", nameof(dto.IdAnimal));
+        if (currentRanchId != newRanchId)
+            return BadRequest("No se puede reasignar el evento sanitario a un animal de otro rancho.");
 
-        var (authorId, authorError) = await validator.ResolveAuthorAsync(User, dto.IdAutor ?? Guid.Empty, ct);
-        if (authorError is not null) return this.ValidationError(authorError, nameof(dto.IdAutor));
+        int authorId = userId.Value;
 
-        var candidate = new EventoSanitario
-        {
-            IdEventoSanitario = item.IdEventoSanitario,
-            IdAnimal = dto.IdAnimal,
-            Tipo = dto.Tipo.Trim(),
-            Fecha = ApiProblemResults.EnsureUtc(dto.Fecha),
-            Sintomas = dto.Sintomas?.Trim(),
-            Diagnostico = dto.Diagnostico?.Trim(),
-            ProfesionalDiagnostico = dto.ProfesionalDiagnostico?.Trim(),
-            EvidenciaDiagnosticoUri = dto.EvidenciaDiagnosticoUri?.Trim(),
-            Responsable = dto.Responsable.Trim(),
-            Observaciones = dto.Observaciones?.Trim(),
-            IdAutor = authorId
-        };
-        var validationError = await validator.ValidateEventoSanitarioAsync(candidate, ct);
-        if (validationError is not null) return this.ValidationError(validationError);
+        var validationError = await validator.ValidateEventoSanitarioAsync(input, ct);
+        if (validationError is not null) return BadRequest(validationError);
 
-        item.Tipo = candidate.Tipo;
-        item.Fecha = candidate.Fecha;
-        item.Sintomas = candidate.Sintomas;
-        item.Diagnostico = candidate.Diagnostico;
-        item.ProfesionalDiagnostico = candidate.ProfesionalDiagnostico;
-        item.EvidenciaDiagnosticoUri = candidate.EvidenciaDiagnosticoUri;
-        item.Responsable = candidate.Responsable;
-        item.Observaciones = candidate.Observaciones;
+        item.IdAnimal = input.IdAnimal;
+        item.Tipo = input.Tipo.Trim();
+        item.Fecha = input.Fecha;
+        item.Sintomas = input.Sintomas;
+        item.Diagnostico = input.Diagnostico;
+        item.ProfesionalDiagnostico = input.ProfesionalDiagnostico;
+        item.EvidenciaDiagnosticoUri = input.EvidenciaDiagnosticoUri;
+        item.Responsable = input.Responsable.Trim();
+        item.Observaciones = input.Observaciones;
         item.IdAutor = authorId;
+        item.EliminadoEn = input.EliminadoEn;
         item.VersionRegistro++;
 
         try
@@ -177,27 +165,28 @@ public sealed class EventosSanitariosController(FarmDbContext db, FarmDomainVali
         }
         catch (DbUpdateException)
         {
-            return this.ConflictProblem("No se pudo actualizar el evento sanitario; verifica las referencias.");
+            return Conflict("No se pudo actualizar el evento sanitario; verifica las referencias.");
         }
 
         return NoContent();
     }
 
     [HttpDelete("{id:guid}")]
-    [ProducesResponseType(StatusCodes.Status204NoContent)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
+        var userId = RanchAccessService.GetUserId(User);
+        if (userId is null) return Unauthorized();
+
         var item = await db.EventosSanitarios.FindAsync([id], ct);
-        if (item is null) return this.NotFoundProblem("El evento sanitario solicitado no existe.");
+        if (item is null) return NotFound();
+
+        var (_, error) = await ResolveAnimalRanchAsync(userId.Value, item.IdAnimal, ct);
+        if (error is not null) return error;
 
         var hasActiveTratamientos = await db.Tratamientos.AsNoTracking()
             .AnyAsync(t => t.IdEventoSanitario == id && t.EliminadoEn == null, ct);
         if (hasActiveTratamientos)
-            return this.ConflictProblem("No se puede eliminar un evento sanitario que tiene tratamientos asociados.");
+            return Conflict("No se puede eliminar un evento sanitario que tiene tratamientos asociados.");
 
         if (item.EliminadoEn is null)
         {
@@ -208,33 +197,4 @@ public sealed class EventosSanitariosController(FarmDbContext db, FarmDomainVali
 
         return NoContent();
     }
-
-    private static bool MatchesEventoSanitario(EventoSanitario existing, EventoSanitarioCreateDto dto) =>
-        existing.IdAnimal == dto.IdAnimal &&
-        ApiProblemResults.SameText(existing.Tipo, dto.Tipo) &&
-        ApiProblemResults.SameUtcInstant(existing.Fecha, dto.Fecha) &&
-        ApiProblemResults.SameText(existing.Sintomas, dto.Sintomas) &&
-        ApiProblemResults.SameText(existing.Diagnostico, dto.Diagnostico) &&
-        ApiProblemResults.SameText(existing.ProfesionalDiagnostico, dto.ProfesionalDiagnostico) &&
-        ApiProblemResults.SameText(existing.EvidenciaDiagnosticoUri, dto.EvidenciaDiagnosticoUri) &&
-        ApiProblemResults.SameText(existing.Responsable, dto.Responsable) &&
-        ApiProblemResults.SameText(existing.Observaciones, dto.Observaciones);
-
-    internal static EventoSanitarioResponseDto ToResponseDto(EventoSanitario e) => new()
-    {
-        IdEventoSanitario = e.IdEventoSanitario,
-        IdAnimal = e.IdAnimal,
-        Tipo = e.Tipo,
-        Fecha = e.Fecha,
-        Sintomas = e.Sintomas,
-        Diagnostico = e.Diagnostico,
-        ProfesionalDiagnostico = e.ProfesionalDiagnostico,
-        EvidenciaDiagnosticoUri = e.EvidenciaDiagnosticoUri,
-        Responsable = e.Responsable,
-        Observaciones = e.Observaciones,
-        IdAutor = e.IdAutor,
-        CreadoEn = e.CreadoEn,
-        VersionRegistro = e.VersionRegistro,
-        EliminadoEn = e.EliminadoEn
-    };
 }

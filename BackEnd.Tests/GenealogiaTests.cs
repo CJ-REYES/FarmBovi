@@ -25,7 +25,7 @@ public sealed class GenealogiaTests
             .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))
             .Options);
 
-    private static GenealogiaController CreateController(FarmDbContext db, Guid userId)
+    private static GenealogiaController CreateController(FarmDbContext db, int userId)
     {
         var access = new RanchAccessService(db);
         var service = new GenealogiaService(db, access);
@@ -33,8 +33,8 @@ public sealed class GenealogiaTests
 
         var claims = new List<Claim>
         {
-            new(JwtRegisteredClaimNames.Sub, userId.ToString("D")),
-            new(ClaimTypes.NameIdentifier, userId.ToString("D"))
+            new(JwtRegisteredClaimNames.Sub, userId.ToString()),
+            new(ClaimTypes.NameIdentifier, userId.ToString())
         };
         controller.ControllerContext = new ControllerContext
         {
@@ -67,17 +67,17 @@ public sealed class GenealogiaTests
     private static ProblemDetails AssertForbiddenProblem(IActionResult result) =>
         AssertProblemStatus<ProblemDetails>(result, StatusCodes.Status403Forbidden);
 
-    private static async Task<(Guid UserId, Guid RanchoId, Guid OtroRanchoId)> SeedBaseAsync(FarmDbContext db)
+    private static async Task<(int UserId, Guid RanchoId, Guid OtroRanchoId)> SeedBaseAsync(FarmDbContext db)
     {
-        var userId = Guid.NewGuid();
+        const int userId = 1;
         var ranchoId = Guid.NewGuid();
         var otroRanchoId = Guid.NewGuid();
 
         db.Usuarios.Add(new Usuario
         {
-            IdUsuario = userId,
+            Id = userId,
             Nombre = "Productor",
-            Correo = $"user-{userId:N}@farmbovi.local",
+            Correo = $"user-{userId}-{Guid.NewGuid():N}@farmbovi.local",
             Contrasena = "hash",
             Estado = "activo"
         });
@@ -114,7 +114,7 @@ public sealed class GenealogiaTests
         return (userId, ranchoId, otroRanchoId);
     }
 
-    private static Animal NewAnimal(Guid ranchoId, Guid authorId, string arete, string sexo = "Macho") => new()
+    private static Animal NewAnimal(Guid ranchoId, int authorId, string arete, string sexo = "Macho") => new()
     {
         IdAnimal = Guid.NewGuid(),
         IdRancho = ranchoId,
@@ -459,7 +459,7 @@ public sealed class GenealogiaTests
     public async Task Actualizar_ConcurrenciaYVersionDesactualizada_Retorna409Conflict()
     {
         var dbName = nameof(Actualizar_ConcurrenciaYVersionDesactualizada_Retorna409Conflict);
-        Guid userId;
+        int userId;
         Guid criaId;
         Guid padre1Id;
         Guid padre2Id;
@@ -715,8 +715,8 @@ public sealed class GenealogiaTests
 public sealed class GenealogiaApiTests : IAsyncLifetime
 {
     private readonly FarmBoviApiFactory _factory = new();
-    private readonly Guid _userA = Guid.NewGuid();
-    private readonly Guid _userB = Guid.NewGuid();
+    private const int _userA = 101;
+    private const int _userB = 102;
     private readonly Guid _ranchA = Guid.NewGuid();
     private readonly Guid _ranchB = Guid.NewGuid();
     private readonly Guid _padreA = Guid.NewGuid();
@@ -728,8 +728,8 @@ public sealed class GenealogiaApiTests : IAsyncLifetime
         await _factory.SeedAsync(db =>
         {
             db.Usuarios.AddRange(
-                new Usuario { IdUsuario = _userA, Nombre = "UserA", Correo = "ua@farmbovi.test", Contrasena = "h", Estado = "Activo" },
-                new Usuario { IdUsuario = _userB, Nombre = "UserB", Correo = "ub@farmbovi.test", Contrasena = "h", Estado = "Activo" });
+                new Usuario { Id = _userA, Nombre = "UserA", Correo = "ua@farmbovi.test", Contrasena = "h", Estado = "Activo" },
+                new Usuario { Id = _userB, Nombre = "UserB", Correo = "ub@farmbovi.test", Contrasena = "h", Estado = "Activo" });
 
             db.Ranchos.AddRange(
                 new Rancho { IdRancho = _ranchA, Nombre = "Rancho A", UbicacionGeneral = "N", Estado = "Activo", IdAutor = _userA },
@@ -754,7 +754,7 @@ public sealed class GenealogiaApiTests : IAsyncLifetime
         return Task.CompletedTask;
     }
 
-    private HttpClient Client(Guid? userId = null)
+    private HttpClient Client(int? userId = null)
     {
         var client = _factory.CreateClient();
         if (userId is { } id)

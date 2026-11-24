@@ -36,8 +36,7 @@ public sealed class MovimientoAnimalCreateDto : IValidatableObject
     [MaxLength(500)]
     public string? Motivo { get; set; }
 
-    [NotEmptyGuid(AllowNull = true)]
-    public Guid? IdAutor { get; set; }
+    public int IdAutor { get; set; }
 
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
     {
@@ -88,8 +87,7 @@ public sealed class MovimientoAnimalUpdateDto : IValidatableObject
     [MaxLength(500)]
     public string? Motivo { get; set; }
 
-    [NotEmptyGuid(AllowNull = true)]
-    public Guid? IdAutor { get; set; }
+    public int IdAutor { get; set; }
 
     [ValidDateRange(AllowNull = true)]
     public DateTime? EliminadoEn { get; set; }
@@ -123,7 +121,7 @@ public sealed class MovimientoAnimalResponseDto
     public string? OrigenExterno { get; set; }
     public string? DestinoExterno { get; set; }
     public string? Motivo { get; set; }
-    public Guid IdAutor { get; set; }
+    public int IdAutor { get; set; }
     public DateTime CreadoEn { get; set; }
     public long VersionRegistro { get; set; }
     public DateTime? EliminadoEn { get; set; }

@@ -73,7 +73,7 @@ public sealed class SyncController(FarmDbContext db) : ControllerBase
             return BadRequest(new { mensaje = "La entidad no tiene sincronización Pull configurada." });
 
         var userText = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
-        if (!Guid.TryParse(userText, out var idUsuario) || idUsuario == Guid.Empty)
+        if (!int.TryParse(userText, out var idUsuario) || idUsuario <= 0)
             return Unauthorized();
 
         var requestedRanchId = idRancho.GetValueOrDefault() != Guid.Empty
@@ -107,7 +107,7 @@ public sealed class SyncController(FarmDbContext db) : ControllerBase
         }
 
         var tieneAcceso = await (from ur in db.UsuarioRanchos.AsNoTracking()
-                                 join usuario in db.Usuarios.AsNoTracking() on ur.IdUsuario equals usuario.IdUsuario
+                                 join usuario in db.Usuarios.AsNoTracking() on ur.IdUsuario equals usuario.Id
                                  join rancho in db.Ranchos.AsNoTracking() on ur.IdRancho equals rancho.IdRancho
                                  where ur.IdUsuario == idUsuario && ur.IdRancho == requestedRanchId &&
                                        ur.FechaBaja == null && ur.Estado.ToLower() == "activo" &&

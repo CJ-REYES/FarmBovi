@@ -14,7 +14,7 @@ public sealed class EventoReproductivo
     public DateTime Fecha { get; set; } = DateTime.UtcNow;
     public string? Resultado { get; set; }
     public string? Observaciones { get; set; }
-    public Guid IdAutor { get; set; }
+    public int IdAutor { get; set; }
     public DateTime CreadoEn { get; set; } = DateTime.UtcNow;
     public long VersionRegistro { get; set; } = 1;
     public DateTime? EliminadoEn { get; set; }

@@ -20,7 +20,7 @@ public sealed class LoteCreateDto
     public string Estado { get; set; } = string.Empty;
 
     [NotEmptyGuid(AllowNull = true)]
-    public Guid? IdAutor { get; set; }
+    public int? IdAutor { get; set; }
 }
 
 public sealed class LoteUpdateDto
@@ -38,7 +38,7 @@ public sealed class LoteUpdateDto
     public string Estado { get; set; } = string.Empty;
 
     [NotEmptyGuid(AllowNull = true)]
-    public Guid? IdAutor { get; set; }
+    public int? IdAutor { get; set; }
 
     [ValidDateRange(AllowNull = true)]
     public DateTime? EliminadoEn { get; set; }
@@ -51,7 +51,7 @@ public sealed class LoteResponseDto
     public string Nombre { get; set; } = string.Empty;
     public string? Ubicacion { get; set; }
     public string Estado { get; set; } = string.Empty;
-    public Guid IdAutor { get; set; }
+    public int IdAutor { get; set; }
     public DateTime CreadoEn { get; set; }
     public long VersionRegistro { get; set; }
     public DateTime? EliminadoEn { get; set; }

@@ -60,7 +60,7 @@ public sealed class Pesaje
     public string? VersionModelo { get; set; }
 
     [Required]
-    public Guid IdAutor { get; set; }
+    public int IdAutor { get; set; }
 
     [Required]
     public DateTime CreadoEn { get; set; } = DateTime.UtcNow;

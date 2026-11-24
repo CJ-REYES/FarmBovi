@@ -6,7 +6,10 @@ namespace FarmBovi.Api.Models;
 public sealed class RegistroSyncServidor
 {
     public Guid IdOperacion { get; set; }
-    public Guid IdUsuario { get; set; }
+    
+    // Cambiado de Guid a int para que coincida con el ID de usuario del JWT y los controladores
+    public int IdUsuario { get; set; }
+    
     public Guid IdRancho { get; set; }
     public string IdDispositivo { get; set; } = string.Empty;
     public string HashSolicitud { get; set; } = string.Empty;

@@ -15,7 +15,10 @@ public sealed class CambioServidor
     public string Operacion { get; set; } = string.Empty; // "Crear", "Actualizar", "Eliminar"
     public long Version { get; set; }
     public DateTime OcurrioEn { get; set; } = DateTime.UtcNow;
-    public Guid? IdUsuario { get; set; }
+    
+    // Cambiado de Guid? a int? para que coincida con el ID de usuario numérico
+    public int? IdUsuario { get; set; }
+    
     public Guid? IdOperacion { get; set; }
     public string Origen { get; set; } = "API"; // "PUSH" o "API"
     public string? Antes { get; set; }

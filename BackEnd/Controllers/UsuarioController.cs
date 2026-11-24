@@ -15,11 +15,11 @@ public sealed record UsuarioRequest(
     [Required, EmailAddress, StringLength(254)] string Correo,
     [StringLength(200, MinimumLength = 8)] string? Contrasena,
     [Required, StringLength(20)] string Estado,
-    Guid? IdUsuario = null,
-    [StringLength(200)] string? ContrasenaActual = null);
+    int? Id = null,
+    string? ContrasenaActual = null);
 
 public sealed record UsuarioResponse(
-    Guid IdUsuario,
+    int Id,
     string Nombre,
     string Correo,
     string Estado,
@@ -40,8 +40,8 @@ public sealed record UsuarioResponse(
 /// </list>
 /// </summary>
 [ApiController]
-[Route("api/usuarios")]
 [Authorize]
+[Route("api/usuarios")]
 public sealed class UsuarioController(
     FarmDbContext db,
     RanchAccessService access,
@@ -54,7 +54,7 @@ public sealed class UsuarioController(
 
     private UsuarioResponse ToResponse(Usuario user) =>
         new(
-            user.IdUsuario,
+            user.Id,
             user.Nombre,
             user.Correo,
             user.Estado,
@@ -69,7 +69,7 @@ public sealed class UsuarioController(
     public async Task<ActionResult<UsuarioResponse>> GetMe(CancellationToken ct)
     {
         if (RanchAccessService.GetUserId(User) is not { } me) return Unauthorized();
-        var item = await db.Usuarios.AsNoTracking().FirstOrDefaultAsync(u => u.IdUsuario == me, ct);
+        var item = await db.Usuarios.AsNoTracking().FirstOrDefaultAsync(u => u.Id == me, ct);
         if (item is null) return NotFound(new { mensaje = "Usuario no encontrado." });
         return Ok(ToResponse(item));
     }
@@ -87,7 +87,7 @@ public sealed class UsuarioController(
             return BadRequest(new { mensaje = "El nombre completo debe tener al menos 2 caracteres." });
 
         var duplicateEmail = await db.Usuarios.AsNoTracking()
-            .AnyAsync(u => u.IdUsuario != me && u.Correo.ToLower() == correo, ct);
+            .AnyAsync(u => u.Id != me && u.Correo.ToLower() == correo, ct);
         if (duplicateEmail)
             return Conflict(new { mensaje = "Ya existe un usuario con ese correo electrónico." });
 
@@ -200,54 +200,59 @@ public sealed class UsuarioController(
     [HttpGet]
     public async Task<ActionResult<List<UsuarioResponse>>> GetAll(CancellationToken ct)
     {
-        if (RanchAccessService.GetUserId(User) is not { } me) return Unauthorized();
-        var adminRanchIds = access.AdminRanchIds(me);
-        var visibleUserIds = db.UsuarioRanchos.AsNoTracking()
+        var currentUserId = RanchAccessService.GetUserId(User);
+        if (currentUserId is null) return Unauthorized();
+
+        var adminRanchIds = await access.AdminRanchIds(currentUserId.Value).Distinct().ToListAsync(ct);
+        if (adminRanchIds.Count == 0)
+        {
+            var self = await db.Usuarios.AsNoTracking()
+                .Where(u => u.Id == currentUserId.Value)
+                .Select(u => ToResponse(u))
+                .ToListAsync(ct);
+            return Ok(self);
+        }
+
+        var visibleUserIds = await db.UsuarioRanchos.AsNoTracking()
             .Where(ur => ur.FechaBaja == null && adminRanchIds.Contains(ur.IdRancho))
-            .Select(ur => ur.IdUsuario);
-        var users = await db.Usuarios.AsNoTracking()
-            .Where(u => u.IdUsuario == me || visibleUserIds.Contains(u.IdUsuario))
-            .OrderBy(u => u.Nombre)
+            .Select(ur => ur.IdUsuario)
+            .Distinct()
             .ToListAsync(ct);
-        return users.Select(ToResponse).ToList();
+
+        var users = await db.Usuarios.AsNoTracking()
+            .Where(u => u.Id == currentUserId.Value || visibleUserIds.Contains(u.Id))
+            .ToListAsync(ct);
+
+        return Ok(users.Select(ToResponse).ToList());
     }
 
-    [HttpGet("{id:guid}")]
-    public async Task<ActionResult<UsuarioResponse>> Get(Guid id, CancellationToken ct)
+    [HttpGet("{id:int}")]
+    public async Task<ActionResult<UsuarioResponse>> Get(int id, CancellationToken ct)
     {
-        if (RanchAccessService.GetUserId(User) is not { } me) return Unauthorized();
-        var item = await db.Usuarios.AsNoTracking().FirstOrDefaultAsync(u => u.IdUsuario == id, ct);
-        if (item is null) return NotFound();
-        if (!await access.CanViewUserAsync(me, id, ct))
-            return Forbidden("No tienes permisos para consultar este usuario.");
-        return Ok(ToResponse(item));
+        var currentUserId = RanchAccessService.GetUserId(User);
+        if (currentUserId is null) return Unauthorized();
+
+        if (!await access.CanViewUserAsync(currentUserId.Value, id, ct))
+            return Forbid();
+
+        var item = await db.Usuarios.AsNoTracking().FirstOrDefaultAsync(u => u.Id == id, ct);
+        return item is null ? NotFound() : Ok(ToResponse(item));
     }
 
     [HttpPost]
     public async Task<ActionResult<UsuarioResponse>> Create(UsuarioRequest input, CancellationToken ct)
     {
-        if (RanchAccessService.GetUserId(User) is not { } me) return Unauthorized();
-        if (!await access.IsAdminOfAnyAsync(me, ct))
-            return Forbidden("Solo un administrador de rancho puede crear usuarios.");
+        var currentUserId = RanchAccessService.GetUserId(User);
+        if (currentUserId is null) return Unauthorized();
 
-        var id = input.IdUsuario is { } clientId && clientId != Guid.Empty
-            ? clientId
-            : Guid.NewGuid();
-
-        var existing = await db.Usuarios.AsNoTracking().FirstOrDefaultAsync(u => u.IdUsuario == id, ct);
-        if (existing is not null)
-        {
-            return await access.CanViewUserAsync(me, id, ct)
-                ? Ok(ToResponse(existing))
-                : Conflict("El identificador de usuario ya está en uso.");
-        }
+        if (!await access.IsAdminOfAnyAsync(currentUserId.Value, ct))
+            return Forbid();
 
         if (string.IsNullOrWhiteSpace(input.Contrasena) || input.Contrasena.Length < 8)
             return BadRequest("La contraseña debe tener al menos 8 caracteres.");
 
         var item = new Usuario
         {
-            IdUsuario = id,
             Nombre = input.Nombre.Trim(),
             Correo = input.Correo.Trim().ToLowerInvariant(),
             Estado = input.Estado.Trim(),
@@ -266,37 +271,49 @@ public sealed class UsuarioController(
             return Conflict("Ya existe un usuario con ese correo.");
         }
 
-        return CreatedAtAction(nameof(Get), new { id = item.IdUsuario }, ToResponse(item));
+        return CreatedAtAction(nameof(Get), new { id = item.Id }, ToResponse(item));
     }
 
-    [HttpPut("{id:guid}")]
-    public async Task<IActionResult> Update(Guid id, UsuarioRequest input, CancellationToken ct)
+    [HttpPut("{id:int}")]
+    public async Task<IActionResult> Update(int id, UsuarioRequest input, CancellationToken ct)
     {
-        if (RanchAccessService.GetUserId(User) is not { } me) return Unauthorized();
+        var currentUserId = RanchAccessService.GetUserId(User);
+        if (currentUserId is null) return Unauthorized();
+
+        var isSelf = currentUserId.Value == id;
+        var canManage = await access.CanManageUserAsync(currentUserId.Value, id, ct);
+        if (!isSelf && !canManage)
+            return Forbid();
+
         var item = await db.Usuarios.FindAsync([id], ct);
         if (item is null) return NotFound();
 
-        var isSelf = me == id;
-        var canManage = !isSelf && await access.CanManageUserAsync(me, id, ct);
-        if (!isSelf && !canManage)
-            return Forbidden("No tienes permisos para modificar este usuario.");
+        var requestedEstado = input.Estado.Trim();
+        if (!canManage && !string.Equals(requestedEstado, item.Estado, StringComparison.OrdinalIgnoreCase))
+            return Forbid();
 
-        if (isSelf && !string.Equals(item.Estado, input.Estado.Trim(), StringComparison.OrdinalIgnoreCase))
-            return Forbidden("No puedes cambiar el estado de tu propia cuenta.");
-
-        if (!string.IsNullOrWhiteSpace(input.Contrasena) && isSelf)
+        if (!string.IsNullOrWhiteSpace(input.Contrasena))
         {
-            // Cambio de contraseña propio: exige la contraseña vigente.
-            if (string.IsNullOrWhiteSpace(input.ContrasenaActual) ||
-                Hasher.VerifyHashedPassword(item, item.Contrasena, input.ContrasenaActual) == PasswordVerificationResult.Failed)
-                return BadRequest("La contraseña actual no es correcta.");
+            if (input.Contrasena.Length < 8)
+                return BadRequest("La contraseña debe tener al menos 8 caracteres.");
+
+            if (!canManage)
+            {
+                if (string.IsNullOrWhiteSpace(input.ContrasenaActual))
+                    return BadRequest("Debes proporcionar la contraseña actual para cambiarla.");
+
+                var verifyResult = Hasher.VerifyHashedPassword(item, item.Contrasena, input.ContrasenaActual);
+                if (verifyResult == PasswordVerificationResult.Failed)
+                    return BadRequest("La contraseña actual es incorrecta.");
+            }
+
+            item.Contrasena = Hasher.HashPassword(item, input.Contrasena);
         }
 
         item.Nombre = input.Nombre.Trim();
         item.Correo = input.Correo.Trim().ToLowerInvariant();
-        item.Estado = input.Estado.Trim();
-        if (!string.IsNullOrWhiteSpace(input.Contrasena))
-            item.Contrasena = Hasher.HashPassword(item, input.Contrasena);
+        if (canManage)
+            item.Estado = requestedEstado;
 
         try
         {
@@ -310,16 +327,17 @@ public sealed class UsuarioController(
         return NoContent();
     }
 
-    [HttpDelete("{id:guid}")]
-    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
+    [HttpDelete("{id:int}")]
+    public async Task<IActionResult> Delete(int id, CancellationToken ct)
     {
-        if (RanchAccessService.GetUserId(User) is not { } me) return Unauthorized();
+        var currentUserId = RanchAccessService.GetUserId(User);
+        if (currentUserId is null) return Unauthorized();
+
+        if (currentUserId.Value == id || !await access.CanManageUserAsync(currentUserId.Value, id, ct))
+            return Forbid();
+
         var item = await db.Usuarios.FindAsync([id], ct);
         if (item is null) return NotFound();
-        if (me == id)
-            return Forbidden("No puedes eliminar tu propia cuenta.");
-        if (!await access.CanManageUserAsync(me, id, ct))
-            return Forbidden("No tienes permisos para eliminar este usuario.");
 
         var oldPhoto = item.FotoPerfilRuta;
         db.Usuarios.Remove(item);

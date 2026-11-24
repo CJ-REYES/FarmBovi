@@ -89,7 +89,7 @@ public sealed class ArchivoMultimedia
     /// </summary>
     public DateTime FechaCarga { get; set; } = DateTime.UtcNow;
 
-    public Guid IdAutor { get; set; }
+    public int IdAutor { get; set; }
     public DateTime CreadoEn { get; set; } = DateTime.UtcNow;
     public long VersionRegistro { get; set; } = 1;
     public DateTime? EliminadoEn { get; set; }

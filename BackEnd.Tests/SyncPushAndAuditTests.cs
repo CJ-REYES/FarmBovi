@@ -18,11 +18,9 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
 using Xunit;
@@ -37,9 +35,12 @@ public sealed class SyncPushAndAuditTests
             .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))
             .Options);
 
+    private static SincronizacionController CreateSyncController(FarmDbContext db) =>
+        new(db, new RanchAccessService(db));
+
     private static void AttachJwtUser(
         ControllerBase controller,
-        Guid userId,
+        int userId,
         string nombre = "Roberto",
         string correo = "roberto@farmbovi.local",
         string? deviceClaim = null,
@@ -47,8 +48,8 @@ public sealed class SyncPushAndAuditTests
     {
         var claims = new List<Claim>
         {
-            new(JwtRegisteredClaimNames.Sub, userId.ToString("D")),
-            new(ClaimTypes.NameIdentifier, userId.ToString("D")),
+            new(JwtRegisteredClaimNames.Sub, userId.ToString()),
+            new(ClaimTypes.NameIdentifier, userId.ToString()),
             new(ClaimTypes.Name, nombre),
             new(ClaimTypes.Email, correo)
         };
@@ -65,13 +66,13 @@ public sealed class SyncPushAndAuditTests
         controller.ControllerContext = new ControllerContext { HttpContext = httpContext };
     }
 
-    private static string IssueTestJwt(Guid userId, string nombre, string correo, string signingKey)
+    private static string IssueTestJwt(int userId, string nombre, string correo, string signingKey)
     {
         var now = DateTime.UtcNow;
         var claims = new[]
         {
-            new Claim(JwtRegisteredClaimNames.Sub, userId.ToString("D")),
-            new Claim(ClaimTypes.NameIdentifier, userId.ToString("D")),
+            new Claim(JwtRegisteredClaimNames.Sub, userId.ToString()),
+            new Claim(ClaimTypes.NameIdentifier, userId.ToString()),
             new Claim(ClaimTypes.Name, nombre),
             new Claim(JwtRegisteredClaimNames.Email, correo),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("D"))
@@ -83,21 +84,21 @@ public sealed class SyncPushAndAuditTests
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
 
-    private static async Task<(Guid UserA, Guid UserB, Guid UserSinPermiso, Guid RanchoA, Guid RanchoB, Guid LoteA)> SeedAsync(
+    private static async Task<(int UserA, int UserB, int UserSinPermiso, Guid RanchoA, Guid RanchoB, Guid LoteA)> SeedAsync(
         Func<FarmDbContext> factory)
     {
-        var userA = Guid.NewGuid();
-        var userB = Guid.NewGuid();
-        var userSinPermiso = Guid.NewGuid();
+        const int userA = 1;
+        const int userB = 2;
+        const int userSinPermiso = 3;
         var ranchoA = Guid.NewGuid();
         var ranchoB = Guid.NewGuid();
         var loteA = Guid.NewGuid();
 
         await using var db = factory();
         db.Usuarios.AddRange(
-            new Usuario { IdUsuario = userA, Nombre = "Roberto", Correo = $"roberto.{Guid.NewGuid():N}@farmbovi.local", Contrasena = "hash", Estado = "Activo" },
-            new Usuario { IdUsuario = userB, Nombre = "Angel", Correo = $"angel.{Guid.NewGuid():N}@farmbovi.local", Contrasena = "hash", Estado = "Activo" },
-            new Usuario { IdUsuario = userSinPermiso, Nombre = "Externo", Correo = $"ext.{Guid.NewGuid():N}@farmbovi.local", Contrasena = "hash", Estado = "Activo" });
+            new Usuario { Id = userA, Nombre = "Roberto", Correo = $"roberto.{Guid.NewGuid():N}@farmbovi.local", Contrasena = "hash", Estado = "Activo" },
+            new Usuario { Id = userB, Nombre = "Angel", Correo = $"angel.{Guid.NewGuid():N}@farmbovi.local", Contrasena = "hash", Estado = "Activo" },
+            new Usuario { Id = userSinPermiso, Nombre = "Externo", Correo = $"ext.{Guid.NewGuid():N}@farmbovi.local", Contrasena = "hash", Estado = "Activo" });
 
         db.Ranchos.AddRange(
             new Rancho { IdRancho = ranchoA, Nombre = "Rancho A", UbicacionGeneral = "Norte", Estado = "Activo", IdAutor = userA },
@@ -128,10 +129,8 @@ public sealed class SyncPushAndAuditTests
     {
         var dbName = Guid.NewGuid().ToString("N");
         await using var db = CreateInMemoryDb(dbName);
-        var controller = new SincronizacionController(db)
-        {
-            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
-        };
+        var controller = CreateSyncController(db);
+        controller.ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() };
 
         var result = await controller.RecibirOperacion(new OperacionSyncRequest
         {
@@ -153,7 +152,7 @@ public sealed class SyncPushAndAuditTests
         var (_, _, userSinPermiso, ranchoA, _, _) = await SeedAsync(() => CreateInMemoryDb(dbName));
 
         await using var db = CreateInMemoryDb(dbName);
-        var controller = new SincronizacionController(db);
+        var controller = CreateSyncController(db);
         AttachJwtUser(controller, userSinPermiso);
 
         var result = await controller.RecibirOperacion(new OperacionSyncRequest
@@ -166,8 +165,7 @@ public sealed class SyncPushAndAuditTests
             Payload = JsonSerializer.SerializeToElement(new { arete = "MX-FORBID" })
         }, default);
 
-        var objResult = Assert.IsType<ObjectResult>(result);
-        Assert.Equal(StatusCodes.Status403Forbidden, objResult.StatusCode);
+        Assert.IsType<ForbidResult>(result);
     }
 
     [Fact]
@@ -177,7 +175,7 @@ public sealed class SyncPushAndAuditTests
         var (userA, _, _, ranchoA, _, _) = await SeedAsync(() => CreateInMemoryDb(dbName));
 
         await using var db = CreateInMemoryDb(dbName);
-        var controller = new SincronizacionController(db);
+        var controller = CreateSyncController(db);
 
         AttachJwtUser(controller, userA);
         var emptyDevice = await controller.RecibirOperacion(new OperacionSyncRequest
@@ -216,11 +214,10 @@ public sealed class SyncPushAndAuditTests
         var payloadA = JsonDocument.Parse($$"""{"idAnimal":"{{animalId}}","idLote":"{{loteA}}","arete":"MX-CONC-1","raza":"Angus","sexo":"Hembra","procedencia":"Propio","estado":"Activo"}""").RootElement;
         var payloadB = JsonDocument.Parse($$"""{"estado":"Activo","procedencia":"Propio","sexo":"Hembra","raza":"Angus","arete":"MX-CONC-1","idLote":"{{loteA}}","idAnimal":"{{animalId}}"}""").RootElement;
 
-        // Instancia 1 procesa la operación
         IActionResult res1;
         await using (var db1 = CreateInMemoryDb(dbName))
         {
-            var c1 = new SincronizacionController(db1);
+            var c1 = CreateSyncController(db1);
             AttachJwtUser(c1, userA);
             res1 = await c1.RecibirOperacion(new OperacionSyncRequest
             {
@@ -234,11 +231,10 @@ public sealed class SyncPushAndAuditTests
             }, default);
         }
 
-        // Instancia 2 (otro DbContext independiente) recibe el reintento con distinto orden JSON
         IActionResult res2;
         await using (var db2 = CreateInMemoryDb(dbName))
         {
-            var c2 = new SincronizacionController(db2);
+            var c2 = CreateSyncController(db2);
             AttachJwtUser(c2, userA);
             res2 = await c2.RecibirOperacion(new OperacionSyncRequest
             {
@@ -263,10 +259,10 @@ public sealed class SyncPushAndAuditTests
     }
 
     [Fact]
-    public async Task ComputeRequestHash_CanonicoEIncluyeIdentidadCompleta()
+    public void ComputeRequestHash_CanonicoEIncluyeIdentidadCompleta()
     {
-        var userA = Guid.NewGuid();
-        var userB = Guid.NewGuid();
+        const int userA = 1;
+        const int userB = 2;
         var ranchoA = Guid.NewGuid();
         var regId = Guid.NewGuid();
 
@@ -292,7 +288,7 @@ public sealed class SyncPushAndAuditTests
         var animalId = Guid.NewGuid();
         await using (var db = CreateInMemoryDb(dbName))
         {
-            var sync = new SincronizacionController(db);
+            var sync = CreateSyncController(db);
             AttachJwtUser(sync, userA);
 
             var created = await sync.RecibirOperacion(new OperacionSyncRequest
@@ -306,7 +302,7 @@ public sealed class SyncPushAndAuditTests
                 Payload = JsonSerializer.SerializeToElement(new
                 {
                     idAnimal = animalId,
-                    idRancho = ranchoB, // debe ignorarse y fijarse ranchoA
+                    idRancho = ranchoB,
                     idLote = loteA,
                     arete = "MX-HIST-01",
                     raza = "Brangus",
@@ -317,7 +313,6 @@ public sealed class SyncPushAndAuditTests
             }, default);
             Assert.IsType<CreatedAtActionResult>(created);
 
-            // Actualización v1 -> v2 con intento malicioso de cambiar IdRancho e IdAutor
             var updated = await sync.RecibirOperacion(new OperacionSyncRequest
             {
                 IdOperacion = Guid.NewGuid(),
@@ -339,7 +334,6 @@ public sealed class SyncPushAndAuditTests
             Assert.IsType<OkObjectResult>(updated);
         }
 
-        // Dispositivo 2 envía actualización parcial desde VersionBase = 1 tocando solo "observaciones"
         await using (var db = CreateInMemoryDb(dbName))
         {
             var animalActual = await db.Animales.AsNoTracking().SingleAsync(a => a.IdAnimal == animalId);
@@ -347,7 +341,7 @@ public sealed class SyncPushAndAuditTests
             Assert.Equal(userA, animalActual.IdAutor);
             Assert.Equal(2, animalActual.VersionRegistro);
 
-            var sync = new SincronizacionController(db);
+            var sync = CreateSyncController(db);
             AttachJwtUser(sync, userA);
 
             var conflict = await sync.RecibirOperacion(new OperacionSyncRequest
@@ -367,15 +361,13 @@ public sealed class SyncPushAndAuditTests
             Assert.Equal("VERSION_MISMATCH", dto.TipoConflicto);
             Assert.Equal(2, dto.VersionServidor);
             Assert.NotNull(dto.EstadoServidor);
-            // Gracias al historial de CambioServidor, debe reportar que 'raza' y 'estado' cambiaron desde v1
             Assert.Contains(dto.CamposModificados, c => c.Campo.Equals("raza", StringComparison.OrdinalIgnoreCase));
             Assert.Contains(dto.CamposModificados, c => c.Campo.Equals("estado", StringComparison.OrdinalIgnoreCase));
         }
 
-        // Aislamiento por rancho: UserB (de RanchoB) no puede editar Animal de RanchoA
         await using (var db = CreateInMemoryDb(dbName))
         {
-            var syncB = new SincronizacionController(db);
+            var syncB = CreateSyncController(db);
             AttachJwtUser(syncB, userB);
 
             var crossRanch = await syncB.RecibirOperacion(new OperacionSyncRequest
@@ -412,20 +404,20 @@ public sealed class SyncPushAndAuditTests
     public async Task SaveChangesSincronoYAsincrono_AuditaRanchoYEntidadesSinOmitirCambios()
     {
         var dbName = Guid.NewGuid().ToString("N");
-        var userId = Guid.NewGuid();
+        const int userId = 10;
         var ranchoId = Guid.NewGuid();
 
         await using (var db = CreateInMemoryDb(dbName))
         {
             db.Usuarios.Add(new Usuario
             {
-                IdUsuario = userId,
+                Id = userId,
                 Nombre = "Roberto",
                 Correo = "rob@farmbovi.local",
                 Contrasena = "hash",
                 Estado = "Activo"
             });
-            db.SaveChanges(); // Síncrono
+            db.SaveChanges();
 
             db.Ranchos.Add(new Rancho
             {
@@ -435,7 +427,7 @@ public sealed class SyncPushAndAuditTests
                 Estado = "Activo",
                 IdAutor = userId
             });
-            db.SaveChanges(); // Síncrono: debe auditar Rancho en CambioServidor
+            db.SaveChanges();
         }
 
         await using (var checkDb = CreateInMemoryDb(dbName))
@@ -451,13 +443,13 @@ public sealed class SyncPushAndAuditTests
     public async Task HttpPipelineE2E_ValidaJwtPushIdempotenciaYAuditoria()
     {
         var dbName = Guid.NewGuid().ToString("N");
-        var userId = Guid.NewGuid();
+        const int userId = 11;
         var ranchoId = Guid.NewGuid();
         const string signingKey = "FarmBovi-test-signing-key-at-least-32-bytes-long";
 
         await using (var seedDb = CreateInMemoryDb(dbName))
         {
-            seedDb.Usuarios.Add(new Usuario { IdUsuario = userId, Nombre = "Roberto", Correo = "rob@test.local", Contrasena = "hash", Estado = "Activo" });
+            seedDb.Usuarios.Add(new Usuario { Id = userId, Nombre = "Roberto", Correo = "rob@test.local", Contrasena = "hash", Estado = "Activo" });
             seedDb.Ranchos.Add(new Rancho { IdRancho = ranchoId, Nombre = "Rancho HTTP", UbicacionGeneral = "Norte", Estado = "Activo", IdAutor = userId });
             seedDb.UsuarioRanchos.Add(new UsuarioRancho { IdUsuarioRancho = Guid.NewGuid(), IdUsuario = userId, IdRancho = ranchoId, Rol = "Admin", Estado = "Activo" });
             await seedDb.SaveChangesAsync();
@@ -471,6 +463,7 @@ public sealed class SyncPushAndAuditTests
         builder.Services.AddDbContext<FarmDbContext>(o =>
             o.UseInMemoryDatabase(dbName).ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning)));
         builder.Services.AddScoped<FarmDomainValidationService>();
+        builder.Services.AddScoped<RanchAccessService>();
         builder.Services.AddDataProtection().UseEphemeralDataProtectionProvider();
         builder.Services.AddControllers().AddApplicationPart(typeof(SincronizacionController).Assembly);
         builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(o =>
